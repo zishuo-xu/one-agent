@@ -1,0 +1,18 @@
+{
+  "name": "one-agent",
+  "private": true,
+  "version": "0.0.1",
+  "description": "简化版多 Agent 协作平台",
+  "scripts": {
+    "dev": "pnpm --filter api dev & pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter api build && pnpm --filter web build",
+    "test": "pnpm --filter api test",
+    "test:watch": "pnpm --filter api test:watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

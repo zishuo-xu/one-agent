@@ -1,0 +1,27 @@
+import OpenAI from 'openai';
+
+function getEnv(key: string, defaultValue?: string): string {
+  const value = process.env[key];
+  if (value === undefined || value === '') {
+    if (defaultValue !== undefined) {
+      return defaultValue;
+    }
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+  return value;
+}
+
+export const config = {
+  port: Number(process.env.PORT ?? '3000'),
+  host: process.env.HOST ?? '127.0.0.1',
+  openai: new OpenAI({
+    baseURL: process.env.OPENAI_BASE_URL,
+    apiKey: getEnv('OPENAI_API_KEY', ''),
+  }),
+  model: process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo',
+  systemPrompt:
+    process.env.SYSTEM_PROMPT ??
+    'You are a helpful assistant. Answer concisely and in Chinese by default.',
+};
+
+export type Config = typeof config;
