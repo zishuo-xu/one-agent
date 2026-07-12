@@ -20,8 +20,8 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
 
     try {
       const agent = new AgentLoop();
-      const response = await agent.chat(message);
-      return { reply: response };
+      const { reply } = await agent.chat(message);
+      return { reply };
     } catch (error) {
       fastify.log.error(error);
       const errMessage =
