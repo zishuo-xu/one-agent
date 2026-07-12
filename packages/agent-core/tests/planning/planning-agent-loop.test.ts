@@ -218,4 +218,142 @@ describe('AgentLoop with planning', () => {
 
     expect(reply).toBe('Retry succeeded');
   });
+
+  it('executes multi-step plan successfully', async () => {
+    const fetchTool: ToolDefinition = {
+      name: 'fetch_data',
+      description: 'Fetch data',
+      parameters: z.object({ source: z.string() }),
+      execute: (args: unknown) => {
+        const { source } = args as { source: string };
+        return { source, data: `data from ${source}` };
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(fetchTool);
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([
+          { id: '1', description: 'Fetch data from A', toolName: 'fetch_data' },
+          { id: '2', description: 'Fetch data from B', toolName: 'fetch_data' },
+          { id: '3', description: 'Combine results', toolName: 'fetch_data' },
+        ]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'Fetching A.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'fetch_data', arguments: JSON.stringify({ source: 'A' }) },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'Fetching B.',
+              tool_calls: [
+                {
+                  id: 'call_2',
+                  type: 'function',
+                  function: { name: 'fetch_data', arguments: JSON.stringify({ source: 'B' }) },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'Combining.',
+              tool_calls: [
+                {
+                  id: 'call_3',
+                  type: 'function',
+                  function: { name: 'fetch_data', arguments: JSON.stringify({ source: 'combined' }) },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Combined A and B' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools });
+    const { reply, events } = await agent.chat('Fetch and combine data');
+
+    expect(reply).toBe('Combined A and B');
+    expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(3);
+    expect(events.filter((e) => e.type === 'thought')).toHaveLength(3);
+  });
+
+  it('replans when a step fails and cannot be retried', async () => {
+    const alwaysFailTool: ToolDefinition = {
+      name: 'always_fail',
+      description: 'Always fails',
+      parameters: z.object({}),
+      execute: () => {
+        throw new Error('Always fails');
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(alwaysFailTool);
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Call always_fail', toolName: 'always_fail' }]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'I will call always_fail.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'always_fail', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'replan') as never)
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Skip failing step and finalize' }]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'I will skip and finalize.' } }],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Skipped failing step' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, maxReplanAttempts: 2 });
+    const { reply, events } = await agent.chat('Replan test');
+
+    expect(reply).toBe('Skipped failing step');
+    expect(events.filter((e) => e.type === 'plan')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'reflection')).toHaveLength(1);
+  });
 });

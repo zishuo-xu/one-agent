@@ -8,7 +8,7 @@
     "dev:api": "pnpm build:core && pnpm --filter api dev",
     "dev:cli": "pnpm build:core && pnpm --filter cli dev",
     "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build",
-    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test",
+    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test && pnpm --filter cli test",
     "test:watch": "pnpm --filter agent-core test:watch"
   },
   "devDependencies": {
