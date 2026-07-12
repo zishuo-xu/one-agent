@@ -44,7 +44,7 @@ describe('AgentLoop', () => {
       choices: [{ message: { content: 'Hello from assistant' } }],
     } as never);
 
-    const agent = new AgentLoop();
+    const agent = new AgentLoop({ enablePlanning: false });
     const { reply, events } = await agent.chat('Hi');
 
     expect(reply).toBe('Hello from assistant');
@@ -63,7 +63,7 @@ describe('AgentLoop', () => {
       choices: [{ message: { content: 'OK' } }],
     } as never);
 
-    const agent = new AgentLoop({ systemPrompt: 'You are a coder.' });
+    const agent = new AgentLoop({ systemPrompt: 'You are a coder.', enablePlanning: false });
     await agent.chat('test');
 
     const history = agent.getHistory();
@@ -73,7 +73,7 @@ describe('AgentLoop', () => {
   it('retries on failure and eventually throws', async () => {
     mockCreate.mockRejectedValue(new Error('Network error') as never);
 
-    const agent = new AgentLoop({ maxRetries: 1, timeoutMs: 100 });
+    const agent = new AgentLoop({ maxRetries: 1, timeoutMs: 100, enablePlanning: false });
     await expect(agent.chat('test')).rejects.toThrow(
       'Model call failed after 2 attempt(s): Network error'
     );
@@ -85,7 +85,7 @@ describe('AgentLoop', () => {
       choices: [{ message: {} }],
     } as never);
 
-    const agent = new AgentLoop();
+    const agent = new AgentLoop({ enablePlanning: false });
     const { reply } = await agent.chat('test');
 
     expect(reply).toBe('');
@@ -119,7 +119,7 @@ describe('AgentLoop', () => {
         choices: [{ message: { content: 'Echo: hello' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: false });
     const { reply, events } = await agent.chat('Please echo hello');
 
     expect(reply).toBe('Echo: hello');

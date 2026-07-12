@@ -32,7 +32,19 @@ Type your message and press Enter. Use /exit or /quit to leave.
 `;
 
 function printEvent(event: AgentLoopEvent) {
-  if (event.type === 'tool_call' && event.toolCall) {
+  if (event.type === 'plan') {
+    console.log('\n[计划]');
+    for (const step of event.plan.steps) {
+      console.log(`${step.id}. ${step.description}`);
+    }
+    if (event.plan.reasoning) {
+      console.log(`Reasoning: ${event.plan.reasoning}`);
+    }
+  } else if (event.type === 'thought') {
+    console.log(`[思考] ${event.content}`);
+  } else if (event.type === 'reflection') {
+    console.log(`[反思] ${event.content}`);
+  } else if (event.type === 'tool_call' && event.toolCall) {
     const args = JSON.stringify(event.toolCall.arguments);
     console.log(`[调用工具] ${event.toolCall.name}: ${args}`);
   } else if (event.type === 'tool_result' && event.toolResult) {
@@ -43,9 +55,14 @@ function printEvent(event: AgentLoopEvent) {
 
 function printMessages(messages: Message[]) {
   for (const msg of messages) {
-    const prefix = msg.role === 'system' ? '📋 system' :
-                   msg.role === 'user' ? '👤 user' :
-                   msg.role === 'assistant' ? '🤖 assistant' : '🔧 tool';
+    const prefix =
+      msg.role === 'system'
+        ? '📋 system'
+        : msg.role === 'user'
+          ? '👤 user'
+          : msg.role === 'assistant'
+            ? '🤖 assistant'
+            : '🔧 tool';
     console.log(`${prefix}: ${msg.content}`);
   }
 }
@@ -91,6 +108,25 @@ export async function runRepl(): Promise<void> {
     if (trimmed === '/context') {
       console.log('\n--- Context sent to model ---');
       printMessages(agent.getContext());
+      console.log('---\n');
+      continue;
+    }
+
+    if (trimmed === '/reasoning') {
+      console.log('\n--- Reasoning chain ---');
+      const chain = agent.getReasoningChain();
+      const steps = chain.getSteps();
+      if (steps.length > 0) {
+        for (const step of steps) {
+          if (step.thought) console.log(`Thought: ${step.thought}`);
+          if (step.action) console.log(`Action: ${step.action.name}`);
+          if (step.observation) console.log(`Observation: ${JSON.stringify(step.observation)}`);
+          if (step.reflection) console.log(`Reflection: ${step.reflection}`);
+          console.log('---');
+        }
+      } else {
+        console.log('No reasoning chain yet.');
+      }
       console.log('---\n');
       continue;
     }

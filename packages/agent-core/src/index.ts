@@ -17,3 +17,18 @@ export type {
 
 export { ContextManager } from './context/ContextManager.js';
 export type { ContextManagerOptions } from './context/ContextManager.js';
+
+export { Planner } from './planning/Planner.js';
+export { ReasoningChain } from './planning/ReasoningChain.js';
+export { TaskJudge } from './planning/TaskJudge.js';
+export type {
+  Plan,
+  PlanStep,
+  StepStatus,
+  ReasoningStep,
+  JudgeResult,
+  NextAction,
+  PlannerOptions,
+  JudgeOptions,
+} from './planning/types.js';
+
