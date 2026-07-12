@@ -1,3 +1,4 @@
+import './load-env.js';
 import { buildServer } from './server.js';
 import { config } from '@one-agent/agent-core';
 

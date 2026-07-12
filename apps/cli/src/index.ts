@@ -1,3 +1,4 @@
+import './load-env.js';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { AgentLoop, config } from '@one-agent/agent-core';
@@ -13,13 +14,23 @@ export async function runRepl(): Promise<void> {
 
   const rl = readline.createInterface({ input, output });
   const agent = new AgentLoop();
+  let closed = false;
 
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const userInput = await rl.question('You: ');
+  rl.on('close', () => {
+    closed = true;
+  });
+
+  while (!closed) {
+    let userInput: string;
+    try {
+      userInput = await rl.question('You: ');
+    } catch {
+      break;
+    }
+
     const trimmed = userInput.trim();
-
     if (!trimmed) continue;
+
     if (trimmed === '/exit' || trimmed === '/quit') {
       console.log('Bye!');
       rl.close();
@@ -43,6 +54,9 @@ export async function runRepl(): Promise<void> {
       console.error(`\nError: ${message}\n`);
     }
   }
+
+  console.log('Bye!');
+  rl.close();
 }
 
 runRepl().catch((error) => {

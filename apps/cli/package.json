@@ -12,7 +12,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@one-agent/agent-core": "workspace:*"
+    "@one-agent/agent-core": "workspace:*",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

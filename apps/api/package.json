@@ -13,6 +13,7 @@
   "dependencies": {
     "@one-agent/agent-core": "workspace:*",
     "@one-agent/shared": "workspace:*",
+    "dotenv": "^17.4.2",
     "fastify": "^4.26.2"
   },
   "devDependencies": {
