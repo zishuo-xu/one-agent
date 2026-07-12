@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { AgentLoop } from '../agents/AgentLoop.js';
-import { config } from '../config.js';
+import { AgentLoop, config } from '@one-agent/agent-core';
 
 export interface ChatBody {
   message: string;
@@ -25,9 +24,9 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
       return { reply: response };
     } catch (error) {
       fastify.log.error(error);
-      const message =
+      const errMessage =
         error instanceof Error ? error.message : 'An unexpected error occurred';
-      return reply.status(500).send({ error: message });
+      return reply.status(500).send({ error: errMessage });
     }
   });
 

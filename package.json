@@ -4,12 +4,12 @@
   "version": "0.0.1",
   "description": "简化版多 Agent 协作平台",
   "scripts": {
-    "dev": "pnpm --filter api dev & pnpm --filter web dev",
-    "dev:api": "pnpm --filter api dev",
-    "dev:web": "pnpm --filter web dev",
-    "build": "pnpm --filter api build && pnpm --filter web build",
-    "test": "pnpm --filter api test",
-    "test:watch": "pnpm --filter api test:watch"
+    "build:core": "pnpm --filter agent-core build",
+    "dev:api": "pnpm build:core && pnpm --filter api dev",
+    "dev:cli": "pnpm build:core && pnpm --filter cli dev",
+    "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build",
+    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test",
+    "test:watch": "pnpm --filter agent-core test:watch"
   },
   "devDependencies": {
     "typescript": "^5.4.5"

@@ -1,16 +1,17 @@
 # one-agent
 
-简化版多 Agent 协作平台。
+简化版多 Agent 协作平台（CLI 优先）。
 
 ## 项目结构
 
 ```text
 one-agent/
 ├── apps/
-│   ├── api/     # Fastify + TypeScript 后端
-│   └── web/     # Vite + React 前端
+│   ├── api/     # Fastify + TypeScript 后端（可选 REST API）
+│   └── cli/     # 交互式 REPL CLI
 └── packages/
-    └── shared/  # 共享类型和常量
+    ├── agent-core/  # Agent 核心：AgentLoop、配置、模型调用
+    └── shared/      # 共享类型和常量
 ```
 
 ## 环境准备
@@ -22,11 +23,30 @@ cp .env.example .env
 
 ## 快速开始
 
+### 启动 CLI REPL
+
 ```bash
 pnpm install
-pnpm dev        # 同时启动后端和前端
-pnpm test       # 运行后端测试
+pnpm dev:cli
 ```
+
+### 启动 REST API（可选）
+
+```bash
+pnpm dev:api
+```
+
+### 测试
+
+```bash
+pnpm test
+```
+
+## CLI 命令
+
+- 输入消息并按回车：与 Agent 对话
+- `/history`：查看当前会话历史
+- `/exit` 或 `/quit`：退出
 
 ## 阶段
 
@@ -34,7 +54,7 @@ pnpm test       # 运行后端测试
 
 ## 当前阶段
 
-- [x] Phase 1：单 Agent（`POST /api/chat`）
+- [x] Phase 1：单 Agent（CLI + API）
 - [ ] Phase 2：Tool Calling
 - [ ] Phase 3：Agent Router
 - [ ] Phase 4：Agent Handoff

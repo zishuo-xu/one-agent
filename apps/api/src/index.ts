@@ -1,5 +1,5 @@
 import { buildServer } from './server.js';
-import { config } from './config.js';
+import { config } from '@one-agent/agent-core';
 
 async function main() {
   const server = await buildServer();
