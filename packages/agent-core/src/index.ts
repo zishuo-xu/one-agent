@@ -1,12 +1,8 @@
 export { config } from './config.js';
 export type { Config } from './config.js';
 export { AgentLoop } from './agents/AgentLoop.js';
-export type {
-  Message,
-  MessageRole,
-  AgentLoopOptions,
-  AgentLoopEvent,
-} from './agents/AgentLoop.js';
+export type { AgentLoopOptions, AgentLoopEvent } from './agents/AgentLoop.js';
+export type { Message, MessageRole } from './agents/types.js';
 
 export { ToolRegistry } from './tools/registry.js';
 export { ToolExecutor } from './tools/executor.js';
@@ -18,3 +14,6 @@ export type {
   ToolResult,
   ToolSchema,
 } from './tools/types.js';
+
+export { ContextManager } from './context/ContextManager.js';
+export type { ContextManagerOptions } from './context/ContextManager.js';

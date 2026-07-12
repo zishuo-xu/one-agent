@@ -2,174 +2,164 @@
 
 ## 目标
 
-实现一个小型 Agent 协作平台，理解并复现 `clowder-ai` 的核心思想，而不是复制整个项目。
+实现并吃透**一个** Agent 的完整内核，理解 Agent 的核心机制（循环、工具、记忆、规划、持久化、流式、评估），而不是堆砌多 Agent 编排。
 
 ```text
-用户 → API → Router → Agent → Tool → 持久化 → WebSocket
+用户 -> AgentLoop -> [规划 -> 工具 -> 观察] -> 记忆/持久化 -> 流式输出
 ```
 
-建议使用 TypeScript，因为它与 `clowder-ai` 的技术栈一致。
+技术栈：TypeScript + pnpm workspace。
 
-## 阶段 1：单 Agent
+> 说明：本路线图早期版本照搬了 `clowder-ai` 的多 Agent 路线（Router / Handoff），
+> 与项目名 `one-agent` 的初衷冲突。第 3 阶段起改为深化单 Agent。
 
-实现：
+## 阶段 1：单 Agent ✅
 
 ```text
-用户输入 → 调用模型 → 返回回答
+用户输入 -> 调用模型 -> 返回回答
 ```
 
 学习 API 调用、message history、system prompt、环境变量、错误处理和基础测试。
 
-产出：`POST /api/chat`。
+产出：`POST /api/chat` + CLI REPL。
 
-## 阶段 2：Tool Calling
-
-实现：
+## 阶段 2：Tool Calling ✅
 
 ```text
-用户问题 → Agent 判断 → 执行工具 → 返回工具结果 → 最终回答
+用户问题 -> Agent 判断 -> 执行工具 -> 返回工具结果 -> 最终回答
 ```
 
-先实现 `get_weather` 和 `search_knowledge` 两个工具。
+已实现 `read_file` / `write_file` / `list_files` / `get_time`。
 
 学习工具 schema、参数校验、工具异常、最大循环次数、timeout 和 tool result。
 
-建议拆分为：
+结构：`AgentLoop` / `ToolRegistry` / `ToolExecutor` / `Sandbox`。
+
+## 阶段 3：上下文与记忆管理
+
+解决"对话变长后上下文爆掉"的问题。
 
 ```text
-AgentLoop
-ToolRegistry
-ToolExecutor
+对话增长 -> 超过阈值 -> 摘要旧消息 -> 保留近期消息 + 摘要 -> 继续
 ```
 
-## 阶段 3：Agent Router
+学习点：
 
-实现两个 Agent：
+- token 计数与上下文窗口感知
+- 滑动窗口（保留 system + 最近 N 条）
+- 对话摘要压缩（把旧消息压成一条 summary）
+- （可选）长期记忆：把事实写入 workspace 文件或 KV，按需检索
+
+产出：`ContextManager`，AgentLoop 接入后支持长对话不崩。
+
+## 阶段 4：规划与自我纠错
+
+让 Agent 从"被动调用工具"升级为"先规划再执行，失败能自纠"。
 
 ```text
-@researcher 负责资料搜索
-@coder       负责代码分析
+复杂任务 -> 拆解为计划 -> 逐步执行 -> 观察结果 -> 偏差则反思重试
 ```
 
-Router 支持显式 `@mention`、任务类型自动选择、未知 Agent 错误和单请求路由。
+学习点：
 
-这一阶段对应学习 `clowder-ai` 的 Agent 注册表和 mention routing。
+- 显式规划：先输出计划，再按计划执行
+- ReAct 思路：Thought -> Action -> Observation 显式化
+- 自我纠错：工具失败或结果不符时，反思并换方案
+- 任务完成判定：不只是"模型不再调工具"，而是"目标达成"
 
-## 阶段 4：Agent Handoff
+产出：AgentLoop 升级支持 planning + reflection，记录推理链。
+
+## 阶段 5：SQLite 持久化
+
+把内存里的对话和运行记录落盘。
 
 ```text
-researcher → 整理资料 → handoff 给 coder → coder 生成方案
+threads / messages / tool_calls / agent_runs
 ```
 
-```ts
-interface HandoffRequest {
-  fromAgent: string;
-  toAgent: string;
-  task: string;
-  context: string;
-  expectedOutput: string;
-}
-```
-
-必须限制最大 handoff 次数，禁止循环交接，记录失败和每次交接日志。
-
-## 阶段 5：持久化
-
-先使用 SQLite，建立：
-
-```text
-users / threads / messages / tasks / agent_runs / tool_calls
-```
-
-学习 Thread 与 Message 的关系、Task 生命周期、Agent run 记录、失败恢复和历史查询。
+学习 Thread 与 Message 的关系、Agent run 记录、失败恢复和历史查询。
 
 任务状态：`pending`、`running`、`completed`、`failed`、`cancelled`。
 
-## 阶段 6：任务队列
+## 阶段 6：异步任务与流式输出
 
 ```text
-POST /tasks → 创建任务 → 放入队列 → 立即返回 taskId → 后台执行
+POST /tasks -> 创建任务 -> 放入队列 -> 立即返回 taskId -> 后台执行 + 流式推送
 ```
 
-先实现内存队列，再考虑 Redis：
+先内存队列，再考虑 Redis。
 
 ```text
-TaskQueue
-QueueWorker
-TaskStatusStore
+TaskQueue / QueueWorker / TaskStatusStore
 ```
 
-学习并发限制、取消、timeout、失败、重试和幂等，理解 `clowder-ai` 的 `InvocationQueue` 与 `QueueProcessor`。
-
-## 阶段 7：WebSocket
-
-定义运行事件：
+流式事件：
 
 ```text
-task.started → tool.started → tool.completed → message.delta → task.completed
+task.started -> tool.started -> tool.completed -> message.delta -> task.completed
 ```
 
-前端处理流式文本、重复事件、断线重连、任务完成状态和旧任务迟到事件。简化版先只支持一个线程。
+学习并发限制、取消、timeout、重试、幂等，以及 SSE/WebSocket 流式文本与断线重连。
 
-## 阶段 8：Trace 与 Evaluation
+## 阶段 7：Trace 与 Evaluation
 
 记录：
 
 ```text
-runId / taskId / agentId / model / startTime / endTime
-toolCalls / status / error
+runId / taskId / model / startTime / endTime
+toolCalls / status / error / 推理链
 ```
 
-准备 20 条固定测试任务，检查任务是否完成、是否调用正确工具、是否有无效参数、是否超时、是否发生错误 handoff。
+准备 20 条固定测试任务，检查：任务是否完成、是否调用正确工具、参数是否有效、是否超时、规划是否合理。
+
+## 阶段 8：Docker 与部署
+
+容器化 Agent + API，环境隔离，可复现部署。
 
 ## 最终架构
 
 ```text
-React Web
+React Web / CLI
    ├─ HTTP：创建任务、查询历史
-   └─ WebSocket：运行事件
+   └─ SSE/WebSocket：运行事件 + 流式文本
           ↓
 Fastify API
    ├─ Task Routes
-   ├─ Agent Router
    ├─ Task Queue
-   ├─ Agent Loop
+   ├─ Agent Loop（规划 / 工具 / 自纠）
    ├─ Tool Registry
-   ├─ Handoff Manager
+   ├─ Context Manager（记忆 / 摘要）
    ├─ Trace Store
    └─ Evaluation Runner
           ↓
-SQLite：messages / tasks / agent_runs / tool_calls
+SQLite：threads / messages / tool_calls / agent_runs
 ```
 
 ## 推荐开发顺序
 
 ```text
-1. 单 Agent
-2. Tool Calling
-3. Agent Router
-4. Agent Handoff
+1. 单 Agent ✅
+2. Tool Calling ✅
+3. 上下文与记忆管理
+4. 规划与自我纠错
 5. SQLite 持久化
-6. Task Queue
-7. WebSocket
-8. Trace
-9. Evaluation
-10. Docker 和部署
+6. 异步任务与流式输出
+7. Trace
+8. Evaluation
+9. Docker 与部署
 ```
 
-每完成一个阶段提交一次 Git，例如：
+每完成一个阶段提交一次 Git：
 
 ```text
-feat: add basic agent loop
-feat: add tool registry
-feat: add agent router
-feat: add agent handoff
-feat: persist task runs
-feat: add task queue
-feat: add websocket events
+feat: add context manager with summarization
+feat: add planning and self-correction loop
+feat: persist threads and runs to sqlite
+feat: add async task queue and streaming
+feat: add run tracing
 feat: add agent evaluation
 ```
 
 ## 简历表达
 
-> 设计并实现一个简化版多 Agent 协作平台，支持任务路由、工具调用、Agent handoff、异步任务队列、SQLite 持久化、WebSocket 流式事件和 Agent 运行评估。
+> 设计并实现一个 Agent 运行时，支持工具调用、上下文记忆管理、规划与自我纠错、异步任务队列、SQLite 持久化、流式输出和运行评估，深入理解单 Agent 的完整生命周期。

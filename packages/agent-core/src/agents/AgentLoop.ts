@@ -2,22 +2,8 @@ import { config } from '../config.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { ToolCall, ToolResult } from '../tools/types.js';
-
-export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
-
-export interface Message {
-  role: MessageRole;
-  content: string;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
-  tool_call_id?: string;
-}
+import { Message } from './types.js';
+import { ContextManager } from '../context/ContextManager.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -25,6 +11,7 @@ export interface AgentLoopOptions {
   timeoutMs?: number;
   maxToolIterations?: number;
   tools?: ToolRegistry;
+  contextManager?: ContextManager;
 }
 
 export interface AgentLoopEvent {
@@ -35,13 +22,13 @@ export interface AgentLoopEvent {
 }
 
 export class AgentLoop {
-  private messages: Message[] = [];
   private readonly systemPrompt: string;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly maxToolIterations: number;
   private readonly toolRegistry?: ToolRegistry;
   private readonly toolExecutor?: ToolExecutor;
+  private readonly contextManager: ContextManager;
   private events: AgentLoopEvent[] = [];
 
   constructor(options: AgentLoopOptions = {}) {
@@ -51,11 +38,15 @@ export class AgentLoop {
     this.maxToolIterations = options.maxToolIterations ?? 5;
     this.toolRegistry = options.tools;
     this.toolExecutor = this.toolRegistry ? new ToolExecutor(this.toolRegistry) : undefined;
-    this.messages.push({ role: 'system', content: this.systemPrompt });
+    this.contextManager =
+      options.contextManager ??
+      new ContextManager({
+        systemPrompt: this.systemPrompt,
+      });
   }
 
   async chat(message: string): Promise<{ reply: string; events: AgentLoopEvent[] }> {
-    this.messages.push({ role: 'user', content: message });
+    this.contextManager.addMessage({ role: 'user', content: message });
     this.events = [];
 
     let toolIterations = 0;
@@ -71,7 +62,7 @@ export class AgentLoop {
           arguments: this.safeParseArgs(tc.function.arguments),
         }));
 
-        this.messages.push({
+        this.contextManager.addMessage({
           role: 'assistant',
           content: assistantMessage.content ?? '',
           tool_calls: assistantMessage.tool_calls,
@@ -86,7 +77,7 @@ export class AgentLoop {
               error: 'No tool executor available',
             };
             this.events.push({ type: 'tool_result', toolResult: result });
-            this.messages.push({
+            this.contextManager.addMessage({
               role: 'tool',
               content: JSON.stringify(result),
               tool_call_id: call.id,
@@ -96,7 +87,7 @@ export class AgentLoop {
 
           const result = await this.toolExecutor.execute(call);
           this.events.push({ type: 'tool_result', toolResult: result });
-          this.messages.push({
+          this.contextManager.addMessage({
             role: 'tool',
             content: JSON.stringify(result),
             tool_call_id: call.id,
@@ -108,7 +99,7 @@ export class AgentLoop {
       }
 
       const content = assistantMessage?.content ?? '';
-      this.messages.push({ role: 'assistant', content });
+      this.contextManager.addMessage({ role: 'assistant', content });
       this.events.push({ type: 'message', content });
       return { reply: content, events: this.events };
     }
@@ -119,7 +110,11 @@ export class AgentLoop {
   }
 
   getHistory(): Message[] {
-    return [...this.messages];
+    return this.contextManager.getHistory();
+  }
+
+  getContext(): Message[] {
+    return this.contextManager.getContextForDisplay();
   }
 
   getEvents(): AgentLoopEvent[] {
@@ -131,10 +126,11 @@ export class AgentLoop {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
+        const messages = await this.contextManager.buildContext();
         return await config.openai.chat.completions.create(
           {
             model: config.model,
-            messages: this.messages as never,
+            messages: messages as never,
             tools: this.toolRegistry?.getSchemas(),
           },
           { timeout: this.timeoutMs }

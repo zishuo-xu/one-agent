@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 import {
   AgentLoop,
   config,
+  ContextManager,
   createBuiltInTools,
   Sandbox,
   ToolRegistry,
   AgentLoopEvent,
+  Message,
 } from '@one-agent/agent-core';
 
 const WORKSPACE_ROOT = path.join(
@@ -39,11 +41,23 @@ function printEvent(event: AgentLoopEvent) {
   }
 }
 
+function printMessages(messages: Message[]) {
+  for (const msg of messages) {
+    const prefix = msg.role === 'system' ? '📋 system' :
+                   msg.role === 'user' ? '👤 user' :
+                   msg.role === 'assistant' ? '🤖 assistant' : '🔧 tool';
+    console.log(`${prefix}: ${msg.content}`);
+  }
+}
+
 export async function runRepl(): Promise<void> {
   console.log(WELCOME);
 
   const rl = readline.createInterface({ input, output });
-  const agent = new AgentLoop({ tools });
+  const contextManager = new ContextManager({
+    systemPrompt: config.systemPrompt,
+  });
+  const agent = new AgentLoop({ tools, contextManager });
   let closed = false;
 
   rl.on('close', () => {
@@ -69,9 +83,14 @@ export async function runRepl(): Promise<void> {
 
     if (trimmed === '/history') {
       console.log('\n--- History ---');
-      for (const msg of agent.getHistory()) {
-        console.log(`${msg.role}: ${msg.content}`);
-      }
+      printMessages(agent.getHistory());
+      console.log('---\n');
+      continue;
+    }
+
+    if (trimmed === '/context') {
+      console.log('\n--- Context sent to model ---');
+      printMessages(agent.getContext());
       console.log('---\n');
       continue;
     }

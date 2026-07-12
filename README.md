@@ -1,6 +1,6 @@
 # one-agent
 
-简化版多 Agent 协作平台（CLI 优先）。
+简化版单 Agent 运行时（CLI 优先），专注吃透一个 Agent 的完整内核。
 
 ## 项目结构
 
@@ -55,11 +55,10 @@ pnpm test
 ## 当前阶段
 
 - [x] Phase 1：单 Agent（CLI + API）
-- [ ] Phase 2：Tool Calling
-- [ ] Phase 3：Agent Router
-- [ ] Phase 4：Agent Handoff
+- [x] Phase 2：Tool Calling
+- [ ] Phase 3：上下文与记忆管理
+- [ ] Phase 4：规划与自我纠错
 - [ ] Phase 5：SQLite 持久化
-- [ ] Phase 6：任务队列
-- [ ] Phase 7：WebSocket
-- [ ] Phase 8：Trace 与 Evaluation
-- [ ] Phase 9：Docker 与部署
+- [ ] Phase 6：异步任务与流式输出
+- [ ] Phase 7：Trace 与 Evaluation
+- [ ] Phase 8：Docker 与部署

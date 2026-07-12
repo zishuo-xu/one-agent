@@ -14,7 +14,7 @@
 用户输入 → 调用模型 → 返回回答
 ```
 
-为了支撑后续阶段（Tool Calling、Agent Router、Handoff、持久化等），架构需要提前把「Agent 核心能力」和「交互入口」解耦。
+为了支撑后续阶段（Tool Calling、上下文记忆、规划与自纠、持久化等），架构需要提前把「Agent 核心能力」和「交互入口」解耦。
 
 ---
 
@@ -218,11 +218,11 @@ apps/api
 | 阶段 | 扩展位置 | 说明 |
 |------|----------|------|
 | Phase 2 Tool Calling | `packages/agent-core` | 增加 `ToolRegistry`、`ToolExecutor`，升级 `AgentLoop` 支持多轮 tool call |
-| Phase 3 Agent Router | `packages/agent-core` | 增加 `AgentRegistry`、`Router`，支持 `@mention` 和自动路由 |
-| Phase 4 Handoff | `packages/agent-core` | 增加 `HandoffManager`，记录 handoff 链路与循环检测 |
+| Phase 3 上下文与记忆 | `packages/agent-core` | 增加 `ContextManager`，支持滑动窗口与对话摘要压缩 |
+| Phase 4 规划与自纠 | `packages/agent-core` | AgentLoop 升级支持显式规划、ReAct 推理链与自我纠错 |
 | Phase 5 持久化 | `packages/agent-core` | 通过依赖注入接入 SQLite，CLI 和 API 同时获得持久化能力 |
-| Phase 6 任务队列 | `apps/api` | 增加 `TaskQueue`、`QueueWorker`，CLI 可选支持 |
-| Phase 7 WebSocket | `apps/api` | 增加 `/ws` 实时事件流，CLI 可订阅或打印日志 |
+| Phase 6 异步任务与流式 | `apps/api` | 增加 `TaskQueue`、`QueueWorker`，SSE/WebSocket 推送运行事件 |
+| Phase 7 Trace 与 Evaluation | `packages/agent-core` | 记录 run 链路，固定任务集评测 Agent 表现 |
 
 ---
 
