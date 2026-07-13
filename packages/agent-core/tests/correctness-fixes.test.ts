@@ -315,3 +315,102 @@ mockCreate
     }
   });
 });
+
+describe('Fix: streaming retry must not duplicate emitted deltas', () => {
+  it('does not retry after partial content has been streamed to the client', async () => {
+    // First attempt streams one delta then throws mid-stream. Without the
+    // fix, the retry would replay 'Hel' and the client would see 'HelHel...'.
+    let attempt = 0;
+    mockCreate.mockImplementation(() => {
+      attempt++;
+      if (attempt === 1) {
+        return Promise.resolve({
+          [Symbol.asyncIterator]: async function* () {
+            yield { choices: [{ delta: { content: 'Hel' } }] };
+            throw new Error('stream interrupted');
+          },
+        } as never);
+      }
+      // Second attempt (retry) should never happen.
+      return Promise.resolve({
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'Hel' } }] };
+          yield { choices: [{ delta: { content: 'lo' } }] };
+        },
+      } as never);
+    });
+
+    const agent = new AgentLoop({ enablePlanning: false, maxRetries: 2 });
+    const deltas: string[] = [];
+    agent.on('event', (e: AgentLoopEvent) => {
+      if (e.type === 'message_delta') deltas.push(e.content);
+    });
+
+    // The turn should fail (partial stream then error), not silently retry.
+    await expect(agent.chat('Hi')).rejects.toThrow('stream interrupted');
+    // Only the first attempt's single delta reached the client - no replay.
+    expect(deltas).toEqual(['Hel']);
+    expect(attempt).toBe(1);
+  });
+
+  it('retries when the failure happens before any delta is emitted', async () => {
+    let attempt = 0;
+    mockCreate.mockImplementation(() => {
+      attempt++;
+      if (attempt === 1) {
+        // Connection-level failure before streaming starts.
+        return Promise.reject(new Error('connection refused'));
+      }
+      return Promise.resolve({
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'Hello' } }] };
+        },
+      } as never);
+    });
+
+    const agent = new AgentLoop({ enablePlanning: false, maxRetries: 2 });
+    const deltas: string[] = [];
+    agent.on('event', (e: AgentLoopEvent) => {
+      if (e.type === 'message_delta') deltas.push(e.content);
+    });
+
+    const { reply } = await agent.chat('Hi');
+    expect(reply).toBe('Hello');
+    expect(deltas).toEqual(['Hello']);
+    expect(attempt).toBe(2);
+  });
+});
+
+describe('Fix: executeStep without toolExecutor surfaces failure', () => {
+  it('emits a failed tool_result when no tool executor is available', async () => {
+    // No tools registered -> toolExecutor is undefined. runSimpleLoop is used
+    // (no toolRegistry => simple loop). The model returns a tool_call; the loop
+    // must emit a tool_result with success=false rather than silently skipping.
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+          },
+        },
+      ],
+    } as never);
+
+    const agent = new AgentLoop({ enablePlanning: false, maxToolIterations: 1 });
+    const events: AgentLoopEvent[] = [];
+    agent.on('event', (e) => events.push(e));
+
+    // The loop exhausts tool iterations and throws - that is expected. What
+    // matters is that a failed tool_result was emitted along the way.
+    await expect(agent.chat('read something')).rejects.toThrow(/stopped after/);
+
+    const toolResults = events.filter((e) => e.type === 'tool_result');
+    expect(toolResults.length).toBeGreaterThan(0);
+    const tr = toolResults[0];
+    if (tr.type === 'tool_result') {
+      expect(tr.toolResult.success).toBe(false);
+      expect(tr.toolResult.error).toContain('No tool executor');
+    }
+  });
+});

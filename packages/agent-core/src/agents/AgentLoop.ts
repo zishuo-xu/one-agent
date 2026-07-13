@@ -337,7 +337,7 @@ export class AgentLoop extends EventEmitter {
         }
       }
 
-step.status = 'running';
+      step.status = 'running';
 
       const executionResult = await this.executeStep(step, plan, runId);
 
@@ -463,28 +463,20 @@ step.status = 'running';
       }
 
       for (const call of toolCalls) {
+        let result: ToolResult;
         if (!this.toolExecutor) {
-          const result: ToolResult = { success: false, error: 'No tool executor available' };
-          this.reasoningChain.addObservation(result);
-          this.emitEvent({ type: 'tool_result', toolResult: result });
-          this.contextManager.addMessage({
-            role: 'tool',
-            content: JSON.stringify(result),
-            tool_call_id: call.id,
-            internal: true,
-          });
-          this.persistToolCall(runId, call, result);
-          continue;
+          result = { success: false, error: 'No tool executor available' };
+        } else {
+          this.checkSignal();
+          result = await this.toolExecutor.execute(call);
         }
-
-        this.checkSignal();
-        const result = await this.toolExecutor.execute(call);
         this.reasoningChain.addObservation(result);
         this.emitEvent({ type: 'tool_result', toolResult: result });
         this.contextManager.addMessage({
           role: 'tool',
           content: JSON.stringify(result),
           tool_call_id: call.id,
+          internal: true,
         });
         this.persistToolCall(runId, call, result);
 
@@ -687,6 +679,11 @@ step.status = 'running';
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      // Track whether we have already streamed partial content to the client
+      // during this attempt. Once any message_delta has been emitted we cannot
+      // safely retry: a retry would replay the same tokens and the user would
+      // see duplicated/garbled output. Only retry while no delta has shipped.
+      let emittedDelta = false;
       try {
         const messages = await this.contextManager.buildContext();
         const tools = this.toolRegistry?.getSchemas(allowedTools);
@@ -714,6 +711,7 @@ step.status = 'running';
             const text = this.extractDeltaContent(chunk);
             if (text) {
               content += text;
+              emittedDelta = true;
               this.emitEvent({ type: 'message_delta', content: text });
             }
             const delta = (chunk as unknown as { choices?: Array<{ delta?: Record<string, unknown> }> })
@@ -768,12 +766,18 @@ step.status = 'running';
         const message = nonStreamingResponse.choices[0]?.message;
         const content = this.extractMessageContent(message);
         if (content) {
+          emittedDelta = true;
           this.emitEvent({ type: 'message_delta', content });
         }
         const toolCalls = message?.tool_calls;
         return { content, toolCalls };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        if (emittedDelta) {
+          // Partial content already reached the client; retrying would
+          // duplicate it. Surface the error to the caller instead.
+          throw lastError;
+        }
       }
     }
 
