@@ -88,7 +88,7 @@ export class AgentLoop extends EventEmitter {
     this.maxToolIterations = options.maxToolIterations ?? 5;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
     this.maxRetryAttempts = options.maxRetryAttempts ?? 2;
-    this.enablePlanning = options.enablePlanning ?? true;
+    this.enablePlanning = options.enablePlanning ?? false;
     this.threadId = options.threadId;
     this.taskId = options.taskId;
     this.toolRegistry = options.tools;

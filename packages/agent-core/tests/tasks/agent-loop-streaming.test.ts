@@ -77,7 +77,7 @@ describe('AgentLoop streaming', () => {
     const tools = new ToolRegistry();
     tools.register(echoTool);
 
-    const agent = new AgentLoop({ tools, planner, taskJudge });
+    const agent = new AgentLoop({ tools, planner, taskJudge, enablePlanning: true });
     const deltas: string[] = [];
     agent.on('event', (event) => {
       if (event.type === 'message_delta') {

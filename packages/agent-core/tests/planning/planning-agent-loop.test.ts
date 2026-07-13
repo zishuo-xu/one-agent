@@ -105,7 +105,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Done: hello' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply, events } = await agent.chat('Please echo hello');
 
     expect(reply).toBe('Done: hello');
@@ -147,7 +147,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Fallback done' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply } = await agent.chat('Fallback test');
 
     expect(reply).toBe('Fallback done');
@@ -213,7 +213,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Retry succeeded' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools, maxRetryAttempts: 2 });
+    const agent = new AgentLoop({ tools, maxRetryAttempts: 2, enablePlanning: true });
     const { reply } = await agent.chat('Retry test');
 
     expect(reply).toBe('Retry succeeded');
@@ -296,7 +296,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Combined A and B' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply, events } = await agent.chat('Fetch and combine data');
 
     expect(reply).toBe('Combined A and B');
@@ -358,7 +358,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Echo done' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools, maxRetryAttempts: 2 });
+    const agent = new AgentLoop({ tools, maxRetryAttempts: 2, enablePlanning: true });
     const { reply, events } = await agent.chat('Deviation test');
 
     expect(reply).toBe('Echo done');
@@ -408,7 +408,7 @@ describe('AgentLoop with planning', () => {
         choices: [{ message: { content: 'Allowed tool done' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply } = await agent.chat('Allowed tools test');
 
     expect(reply).toBe('Allowed tool done');
@@ -481,7 +481,7 @@ describe('AgentLoop with planning', () => {
       .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
       .mockResolvedValueOnce({ choices: [{ message: { content: 'Summary done' } }] } as never);
 
-    const agent = new AgentLoop({ tools });
+    const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply, events } = await agent.chat('Research and summarize');
 
     expect(reply).toBe('Summary done');

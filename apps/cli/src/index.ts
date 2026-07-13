@@ -45,6 +45,7 @@ Options:
   --init              Create a .env template in the workspace
   --new-thread        Start a new thread
   --thread <id>       Resume a specific thread
+  --plan              Enable planning mode for multi-step tool tasks
   --verbose           Show internal thoughts, plans, and reflections
 
 Interactive commands:
@@ -107,7 +108,8 @@ function validateApiKey(): boolean {
 function createAgent(
   threadId: string | undefined,
   memoryStore: MemoryStore,
-  memoryExtractor: MemoryExtractor
+  memoryExtractor: MemoryExtractor,
+  enablePlanning = false
 ) {
   const sandbox = new Sandbox(WORKSPACE_ROOT);
   const tools = new ToolRegistry();
@@ -118,6 +120,7 @@ function createAgent(
     threadId,
     memoryStore,
     memoryExtractor,
+    enablePlanning,
   });
 }
 
@@ -128,6 +131,7 @@ function parseArgs(): {
   help: boolean;
   version: boolean;
   init: boolean;
+  plan: boolean;
 } {
   const args = process.argv.slice(2);
   const threadIndex = args.indexOf('--thread');
@@ -138,7 +142,8 @@ function parseArgs(): {
   const help = args.includes('--help') || args.includes('-h');
   const version = args.includes('--version');
   const init = args.includes('--init');
-  return { threadId, newThread, verbose, help, version, init };
+  const plan = args.includes('--plan');
+  return { threadId, newThread, verbose, help, version, init, plan };
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -206,7 +211,7 @@ function createProgressIndicator(label = 'Thinking'): {
 }
 
 async function main() {
-  const { threadId: argThreadId, newThread, verbose, help, version, init } = parseArgs();
+  const { threadId: argThreadId, newThread, verbose, help, version, init, plan } = parseArgs();
 
   if (help) {
     printHelp();
@@ -259,7 +264,7 @@ async function main() {
     console.log(`Created new thread ${threadId}`);
   }
 
-  let agent = createAgent(threadId, memoryStore, memoryExtractor);
+  let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   console.log();
@@ -273,7 +278,8 @@ async function main() {
   console.log('  /traces <run-id>  traces for a specific run');
   console.log('  /thread <id>      switch to another thread');
   console.log('  /exit             quit');
-  console.log('  Use --verbose to show thoughts, plans, and reflections.');
+  console.log('  Use --verbose to show internal thoughts, plans, and reflections.');
+  console.log('  Use --plan to enable multi-step planning mode.');
   console.log(`Thread: ${threadId}`);
   console.log();
 
@@ -422,7 +428,7 @@ async function main() {
       }
       threadId = existing.id;
       title = existing.title;
-      agent = createAgent(threadId, memoryStore, memoryExtractor);
+      agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       continue;
     }
