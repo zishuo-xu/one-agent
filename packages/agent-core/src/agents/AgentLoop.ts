@@ -715,15 +715,25 @@ export class AgentLoop extends EventEmitter {
     if (delta?.content && typeof delta.content === 'string') {
       return delta.content;
     }
+    // Volcengine GLM-5.2 returns generated text in reasoning_content when streaming
+    if (delta?.reasoning_content && typeof delta.reasoning_content === 'string') {
+      return delta.reasoning_content;
+    }
     // Some compatibility endpoints wrap content in choices[0].delta.message.content
     const message = delta?.message as Record<string, unknown> | undefined;
     if (message?.content && typeof message.content === 'string') {
       return message.content;
     }
+    if (message?.reasoning_content && typeof message.reasoning_content === 'string') {
+      return message.reasoning_content;
+    }
     // Fallback for non-streaming-like chunks
     const msg = first?.message as Record<string, unknown> | undefined;
     if (msg?.content && typeof msg.content === 'string') {
       return msg.content;
+    }
+    if (msg?.reasoning_content && typeof msg.reasoning_content === 'string') {
+      return msg.reasoning_content;
     }
     return '';
   }

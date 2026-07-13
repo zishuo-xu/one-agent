@@ -75,7 +75,8 @@
 **问题**：某些兼容 OpenAI 接口的模型在流式输出时返回空内容，CLI 只显示耗时，没有提示。
 
 **修复**：
-- `AgentLoop.streamModel` 增加 `extractDeltaContent`，兼容 `choices[0].delta.content`、`choices[0].delta.message.content` 和 `choices[0].message.content` 三种格式。
+- `AgentLoop.streamModel` 增加 `extractDeltaContent`，兼容 `choices[0].delta.content`、`choices[0].delta.message.content`、`choices[0].message.content` 以及 `reasoning_content` 等格式。
+- 实测 Volcengine GLM-5.2 在流式输出时把生成文本放在 `delta.reasoning_content` 而不是 `delta.content`，现已自动回退读取。
 - 当最终 `reply` 为空时，CLI 显示 `[Model returned an empty response]`，提示用户检查模型配置。
 
 ### 8. 命令提示不够一致（已修复）
