@@ -39,7 +39,7 @@ pnpm link --global
 
 # 首次运行前准备 API key
 mkdir -p ~/.one-agent
-cp .env.example ~/.one-agent/.env
+cp ../../.env.example ~/.one-agent/.env
 # 编辑 ~/.one-agent/.env，填入 OPENAI_API_KEY
 
 # 在非仓库目录任意位置启动

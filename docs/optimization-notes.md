@@ -233,6 +233,7 @@
 - `docs/phase1-architecture.md`
 - `docs/phase11-planning-enhancements.md`
 - `docs/cli-interaction-improvements.md`
+- `docs/cli-ux-optimization.md`
 - `SIMPLIFIED_AGENT_PROJECT_ROADMAP.md`
 
 ---

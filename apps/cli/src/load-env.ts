@@ -11,4 +11,5 @@ if (!fs.existsSync(WORKSPACE_ROOT)) {
 
 dotenv.config({
   path: path.join(WORKSPACE_ROOT, '.env'),
+  quiet: true,
 });

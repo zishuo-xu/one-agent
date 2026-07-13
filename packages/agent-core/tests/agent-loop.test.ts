@@ -21,6 +21,8 @@ import { config } from '../src/config.js';
 import { AgentLoop } from '../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
+import type { MemoryStore } from '../src/db/memoryStore.js';
+import type { MemoryExtractor } from '../src/memory/MemoryExtractor.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -57,6 +59,62 @@ describe('AgentLoop', () => {
       role: 'assistant',
       content: 'Hello from assistant',
     });
+  });
+
+  it('falls back to reasoning_content when content is whitespace', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: '\n\n', reasoning_content: 'Hello from fallback' } }],
+    } as never);
+
+    const agent = new AgentLoop({ enablePlanning: false });
+    const { reply } = await agent.chat('Hi');
+
+    expect(reply).toBe('Hello from fallback');
+  });
+
+  it('extracts text from compatible content parts', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: [{ type: 'text', text: 'Hello ' }, { text: 'from parts' }] } }],
+    } as never);
+
+    const agent = new AgentLoop({ enablePlanning: false });
+    const { reply } = await agent.chat('Hi');
+
+    expect(reply).toBe('Hello from parts');
+  });
+
+  it('does not block a reply on background memory extraction', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'Reply now' } }],
+    } as never);
+
+    let resolveExtraction!: (facts: []) => void;
+    const memoryExtractor = {
+      extract: vi.fn(
+        () => new Promise<[]>(resolve => {
+          resolveExtraction = resolve;
+        })
+      ),
+    } as unknown as MemoryExtractor;
+    const memoryStore = {
+      getRelevantMemories: vi.fn(() => []),
+      create: vi.fn(),
+    } as unknown as MemoryStore;
+    const agent = new AgentLoop({
+      enablePlanning: false,
+      memoryStore,
+      memoryExtractor,
+      awaitMemoryExtraction: false,
+    });
+
+    const result = await Promise.race([
+      agent.chat('Hi'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('reply was blocked')), 100)),
+    ]);
+
+    expect(result.reply).toBe('Reply now');
+    expect(memoryExtractor.extract).toHaveBeenCalledWith('Hi', 'Reply now');
+    resolveExtraction([]);
   });
 
   it('uses custom system prompt', async () => {

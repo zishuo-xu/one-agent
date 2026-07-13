@@ -1,6 +1,6 @@
 import './load-env.js';
 import fs from 'node:fs';
-import readline from 'node:readline/promises';
+import readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import {
@@ -14,59 +14,45 @@ import {
   RunStore,
   MemoryStore,
   MemoryExtractor,
+  MessageStore,
   TraceEventStore,
   getSharedConnection,
 } from '@one-agent/agent-core';
 import { WORKSPACE_ROOT } from './load-env.js';
-import { printTraces } from './commands/traces.js';
+import { printTraces, printRunSummary } from './commands/traces.js';
+import { sanitizeTerminalText } from './output.js';
+import { renderMarkdown } from './markdown.js';
+import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
+import { categorizeError, printError } from './errors.js';
+import { isUsableApiKey, parseArgs } from './args.js';
+import {
+  bold,
+  cyan,
+  dim,
+  formatDuration,
+  formatRelativeTime,
+  padEnd,
+  shortId,
+} from './format.js';
 
 process.env.DATABASE_PATH =
   process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db');
 
 const COMMANDS = [
+  '/help',
   '/history',
   '/context',
   '/reasoning',
   '/threads',
   '/runs',
+  '/runs <run-id>',
   '/traces',
   '/traces <run-id>',
+  '/traces <run-id> --verbose',
   '/thread <id>',
   '/exit',
   '/quit',
 ];
-
-const HELP_TEXT = `
-Usage: one-agent [options]
-
-Options:
-  --help, -h          Show this help message
-  --version, -v       Show version
-  --init              Create a .env template in the workspace
-  --new-thread        Start a new thread
-  --thread <id>       Resume a specific thread
-  --plan              Enable planning mode for multi-step tool tasks
-  --verbose           Show internal thoughts, plans, and reflections
-
-Interactive commands:
-  /history            Show your messages and the assistant replies
-  /context            Show a summary of the current conversation context
-  /reasoning          Show the agent's reasoning trace for the last turn
-  /threads            List all threads
-  /runs               List runs in the current thread
-  /traces             List traces for the current thread
-  /traces <run-id>    Show traces for a specific run
-  /thread <id>        Switch to another thread
-  /exit, /quit        Exit the CLI
-`;
-
-function printHelp(): void {
-  console.log(HELP_TEXT.trim());
-}
-
-function printVersion(): void {
-  console.log('one-agent 0.0.1');
-}
 
 function createEnvTemplate(): void {
   const envPath = path.join(WORKSPACE_ROOT, '.env');
@@ -90,10 +76,10 @@ function createEnvTemplate(): void {
 }
 
 function validateApiKey(): boolean {
-  if (process.env.OPENAI_API_KEY) {
+  if (isUsableApiKey(process.env.OPENAI_API_KEY)) {
     return true;
   }
-  console.error('Error: OPENAI_API_KEY is not set.');
+  console.error('Error: OPENAI_API_KEY is missing or still uses the template placeholder.');
   console.error(`Workspace: ${WORKSPACE_ROOT}`);
   console.error('');
   console.error('To fix this, either:');
@@ -120,36 +106,21 @@ function createAgent(
     threadId,
     memoryStore,
     memoryExtractor,
+    awaitMemoryExtraction: false,
     enablePlanning,
   });
-}
-
-function parseArgs(): {
-  threadId?: string;
-  newThread: boolean;
-  verbose: boolean;
-  help: boolean;
-  version: boolean;
-  init: boolean;
-  plan: boolean;
-} {
-  const args = process.argv.slice(2);
-  const threadIndex = args.indexOf('--thread');
-  const threadId =
-    threadIndex >= 0 && args[threadIndex + 1] ? args[threadIndex + 1] : undefined;
-  const newThread = args.includes('--new-thread');
-  const verbose = args.includes('--verbose') || args.includes('-v');
-  const help = args.includes('--help') || args.includes('-h');
-  const version = args.includes('--version');
-  const init = args.includes('--init');
-  const plan = args.includes('--plan');
-  return { threadId, newThread, verbose, help, version, init, plan };
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= maxLength) return clean;
   return `${clean.slice(0, maxLength)}...`;
+}
+
+function getFirstUserMessageSummary(messageStore: MessageStore, threadId: string): string {
+  const messages = messageStore.getByThread(threadId);
+  const firstUser = messages.find((m) => m.role === 'user');
+  return firstUser ? truncateTitle(firstUser.content, 50) : '(no title)';
 }
 
 function formatToolResultSummary(toolResult: { success: boolean; data?: unknown; error?: string }): string {
@@ -198,10 +169,11 @@ function createProgressIndicator(label = 'Thinking'): {
       }, 120);
     },
     stop: () => {
-      if (interval) {
-        clearInterval(interval);
-        interval = null;
+      if (!interval) {
+        return;
       }
+      clearInterval(interval);
+      interval = null;
       process.stdout.write('\r' + ' '.repeat(40) + '\r');
     },
     setLabel: (newLabel: string) => {
@@ -241,6 +213,7 @@ async function main() {
   const db = getSharedConnection();
   const threadStore = new ThreadStore(db);
   const runStore = new RunStore(db);
+  const messageStore = new MessageStore(db);
   const memoryStore = new MemoryStore(db);
   const memoryExtractor = new MemoryExtractor();
   const traceEventStore = new TraceEventStore(db);
@@ -248,40 +221,68 @@ async function main() {
   let threadId: string;
   let title: string | null = null;
 
-  if (argThreadId && !newThread) {
+  if (argThreadId && newThread) {
+    if (threadStore.getById(argThreadId)) {
+      console.error(`Cannot create thread ${argThreadId}: it already exists.`);
+      process.exitCode = 1;
+      return;
+    }
+    threadId = threadStore.create({ id: argThreadId }).id;
+    printStartup(threadId);
+  } else if (argThreadId) {
     const existing = threadStore.getById(argThreadId);
     if (existing) {
       threadId = existing.id;
       title = existing.title;
-      console.log(`Resumed thread ${threadId}${title ? ` (${title})` : ''}`);
+      printStartup(threadId);
     } else {
       threadId = argThreadId;
       threadStore.create({ id: threadId });
-      console.log(`Created new thread ${threadId} (requested thread not found)`);
+      printStartup(threadId);
     }
   } else {
     threadId = threadStore.create({}).id;
-    console.log(`Created new thread ${threadId}`);
+    printStartup(threadId);
   }
 
   let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
   const rl = readline.createInterface({ input: stdin, output: stdout });
+  const inputQueue: string[] = [];
+  let pendingInput: ((input: string | null) => void) | null = null;
+  let inputClosed = false;
 
-  console.log();
-  console.log('Commands:');
-  console.log('  /history          your messages and assistant replies');
-  console.log('  /context          current conversation context summary');
-  console.log('  /reasoning        reasoning trace from the last turn');
-  console.log('  /threads          list all threads');
-  console.log('  /runs             list runs in this thread');
-  console.log('  /traces           list traces in this thread');
-  console.log('  /traces <run-id>  traces for a specific run');
-  console.log('  /thread <id>      switch to another thread');
-  console.log('  /exit             quit');
-  console.log('  Use --verbose to show internal thoughts, plans, and reflections.');
-  console.log('  Use --plan to enable multi-step planning mode.');
-  console.log(`Thread: ${threadId}`);
-  console.log();
+  rl.on('line', (line) => {
+    if (pendingInput) {
+      const resolve = pendingInput;
+      pendingInput = null;
+      resolve(line);
+      return;
+    }
+    inputQueue.push(line);
+  });
+
+  rl.on('close', () => {
+    inputClosed = true;
+    if (pendingInput) {
+      const resolve = pendingInput;
+      pendingInput = null;
+      resolve(null);
+    }
+  });
+
+  const readInput = (): Promise<string | null> => {
+    process.stdout.write('> ');
+    const queued = inputQueue.shift();
+    if (queued !== undefined) {
+      return Promise.resolve(queued);
+    }
+    if (inputClosed) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      pendingInput = resolve;
+    });
+  };
 
   let abortController: AbortController | null = null;
   let sigintCount = 0;
@@ -297,7 +298,10 @@ async function main() {
   });
 
   while (true) {
-    const input = await rl.question('> ');
+    const input = await readInput();
+    if (input === null) {
+      break;
+    }
     const trimmed = input.trim();
 
     if (!trimmed) continue;
@@ -306,6 +310,11 @@ async function main() {
       console.log('Goodbye.');
       rl.close();
       break;
+    }
+
+    if (trimmed === '/help') {
+      printHelp();
+      continue;
     }
 
     if (trimmed === '/history') {
@@ -371,40 +380,88 @@ async function main() {
 
     if (trimmed === '/threads') {
       const threads = threadStore.list();
+      const maxTitleWidth = 28;
       for (const thread of threads) {
-        const marker = thread.id === threadId ? ' *' : '';
-        console.log(`${thread.id}${marker} ${thread.title ?? '(no title)'} - ${thread.updatedAt}`);
+        const marker = thread.id === threadId ? '* ' : '  ';
+        const displayTitle = thread.title
+          ? truncateTitle(thread.title, maxTitleWidth)
+          : truncateTitle(getFirstUserMessageSummary(messageStore, thread.id), maxTitleWidth);
+        const id = shortId(thread.id);
+        const relTime = formatRelativeTime(thread.updatedAt);
+        console.log(`${marker}${padEnd(id, 10)}${padEnd(displayTitle, maxTitleWidth + 2)}${relTime}`);
       }
       continue;
     }
 
     if (trimmed === '/runs') {
       const runs = runStore.getByThread(threadId);
-      for (const run of runs) {
-        console.log(`${run.id} ${run.status} ${run.startTime}${run.endTime ? ` -> ${run.endTime}` : ''}`);
+      if (runs.length === 0) {
+        console.log('No runs in this thread.');
+      } else {
+        for (const run of runs) {
+          printRunSummary({
+            id: run.id,
+            status: run.status,
+            startTime: run.startTime,
+            endTime: run.endTime,
+            title: threadStore.getById(run.threadId)?.title,
+          });
+        }
       }
       continue;
     }
 
-    if (trimmed === '/traces') {
-      const traces = traceEventStore.getByThread(threadId);
-      printTraces(traces);
-      continue;
-    }
-
-    if (trimmed.startsWith('/traces ')) {
-      const id = trimmed.slice('/traces '.length).trim();
+    if (trimmed.startsWith('/runs ')) {
+      const id = trimmed.slice('/runs '.length).trim();
       if (!id) {
-        console.log('Usage: /traces <run-id>');
+        console.log('Usage: /runs <run-id>');
         continue;
       }
-      const run = runStore.getById(id);
+      const run = runStore.getById(id) ?? runStore.getByThread(threadId).find((r) => r.id.startsWith(id));
       if (!run) {
         console.log(`Run not found: ${id}`);
         continue;
       }
-      const traces = traceEventStore.getByRun(id);
-      printTraces(traces);
+      printRunSummary({
+        id: run.id,
+        status: run.status,
+        startTime: run.startTime,
+        endTime: run.endTime,
+        title: threadStore.getById(run.threadId)?.title,
+      });
+      const traces = traceEventStore.getByRun(run.id);
+      printTraces(traces, { limit: 20 });
+      continue;
+    }
+
+    if (trimmed === '/traces') {
+      const runs = runStore.getByThread(threadId);
+      const latestRun = runs[0];
+      if (!latestRun) {
+        console.log('No runs in this thread.');
+      } else {
+        const traces = traceEventStore.getByRun(latestRun.id);
+        printTraces(traces, { limit: 20 });
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('/traces ')) {
+      const rest = trimmed.slice('/traces '.length).trim();
+      if (!rest) {
+        console.log('Usage: /traces <run-id> [--verbose]');
+        continue;
+      }
+      const parts = rest.split(/\s+/);
+      const id = parts[0];
+      const verboseFlag = parts.includes('--verbose');
+      const run = runStore.getById(id) ?? runStore.getByThread(threadId).find((r) => r.id.startsWith(id));
+      if (!run) {
+        console.log(`Run not found: ${id}`);
+        continue;
+      }
+      const traces = traceEventStore.getByRun(run.id);
+      printTraces(traces, { limit: verboseFlag ? undefined : 20, verbose: verboseFlag });
       continue;
     }
 
@@ -439,6 +496,7 @@ async function main() {
       continue;
     }
 
+    let runIdFromError: string | undefined;
     try {
       if (!title) {
         title = truncateTitle(trimmed);
@@ -450,10 +508,18 @@ async function main() {
       sigintCount = 0;
       abortController = new AbortController();
 
-      let stage: 'planning' | 'tool' | 'answer' = 'planning';
-      let hasStreamedMessage = false;
+      let stage: 'request' | 'tool' | 'answer' = 'request';
+      let streamedContent = '';
       let hasEvents = false;
-      const progress = createProgressIndicator('Planning');
+      let firstDeltaTime = 0;
+      let toolStartTime = 0;
+      let toolEndTime = 0;
+      let toolCallCount = 0;
+      let answerStartTime = 0;
+      let answerEndTime = 0;
+      let currentRunId: string | undefined;
+
+      const progress = createProgressIndicator(`正在请求 ${config.model}…`);
       progress.start();
       const startTime = Date.now();
 
@@ -471,48 +537,86 @@ async function main() {
         } else if (event.type === 'tool_call') {
           stage = 'tool';
           progress.setLabel('Working');
+          if (toolStartTime === 0) toolStartTime = Date.now();
+          toolCallCount++;
           process.stdout.write(`\n[tool_call] ${event.toolCall.name}\n`);
         } else if (event.type === 'tool_result') {
           const summary = formatToolResultSummary(event.toolResult);
+          toolEndTime = Date.now();
           process.stdout.write(`[tool_result] ${summary}\n`);
         } else if (event.type === 'thought' && verbose) {
           process.stdout.write(`\n[thought] ${event.content.slice(0, 120)}\n`);
         } else if (event.type === 'reflection') {
-          stage = 'planning';
+          stage = 'request';
           progress.setLabel('Re-planning');
           if (verbose) {
             process.stdout.write(`\n[reflection] ${event.content.slice(0, 120)}\n`);
           }
         } else if (event.type === 'message_delta') {
+          if (firstDeltaTime === 0) {
+            firstDeltaTime = Date.now();
+          }
+          if (answerStartTime === 0) {
+            answerStartTime = Date.now();
+          }
+          answerEndTime = Date.now();
           if (stage !== 'answer') {
             stage = 'answer';
             progress.setLabel('Answering');
           }
-          hasStreamedMessage = true;
-          progress.stop();
-          process.stdout.write(event.content);
+          const cleanContent = sanitizeTerminalText(event.content);
+          streamedContent += cleanContent;
         } else if (event.type === 'message') {
-          progress.stop();
-          if (!hasStreamedMessage && event.content) {
-            console.log(`\n${event.content}`);
+          if (answerEndTime === 0) {
+            answerEndTime = Date.now();
+          }
+          if (streamedContent.length === 0 && event.content) {
+            streamedContent = sanitizeTerminalText(event.content);
           }
         }
       };
 
       agent.on('event', onEvent);
-      const { reply } = await agent.chat(trimmed, abortController.signal);
+      let runResult: { reply: string; runId?: string };
+      try {
+        runResult = await agent.chat(trimmed, abortController.signal);
+      } catch (error) {
+        // Try to find the latest run in this thread for error hints.
+        const latestRun = runStore.getByThread(threadId)[0];
+        runIdFromError = latestRun?.id;
+        throw error;
+      }
       agent.off('event', onEvent);
       progress.stop();
       abortController = null;
+      currentRunId = runResult.runId;
 
       const elapsed = Date.now() - startTime;
+      const ttfa = firstDeltaTime > 0 ? firstDeltaTime - startTime : elapsed;
+      const answerDuration = answerStartTime > 0 && answerEndTime > 0 ? answerEndTime - answerStartTime : 0;
+      const toolDuration = toolStartTime > 0 && toolEndTime > 0 ? toolEndTime - toolStartTime : 0;
+
+      const reply = runResult.reply;
+      const renderable = sanitizeTerminalText(reply).trim();
+
       process.stdout.write('\n');
-      if (reply && !hasStreamedMessage) {
-        console.log(`\n${reply}`);
-      } else if (!reply && !hasStreamedMessage) {
+      if (renderable.length > 0) {
+        const rendered = renderMarkdown(renderable);
+        console.log(`\n${rendered}`);
+      } else if (streamedContent.trim().length === 0) {
         console.log('\n[Model returned an empty response]');
       }
-      console.log(`\n(${elapsed}ms)`);
+
+      const parts: string[] = [];
+      parts.push(`首字 ${formatDuration(ttfa)}`);
+      if (answerDuration > 0) parts.push(`回答 ${formatDuration(answerDuration)}`);
+      if (toolDuration > 0) parts.push(`工具 ${formatDuration(toolDuration)}`);
+      parts.push('记忆后台处理中');
+      console.log(`\n(${parts.join(' · ')})`);
+
+      if (!renderable && currentRunId) {
+        console.log(dim(`可执行 /runs 或 /traces ${shortId(currentRunId)} 查看详情。`));
+      }
 
       printSeparator();
     } catch (error) {
@@ -520,7 +624,9 @@ async function main() {
       if (error instanceof Error && error.message === 'AgentLoop was cancelled') {
         console.log('\nTurn cancelled.');
       } else {
-        console.error('Error:', error instanceof Error ? error.message : String(error));
+        const latestRun = runStore.getByThread(threadId)[0];
+        const categorized = categorizeError(error, runIdFromError ?? latestRun?.id, verbose);
+        printError(categorized, verbose);
       }
     }
   }

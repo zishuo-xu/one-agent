@@ -89,6 +89,30 @@ describe('AgentLoop streaming', () => {
     expect(deltas).toEqual(['Hel', 'lo']);
   });
 
+  it('falls back to visible reasoning content when a stream content delta is whitespace', async () => {
+    const planner = new Planner();
+    vi.spyOn(planner, 'createPlan').mockResolvedValue({ steps: [], reasoning: 'noop' } as never);
+
+    const taskJudge = new TaskJudge();
+    vi.spyOn(taskJudge, 'judge').mockResolvedValue({
+      complete: true,
+      reasoning: 'done',
+      nextAction: 'finalize',
+    } as never);
+
+    mockCreate.mockResolvedValue({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: '\n', reasoning_content: 'Hello' } }] };
+      },
+    } as never);
+
+    const tools = new ToolRegistry();
+    const agent = new AgentLoop({ tools, planner, taskJudge, enablePlanning: true });
+    const { reply } = await agent.chat('Hi');
+
+    expect(reply).toBe('Hello');
+  });
+
   it('respects AbortSignal', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'Hello' } }],

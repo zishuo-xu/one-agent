@@ -106,7 +106,7 @@ one-agent
 首次运行会在 `~/.one-agent` 创建目录。你需要把 API key 放入 `~/.one-agent/.env`：
 
 ```bash
-cp .env.example ~/.one-agent/.env
+cp ../../.env.example ~/.one-agent/.env
 # 编辑 ~/.one-agent/.env，填入 OPENAI_API_KEY
 ```
 

@@ -41,6 +41,7 @@ export interface AgentLoopOptions {
   traceEventStore?: TraceEventStore;
   memoryStore?: MemoryStore;
   memoryExtractor?: MemoryExtractor;
+  awaitMemoryExtraction?: boolean;
   signal?: AbortSignal;
 }
 
@@ -73,6 +74,7 @@ export class AgentLoop extends EventEmitter {
   private readonly traceEventStore?: TraceEventStore;
   private readonly memoryStore?: MemoryStore;
   private readonly memoryExtractor?: MemoryExtractor;
+  private readonly awaitMemoryExtraction: boolean;
   private signal?: AbortSignal;
   private readonly taskId?: string;
   private currentRunId?: string;
@@ -116,6 +118,7 @@ export class AgentLoop extends EventEmitter {
 
     this.memoryStore = options.memoryStore;
     this.memoryExtractor = options.memoryExtractor;
+    this.awaitMemoryExtraction = options.awaitMemoryExtraction ?? true;
 
     if (options.threadId) {
       const db = options.db ?? getSharedConnection();
@@ -161,13 +164,13 @@ export class AgentLoop extends EventEmitter {
       if (!this.enablePlanning || !this.toolRegistry) {
         const result = await this.runSimpleLoop(runId);
         this.completeRun(runId);
-        await this.extractAndStoreMemories(message, result.reply);
+        await this.persistMemories(message, result.reply);
         return { ...result, runId };
       }
 
       const result = await this.runPlanningLoop(message, runId, this.currentMemoryText);
       this.completeRun(runId);
-      await this.extractAndStoreMemories(message, result.reply);
+      await this.persistMemories(message, result.reply);
       return { ...result, runId };
     } catch (error) {
       if (runId && this.runStore) {
@@ -706,15 +709,38 @@ export class AgentLoop extends EventEmitter {
       return '';
     }
     const msg = message as Record<string, unknown>;
-    if (msg.content && typeof msg.content === 'string') {
-      return msg.content;
+    const content = this.extractTextContent(msg.content);
+    if (content.trim()) {
+      return content;
     }
     // Volcengine GLM-5.2 sometimes returns generated text in reasoning_content
     // even for non-streaming completions.
-    if (msg.reasoning_content && typeof msg.reasoning_content === 'string') {
-      return msg.reasoning_content;
+    const reasoning = this.extractTextContent(msg.reasoning_content ?? msg.reasoningContent);
+    if (reasoning.trim()) {
+      return reasoning;
     }
     return '';
+  }
+
+  private extractTextContent(value: unknown): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (!Array.isArray(value)) {
+      return '';
+    }
+    return value
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+        if (!part || typeof part !== 'object') {
+          return '';
+        }
+        const item = part as Record<string, unknown>;
+        return this.extractTextContent(item.text ?? item.content);
+      })
+      .join('');
   }
 
   private extractDeltaContent(chunk: unknown): string {
@@ -728,28 +754,40 @@ export class AgentLoop extends EventEmitter {
     const first = choice[0] as Record<string, unknown>;
     // Standard OpenAI streaming format: choices[0].delta.content
     const delta = first?.delta as Record<string, unknown> | undefined;
-    if (delta?.content && typeof delta.content === 'string') {
-      return delta.content;
+    const deltaContent = this.extractTextContent(delta?.content);
+    if (deltaContent.trim()) {
+      return deltaContent;
     }
     // Volcengine GLM-5.2 returns generated text in reasoning_content when streaming
-    if (delta?.reasoning_content && typeof delta.reasoning_content === 'string') {
-      return delta.reasoning_content;
+    const deltaReasoning = this.extractTextContent(
+      delta?.reasoning_content ?? delta?.reasoningContent
+    );
+    if (deltaReasoning.trim()) {
+      return deltaReasoning;
     }
     // Some compatibility endpoints wrap content in choices[0].delta.message.content
     const message = delta?.message as Record<string, unknown> | undefined;
-    if (message?.content && typeof message.content === 'string') {
-      return message.content;
+    const nestedContent = this.extractTextContent(message?.content);
+    if (nestedContent.trim()) {
+      return nestedContent;
     }
-    if (message?.reasoning_content && typeof message.reasoning_content === 'string') {
-      return message.reasoning_content;
+    const nestedReasoning = this.extractTextContent(
+      message?.reasoning_content ?? message?.reasoningContent
+    );
+    if (nestedReasoning.trim()) {
+      return nestedReasoning;
     }
     // Fallback for non-streaming-like chunks
     const msg = first?.message as Record<string, unknown> | undefined;
-    if (msg?.content && typeof msg.content === 'string') {
-      return msg.content;
+    const messageContent = this.extractTextContent(msg?.content);
+    if (messageContent.trim()) {
+      return messageContent;
     }
-    if (msg?.reasoning_content && typeof msg.reasoning_content === 'string') {
-      return msg.reasoning_content;
+    const messageReasoning = this.extractTextContent(
+      msg?.reasoning_content ?? msg?.reasoningContent
+    );
+    if (messageReasoning.trim()) {
+      return messageReasoning;
     }
     return '';
   }
@@ -824,6 +862,13 @@ export class AgentLoop extends EventEmitter {
       }
     } catch {
       // Memory extraction should not break the main loop.
+    }
+  }
+
+  private async persistMemories(userMessage: string, assistantReply: string): Promise<void> {
+    const extraction = this.extractAndStoreMemories(userMessage, assistantReply);
+    if (this.awaitMemoryExtraction) {
+      await extraction;
     }
   }
 
