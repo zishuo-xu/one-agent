@@ -1,4 +1,5 @@
 import './load-env.js';
+import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
@@ -29,10 +30,79 @@ const COMMANDS = [
   '/threads',
   '/runs',
   '/traces',
-  '/thread',
+  '/traces <run-id>',
+  '/thread <id>',
   '/exit',
   '/quit',
 ];
+
+const HELP_TEXT = `
+Usage: one-agent [options]
+
+Options:
+  --help, -h          Show this help message
+  --version, -v       Show version
+  --init              Create a .env template in the workspace
+  --new-thread        Start a new thread
+  --thread <id>       Resume a specific thread
+  --verbose           Show internal thoughts, plans, and reflections
+
+Interactive commands:
+  /history            Show your messages and the assistant replies
+  /context            Show a summary of the current conversation context
+  /reasoning          Show the agent's reasoning trace for the last turn
+  /threads            List all threads
+  /runs               List runs in the current thread
+  /traces             List traces for the current thread
+  /traces <run-id>    Show traces for a specific run
+  /thread <id>        Switch to another thread
+  /exit, /quit        Exit the CLI
+`;
+
+function printHelp(): void {
+  console.log(HELP_TEXT.trim());
+}
+
+function printVersion(): void {
+  console.log('one-agent 0.0.1');
+}
+
+function createEnvTemplate(): void {
+  const envPath = path.join(WORKSPACE_ROOT, '.env');
+  if (fs.existsSync(envPath)) {
+    console.log(`A .env file already exists at ${envPath}.`);
+    console.log('Please edit it directly if you need to update your keys.');
+    return;
+  }
+  const template = [
+    '# one-agent configuration',
+    'OPENAI_API_KEY=your-api-key',
+    'OPENAI_BASE_URL=https://api.openai.com/v1',
+    'OPENAI_MODEL=gpt-3.5-turbo',
+    '# Optional: Tavily/Brave/DuckDuckGo search configuration',
+    '# SEARCH_API_URL=',
+    '# SEARCH_API_KEY=',
+  ].join('\n');
+  fs.writeFileSync(envPath, template, 'utf-8');
+  console.log(`Created ${envPath}`);
+  console.log('Please open it and set your OPENAI_API_KEY, then run one-agent again.');
+}
+
+function validateApiKey(): boolean {
+  if (process.env.OPENAI_API_KEY) {
+    return true;
+  }
+  console.error('Error: OPENAI_API_KEY is not set.');
+  console.error(`Workspace: ${WORKSPACE_ROOT}`);
+  console.error('');
+  console.error('To fix this, either:');
+  console.error(`  1. Run "one-agent --init" to create a .env template in ${WORKSPACE_ROOT}, then edit it.`);
+  console.error(`  2. Create ${path.join(WORKSPACE_ROOT, '.env')} manually with OPENAI_API_KEY=...`);
+  console.error('  3. Set OPENAI_API_KEY as an environment variable.');
+  console.error('');
+  console.error('Run "one-agent --help" for more options.');
+  return false;
+}
 
 function createAgent(
   threadId: string | undefined,
@@ -51,14 +121,24 @@ function createAgent(
   });
 }
 
-function parseArgs(): { threadId?: string; newThread: boolean; verbose: boolean } {
+function parseArgs(): {
+  threadId?: string;
+  newThread: boolean;
+  verbose: boolean;
+  help: boolean;
+  version: boolean;
+  init: boolean;
+} {
   const args = process.argv.slice(2);
   const threadIndex = args.indexOf('--thread');
   const threadId =
     threadIndex >= 0 && args[threadIndex + 1] ? args[threadIndex + 1] : undefined;
   const newThread = args.includes('--new-thread');
   const verbose = args.includes('--verbose') || args.includes('-v');
-  return { threadId, newThread, verbose };
+  const help = args.includes('--help') || args.includes('-h');
+  const version = args.includes('--version');
+  const init = args.includes('--init');
+  return { threadId, newThread, verbose, help, version, init };
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -89,18 +169,27 @@ function printSeparator() {
   console.log('─'.repeat(60));
 }
 
-function createProgressIndicator(label = 'Thinking'): { start: () => void; stop: () => void } {
+function createProgressIndicator(label = 'Thinking'): {
+  start: () => void;
+  stop: () => void;
+  setLabel: (newLabel: string) => void;
+} {
   let interval: NodeJS.Timeout | null = null;
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let index = 0;
+  let currentLabel = label;
+
+  const render = () => {
+    process.stdout.write(`\r${frames[index]} ${currentLabel}...  `);
+  };
 
   return {
     start: () => {
       if (interval) return;
-      process.stdout.write(`${frames[0]} ${label}...`);
+      render();
       interval = setInterval(() => {
         index = (index + 1) % frames.length;
-        process.stdout.write(`\r${frames[index]} ${label}...  `);
+        render();
       }, 120);
     },
     stop: () => {
@@ -108,24 +197,40 @@ function createProgressIndicator(label = 'Thinking'): { start: () => void; stop:
         clearInterval(interval);
         interval = null;
       }
-      process.stdout.write('\r' + ' '.repeat(20) + '\r');
+      process.stdout.write('\r' + ' '.repeat(40) + '\r');
+    },
+    setLabel: (newLabel: string) => {
+      currentLabel = newLabel;
     },
   };
 }
 
 async function main() {
-  const { threadId: argThreadId, newThread, verbose } = parseArgs();
+  const { threadId: argThreadId, newThread, verbose, help, version, init } = parseArgs();
 
-  if (!process.env.OPENAI_API_KEY) {
-    console.error('Error: OPENAI_API_KEY is not set.');
-    console.error(`Current workspace: ${WORKSPACE_ROOT}`);
-    console.error('Make sure a .env file exists in the workspace with OPENAI_API_KEY and OPENAI_BASE_URL.');
-    console.error('You can also set ONE_AGENT_WORKSPACE to point to a directory containing .env.');
+  if (help) {
+    printHelp();
+    return;
+  }
+
+  if (version) {
+    printVersion();
+    return;
+  }
+
+  if (init) {
+    createEnvTemplate();
+    return;
+  }
+
+  if (!validateApiKey()) {
     process.exit(1);
   }
 
   if (!process.env.OPENAI_BASE_URL) {
-    console.warn('Warning: OPENAI_BASE_URL is not set. The client will use the default OpenAI endpoint.');
+    console.warn(
+      'Warning: OPENAI_BASE_URL is not set. The client will use the default OpenAI endpoint.'
+    );
   }
 
   const db = getSharedConnection();
@@ -157,9 +262,33 @@ async function main() {
   let agent = createAgent(threadId, memoryStore, memoryExtractor);
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
-  console.log('Type a message or a command. Commands: /history /context /reasoning /threads /runs /traces /thread <id> /exit');
-  console.log('Use --verbose to show thoughts, plans, and reflections.');
+  console.log();
+  console.log('Commands:');
+  console.log('  /history          your messages and assistant replies');
+  console.log('  /context          current conversation context summary');
+  console.log('  /reasoning        reasoning trace from the last turn');
+  console.log('  /threads          list all threads');
+  console.log('  /runs             list runs in this thread');
+  console.log('  /traces           list traces in this thread');
+  console.log('  /traces <run-id>  traces for a specific run');
+  console.log('  /thread <id>      switch to another thread');
+  console.log('  /exit             quit');
+  console.log('  Use --verbose to show thoughts, plans, and reflections.');
   console.log(`Thread: ${threadId}`);
+  console.log();
+
+  let abortController: AbortController | null = null;
+  let sigintCount = 0;
+  process.on('SIGINT', () => {
+    sigintCount++;
+    if (abortController && sigintCount === 1) {
+      console.log('\nInterrupting current turn... press Ctrl-C again to force quit.');
+      abortController.abort();
+      abortController = null;
+    } else {
+      process.exit(0);
+    }
+  });
 
   while (true) {
     const input = await rl.question('> ');
@@ -174,27 +303,62 @@ async function main() {
     }
 
     if (trimmed === '/history') {
-      for (const message of agent.getHistory()) {
-        console.log(`[${message.role}] ${message.content.slice(0, 200)}`);
+      const history = agent.getUserFacingHistory();
+      if (history.length === 0) {
+        console.log('No messages yet.');
+      } else {
+        for (const message of history) {
+          const prefix = message.role === 'user' ? 'You' : 'Assistant';
+          console.log(`${prefix}: ${message.content.slice(0, 400)}`);
+        }
       }
       continue;
     }
 
     if (trimmed === '/context') {
-      for (const message of agent.getContext()) {
-        console.log(`[${message.role}] ${message.content.slice(0, 200)}`);
+      const context = agent.getContext();
+      const nonSystem = context.filter((m) => m.role !== 'system');
+      const summary = context.find((m) => m.role === 'system' && m.content.startsWith('Earlier conversation summary:'));
+      const memory = context.find((m) => m.role === 'system' && m.content.startsWith('Relevant context from past conversations:'));
+      console.log(`Context has ${nonSystem.length} recent message(s).`);
+      if (summary) {
+        console.log(`Summary: ${summary.content.slice(0, 200)}`);
+      }
+      if (memory) {
+        console.log(`Memory: ${memory.content.slice(0, 200)}`);
+      }
+      if (nonSystem.length > 0) {
+        console.log('Recent messages:');
+        for (const message of nonSystem.slice(-4)) {
+          const prefix = message.role === 'user' ? 'You' : 'Assistant';
+          console.log(`  ${prefix}: ${message.content.slice(0, 200)}`);
+        }
       }
       continue;
     }
 
     if (trimmed === '/reasoning') {
       const chain = agent.getReasoningChain();
-      for (const step of chain.getSteps()) {
-        if (step.thought) console.log(`Thought: ${step.thought}`);
-        if (step.action) console.log(`Action: ${step.action.name}(${JSON.stringify(step.action.arguments)})`);
-        if (step.observation) console.log(`Observation: ${JSON.stringify(step.observation)}`);
-        if (step.reflection) console.log(`Reflection: ${step.reflection}`);
-        console.log('---');
+      const steps = chain.getSteps();
+      if (steps.length === 0) {
+        console.log('No reasoning trace for the current turn.');
+      } else {
+        const thoughts = steps.filter((s) => s.thought).length;
+        const actions = steps.filter((s) => s.action).length;
+        const reflections = steps.filter((s) => s.reflection).length;
+        console.log(`Reasoning trace: ${steps.length} step(s), ${thoughts} thought(s), ${actions} action(s), ${reflections} reflection(s).`);
+        for (let i = 0; i < steps.length; i++) {
+          const step = steps[i];
+          console.log(`Step ${i + 1}:`);
+          if (step.planStepId) console.log(`  planStepId: ${step.planStepId}`);
+          if (step.thought) console.log(`  thought: ${step.thought.slice(0, 120)}`);
+          if (step.action) console.log(`  action: ${step.action.name}(${JSON.stringify(step.action.arguments)})`);
+          if (step.observation) console.log(`  observation: ${JSON.stringify(step.observation).slice(0, 120)}`);
+          if (step.reflection) console.log(`  reflection: ${step.reflection.slice(0, 120)}`);
+          if (step.failureAnalysis) {
+            console.log(`  failure: ${step.failureAnalysis.category} - ${step.failureAnalysis.rootCause?.slice(0, 120)}`);
+          }
+        }
       }
       continue;
     }
@@ -238,10 +402,17 @@ async function main() {
       continue;
     }
 
+    if (trimmed === '/thread') {
+      console.log('Usage: /thread <id>');
+      console.log('Use /threads to see available thread IDs.');
+      continue;
+    }
+
     if (trimmed.startsWith('/thread ')) {
       const id = trimmed.slice('/thread '.length).trim();
       if (!id) {
         console.log('Usage: /thread <id>');
+        console.log('Use /threads to see available thread IDs.');
         continue;
       }
       const existing = threadStore.getById(id);
@@ -258,6 +429,7 @@ async function main() {
 
     if (trimmed.startsWith('/')) {
       console.log(`Unknown command. Available: ${COMMANDS.join(', ')}`);
+      console.log('Run "one-agent --help" for details.');
       continue;
     }
 
@@ -271,47 +443,79 @@ async function main() {
       console.log(`> ${trimmed}`);
       printSeparator();
 
+      sigintCount = 0;
+      abortController = new AbortController();
+
+      let stage: 'planning' | 'tool' | 'answer' = 'planning';
       let hasStreamedMessage = false;
       let hasEvents = false;
-      const progress = createProgressIndicator('Thinking');
+      const progress = createProgressIndicator('Planning');
       progress.start();
+      const startTime = Date.now();
 
       const onEvent = (event: AgentLoopEvent) => {
         if (!hasEvents) {
           hasEvents = true;
-          progress.stop();
         }
 
-        if (event.type === 'message_delta') {
-          hasStreamedMessage = true;
-          process.stdout.write(event.content);
+        if (event.type === 'plan') {
+          stage = 'tool';
+          progress.setLabel('Working');
+          if (verbose) {
+            process.stdout.write(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
+          }
         } else if (event.type === 'tool_call') {
+          stage = 'tool';
+          progress.setLabel('Working');
           process.stdout.write(`\n[tool_call] ${event.toolCall.name}\n`);
         } else if (event.type === 'tool_result') {
           const summary = formatToolResultSummary(event.toolResult);
           process.stdout.write(`[tool_result] ${summary}\n`);
         } else if (event.type === 'thought' && verbose) {
           process.stdout.write(`\n[thought] ${event.content.slice(0, 120)}\n`);
-        } else if (event.type === 'reflection' && verbose) {
-          process.stdout.write(`\n[reflection] ${event.content.slice(0, 120)}\n`);
-        } else if (event.type === 'plan' && verbose) {
-          process.stdout.write(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
+        } else if (event.type === 'reflection') {
+          stage = 'planning';
+          progress.setLabel('Re-planning');
+          if (verbose) {
+            process.stdout.write(`\n[reflection] ${event.content.slice(0, 120)}\n`);
+          }
+        } else if (event.type === 'message_delta') {
+          if (stage !== 'answer') {
+            stage = 'answer';
+            progress.setLabel('Answering');
+          }
+          hasStreamedMessage = true;
+          progress.stop();
+          process.stdout.write(event.content);
+        } else if (event.type === 'message') {
+          progress.stop();
+          if (!hasStreamedMessage) {
+            console.log(`\n${event.content}`);
+          }
         }
       };
 
       agent.on('event', onEvent);
-      const { reply } = await agent.chat(trimmed);
+      const { reply } = await agent.chat(trimmed, abortController.signal);
       agent.off('event', onEvent);
       progress.stop();
+      abortController = null;
 
+      const elapsed = Date.now() - startTime;
       process.stdout.write('\n');
       if (reply && !hasStreamedMessage) {
         console.log(`\n${reply}`);
       }
+      console.log(`\n(${elapsed}ms)`);
 
       printSeparator();
     } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : String(error));
+      abortController = null;
+      if (error instanceof Error && error.message === 'AgentLoop was cancelled') {
+        console.log('\nTurn cancelled.');
+      } else {
+        console.error('Error:', error instanceof Error ? error.message : String(error));
+      }
     }
   }
 }

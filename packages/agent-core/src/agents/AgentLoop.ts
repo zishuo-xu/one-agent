@@ -73,7 +73,7 @@ export class AgentLoop extends EventEmitter {
   private readonly traceEventStore?: TraceEventStore;
   private readonly memoryStore?: MemoryStore;
   private readonly memoryExtractor?: MemoryExtractor;
-  private readonly signal?: AbortSignal;
+  private signal?: AbortSignal;
   private readonly taskId?: string;
   private currentRunId?: string;
   private currentMemoryText?: string;
@@ -126,7 +126,8 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
-  async chat(message: string): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string }> {
+  async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string }> {
+    this.signal = signal ?? this.signal;
     this.checkSignal();
     this.contextManager.addMessage({ role: 'user', content: message });
     this.events = [];
@@ -183,6 +184,16 @@ export class AgentLoop extends EventEmitter {
     return this.contextManager.getHistory();
   }
 
+  getUserFacingHistory(): Message[] {
+    return this.contextManager
+      .getHistory()
+      .filter(
+        (message) =>
+          !message.internal &&
+          (message.role === 'user' || message.role === 'assistant')
+      );
+  }
+
   getContext(): Message[] {
     return this.contextManager.getContextForDisplay();
   }
@@ -214,6 +225,7 @@ export class AgentLoop extends EventEmitter {
           role: 'assistant',
           content: assistantMessage.content ?? '',
           tool_calls: assistantMessage.tool_calls,
+          internal: true,
         });
 
         for (const call of toolCalls) {
@@ -229,6 +241,7 @@ export class AgentLoop extends EventEmitter {
               role: 'tool',
               content: JSON.stringify(result),
               tool_call_id: call.id,
+              internal: true,
             });
             this.persistToolCall(runId, call, result);
             continue;
@@ -240,6 +253,7 @@ export class AgentLoop extends EventEmitter {
             role: 'tool',
             content: JSON.stringify(result),
             tool_call_id: call.id,
+            internal: true,
           });
           this.persistToolCall(runId, call, result);
         }
@@ -375,6 +389,7 @@ export class AgentLoop extends EventEmitter {
     this.contextManager.addMessage({
       role: 'user',
       content: this.buildStepPrompt(step, plan, allowedToolNames, constraint.strict),
+      internal: true,
     });
 
     this.checkSignal();
@@ -385,7 +400,7 @@ export class AgentLoop extends EventEmitter {
     if (thought) {
       this.reasoningChain.addThought(thought);
       this.emitEvent({ type: 'thought', content: thought });
-      this.contextManager.addMessage({ role: 'assistant', content: thought });
+      this.contextManager.addMessage({ role: 'assistant', content: thought, internal: true });
     }
 
     if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
@@ -400,6 +415,7 @@ export class AgentLoop extends EventEmitter {
         role: 'assistant',
         content: thought,
         tool_calls: assistantMessage.tool_calls,
+        internal: true,
       });
 
       for (const call of toolCalls) {
@@ -439,6 +455,7 @@ export class AgentLoop extends EventEmitter {
             role: 'tool',
             content: JSON.stringify(result),
             tool_call_id: call.id,
+            internal: true,
           });
           this.persistToolCall(runId, call, result);
           continue;
@@ -526,6 +543,7 @@ export class AgentLoop extends EventEmitter {
     this.contextManager.addMessage({
       role: 'user',
       content: 'Based on the above execution, provide a final answer to the user.',
+      internal: true,
     });
 
     this.checkSignal();
@@ -610,7 +628,7 @@ export class AgentLoop extends EventEmitter {
             messages: messages as never,
             tools,
           },
-          { timeout: this.timeoutMs }
+          { timeout: this.timeoutMs, signal: this.signal }
         );
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -640,7 +658,7 @@ export class AgentLoop extends EventEmitter {
             stream: true,
             tools,
           },
-          { timeout: this.timeoutMs }
+          { timeout: this.timeoutMs, signal: this.signal }
         );
 
         let content = '';
