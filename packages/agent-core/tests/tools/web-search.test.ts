@@ -85,4 +85,45 @@ describe('web_search tool', () => {
     expect(result.results).toHaveLength(0);
     expect(result.summary).toContain('No useful results');
   });
+
+  it('parses Brave Search API response', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '',
+      json: async () => ({
+        web: {
+          results: [
+            { title: 'Node.js', url: 'https://nodejs.org/', description: 'JavaScript runtime' },
+            { title: 'Node.js LTS', url: 'https://nodejs.org/en/about/', description: 'Long Term Support' },
+          ],
+        },
+      }),
+    });
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    process.env.SEARCH_API_URL = 'https://api.search.brave.io/api/web/search?q={query}&count={limit}';
+    process.env.SEARCH_API_KEY = 'brave-key';
+
+    try {
+      const tool = createWebSearchTool(new Sandbox('/tmp'));
+      const result = await tool.execute({ query: 'Node.js LTS', limit: 2 });
+
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0].url).toBe('https://nodejs.org/');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('https://api.search.brave.io/api/web/search'),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-Subscription-Token': 'brave-key',
+          }),
+        })
+      );
+    } finally {
+      delete process.env.SEARCH_API_URL;
+      delete process.env.SEARCH_API_KEY;
+    }
+  });
 });

@@ -59,8 +59,13 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
     Accept: 'application/json',
     'User-Agent': 'one-agent/1.0',
   };
+
   if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
+    if (isBraveUrl(url)) {
+      headers['X-Subscription-Token'] = apiKey;
+    } else {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
   }
 
   const response = await fetch(url, { headers });
@@ -69,7 +74,35 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
   }
 
   const data = await response.json() as unknown;
+  if (isBraveUrl(url)) {
+    return parseBraveResults(data, limit);
+  }
   return normalizeSearchResults(data, limit);
+}
+
+function isBraveUrl(url: string): boolean {
+  return url.includes('api.search.brave.io');
+}
+
+function parseBraveResults(data: unknown, limit: number): SearchResult[] | null {
+  const web = (data as { web?: { results?: unknown } }).web;
+  if (!web || !Array.isArray(web.results)) {
+    return null;
+  }
+
+  const results: SearchResult[] = [];
+  for (const item of web.results as Array<{ title?: unknown; url?: unknown; description?: unknown }>) {
+    if (typeof item !== 'object' || item === null) continue;
+    const title = String(item.title ?? '');
+    const snippet = String(item.description ?? '');
+    const url = String(item.url ?? '');
+    if (title && url) {
+      results.push({ title, snippet, url });
+    }
+    if (results.length >= limit) break;
+  }
+
+  return results.length > 0 ? results : null;
 }
 
 async function searchDuckDuckGoHtml(query: string, limit: number): Promise<SearchResult[] | null> {
