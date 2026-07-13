@@ -7,9 +7,11 @@
     "build:core": "pnpm --filter agent-core build",
     "dev:api": "pnpm build:core && pnpm --filter api dev",
     "dev:cli": "pnpm build:core && pnpm --filter cli dev",
-    "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build",
-    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test && pnpm --filter cli test",
-    "test:watch": "pnpm --filter agent-core test:watch"
+    "dev:trace-web": "pnpm build:core && pnpm --filter trace-web dev",
+    "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build && pnpm --filter trace-web build",
+    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test && pnpm --filter cli test && pnpm --filter trace-web test",
+    "test:watch": "pnpm --filter agent-core test:watch",
+    "eval": "pnpm build:core && pnpm --filter agent-core eval"
   },
   "devDependencies": {
     "typescript": "^5.4.5"
