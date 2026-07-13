@@ -30,3 +30,5 @@ export function createReadFileTool(sandbox: Sandbox): ToolDefinition {
     },
   };
 }
+
+export default createReadFileTool;

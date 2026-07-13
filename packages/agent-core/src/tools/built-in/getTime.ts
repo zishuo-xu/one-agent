@@ -14,3 +14,5 @@ export function createGetTimeTool(): ToolDefinition {
     },
   };
 }
+
+export default createGetTimeTool;

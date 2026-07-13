@@ -33,3 +33,5 @@ export function createWriteFileTool(sandbox: Sandbox): ToolDefinition {
     },
   };
 }
+
+export default createWriteFileTool;

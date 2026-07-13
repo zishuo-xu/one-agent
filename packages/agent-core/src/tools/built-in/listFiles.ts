@@ -32,3 +32,5 @@ export function createListFilesTool(sandbox: Sandbox): ToolDefinition {
     },
   };
 }
+
+export default createListFilesTool;
