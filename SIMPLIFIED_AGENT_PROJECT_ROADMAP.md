@@ -35,7 +35,7 @@
 
 结构：`AgentLoop` / `ToolRegistry` / `ToolExecutor` / `Sandbox`。
 
-## 阶段 3：上下文与记忆管理
+## 阶段 3：上下文与记忆管理 ✅
 
 解决"对话变长后上下文爆掉"的问题。
 
@@ -52,7 +52,7 @@
 
 产出：`ContextManager`，AgentLoop 接入后支持长对话不崩。
 
-## 阶段 4：规划与自我纠错
+## 阶段 4：规划与自我纠错 ✅
 
 让 Agent 从"被动调用工具"升级为"先规划再执行，失败能自纠"。
 
@@ -69,7 +69,7 @@
 
 产出：AgentLoop 升级支持 planning + reflection，记录推理链。
 
-## 阶段 5：SQLite 持久化
+## 阶段 5：SQLite 持久化 ✅
 
 把内存里的对话和运行记录落盘。
 
@@ -81,7 +81,7 @@ threads / messages / tool_calls / agent_runs
 
 任务状态：`pending`、`running`、`completed`、`failed`、`cancelled`。
 
-## 阶段 6：异步任务与流式输出
+## 阶段 6：异步任务与流式输出 ✅
 
 ```text
 POST /tasks -> 创建任务 -> 放入队列 -> 立即返回 taskId -> 后台执行 + 流式推送
@@ -96,12 +96,14 @@ TaskQueue / QueueWorker / TaskStatusStore
 流式事件：
 
 ```text
-task.started -> tool.started -> tool.completed -> message.delta -> task.completed
+task.created -> task.started -> plan -> thought -> tool_call -> tool_result -> message.delta -> task.completed
 ```
+
+已实现 SSE 任务事件流与 CLI 实时事件输出。
 
 学习并发限制、取消、timeout、重试、幂等，以及 SSE/WebSocket 流式文本与断线重连。
 
-## 阶段 7：Trace 与 Evaluation
+## 阶段 7：Trace 与 Evaluation ✅
 
 记录：
 
@@ -110,11 +112,44 @@ runId / taskId / model / startTime / endTime
 toolCalls / status / error / 推理链
 ```
 
+已新增 `trace_events` 表保存完整事件流，并可用 `EvalRunner` 跑确定性回归测试。
+
 准备 20 条固定测试任务，检查：任务是否完成、是否调用正确工具、参数是否有效、是否超时、规划是否合理。
 
-## 阶段 8：Docker 与部署
+## 阶段 8：全局 CLI 命令 ✅
 
-容器化 Agent + API，环境隔离，可复现部署。
+把 CLI 打包成可全局安装的命令行工具：
+
+```bash
+npm install -g @one-agent/cli
+one-agent
+```
+
+已支持工作目录解析、`.env` 从工作目录加载、默认 `~/.one-agent`。
+
+## 阶段 9：任务持久化 ✅
+
+把 Phase 6 的内存任务队列落盘，让 API 重启后自动恢复未完成任务。
+
+```text
+tasks 表保存 task 状态、事件流
+API 启动时：pending / running 任务 restore 到 TaskQueue
+running 任务重置为 pending 后重新执行
+```
+
+产出：`SqliteTaskStore`、`TaskQueue` 支持注入 store、`GET /api/tasks`、API 启动恢复。
+
+## 阶段 10：长期记忆检索 ✅
+
+让 Agent 自动提取并跨 thread 召回关键事实。
+
+```text
+memories 表保存全局事实
+AgentLoop 每轮结束后自动提取
+新提问按关键词召回并注入上下文
+```
+
+产出：`MemoryStore`、`MemoryExtractor`、跨 thread 记忆共享、记忆管理 API。
 
 ## 最终架构
 
@@ -130,9 +165,11 @@ Fastify API
    ├─ Tool Registry
    ├─ Context Manager（记忆 / 摘要）
    ├─ Trace Store
+   ├─ Task Store
+   ├─ Memory Store
    └─ Evaluation Runner
           ↓
-SQLite：threads / messages / tool_calls / agent_runs
+SQLite：threads / messages / tool_calls / agent_runs / tasks / trace_events / memories
 ```
 
 ## 推荐开发顺序
@@ -140,13 +177,15 @@ SQLite：threads / messages / tool_calls / agent_runs
 ```text
 1. 单 Agent ✅
 2. Tool Calling ✅
-3. 上下文与记忆管理
-4. 规划与自我纠错
-5. SQLite 持久化
-6. 异步任务与流式输出
-7. Trace
-8. Evaluation
-9. Docker 与部署
+3. 上下文与记忆管理 ✅
+4. 规划与自我纠错 ✅
+5. SQLite 持久化 ✅
+6. 异步任务与流式输出 ✅
+7. Trace ✅
+8. Evaluation ✅
+9. 全局 CLI 命令 ✅
+10. 任务持久化 ✅
+11. 长期记忆检索 ✅
 ```
 
 每完成一个阶段提交一次 Git：
@@ -158,6 +197,9 @@ feat: persist threads and runs to sqlite
 feat: add async task queue and streaming
 feat: add run tracing
 feat: add agent evaluation
+feat: add global CLI command
+feat: persist task queue to sqlite for restart recovery
+feat: add long-term memory retrieval with automatic fact extraction
 ```
 
 ## 简历表达
