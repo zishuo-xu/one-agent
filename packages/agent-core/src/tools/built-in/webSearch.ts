@@ -13,7 +13,8 @@ export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
     name: 'web_search',
     description:
       'Search the web for a query and return a short summary with related links. ' +
-      'Useful for finding current information that is not in the workspace.',
+      'Useful for finding current information that is not in the workspace. ' +
+      'If the returned results are empty, do not invent information.',
     parameters: z.object({
       query: z.string().describe('The search query.'),
       limit: z.number().optional().describe('Maximum number of related results to return (default 5).'),

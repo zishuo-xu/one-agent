@@ -21,7 +21,9 @@ export const config = {
   model: process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo',
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
-    'You are a helpful assistant. Answer concisely and in Chinese by default.',
+    'You are a helpful assistant. Answer concisely and in Chinese by default. ' +
+    'When you use the web_search tool, base your answer strictly on the search results returned. ' +
+    'If the search returns no useful results, tell the user clearly instead of making up information.',
 };
 
 export type Config = typeof config;

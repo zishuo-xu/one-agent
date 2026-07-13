@@ -66,6 +66,24 @@ function truncateTitle(text: string, maxLength = 50): string {
   return `${clean.slice(0, maxLength)}...`;
 }
 
+function formatToolResultSummary(toolResult: { success: boolean; data?: unknown; error?: string }): string {
+  if (!toolResult.success) {
+    return toolResult.error ?? 'failed';
+  }
+
+  const data = toolResult.data as Record<string, unknown> | undefined;
+  if (!data || typeof data !== 'object') {
+    return 'ok';
+  }
+
+  if (typeof data.results === 'object' && Array.isArray(data.results)) {
+    const count = data.results.length;
+    return count > 0 ? `found ${count} result(s)` : 'no results';
+  }
+
+  return 'ok';
+}
+
 async function main() {
   const { threadId: argThreadId, newThread } = parseArgs();
 
@@ -219,14 +237,17 @@ async function main() {
         threadStore.updateTitle(threadId, title);
       }
 
+      let hasStreamedMessage = false;
+
       const onEvent = (event: AgentLoopEvent) => {
         if (event.type === 'message_delta') {
+          hasStreamedMessage = true;
           process.stdout.write(event.content);
         } else if (event.type === 'tool_call') {
           process.stdout.write(`\n[tool_call] ${event.toolCall.name}\n`);
         } else if (event.type === 'tool_result') {
-          const status = event.toolResult.success ? 'ok' : 'failed';
-          process.stdout.write(`[tool_result] ${status}\n`);
+          const summary = formatToolResultSummary(event.toolResult);
+          process.stdout.write(`[tool_result] ${summary}\n`);
         } else if (event.type === 'thought') {
           process.stdout.write(`\n[thought] ${event.content.slice(0, 120)}\n`);
         } else if (event.type === 'reflection') {
@@ -240,7 +261,7 @@ async function main() {
       const { reply } = await agent.chat(trimmed);
       agent.off('event', onEvent);
       process.stdout.write('\n');
-      if (reply) {
+      if (reply && !hasStreamedMessage) {
         console.log(`\nAgent: ${reply}`);
       }
     } catch (error) {
