@@ -48,10 +48,11 @@
 2. **工具注册自动扫描**  
    目前需要手动在 `built-in/index.ts` 注册。可改为自动扫描 `tools/built-in/` 目录下的文件。
 
-3. **文件工具增强**  
+3. **文件工具增强** ✅  
    - `append_file`：追加内容
    - `delete_file`：删除文件（需要用户确认）
    - `search_files`：按文件名或内容搜索 workspace
+   - `web_search`：调用 DuckDuckGo Instant Answer API 搜索网络，无需 API key，适合获取当前不在 workspace 中的信息
 
 4. **工具返回值规范化**  
    当前工具返回任意对象，`ToolExecutor` 包装为 `{ success, data }`。可统一所有工具返回标准结构。
@@ -207,6 +208,7 @@
 | 🟡 中 | 任务超时（✅ 已实现） | 当前依赖外部取消，应有默认超时保护 |
 | 🟡 中 | 重试与死信队列（✅ 已实现） | 模型限流、网络抖动应可自动恢复 |
 | 🟡 中 | 长期记忆检索（✅ 已实现） | Phase 7 Evaluation 需要超越对话历史的知识 |
+| 🟡 中 | 文件工具 / 网络搜索扩展（✅ 已实现） | 通过 `web_search` 获取 workspace 外的实时信息 |
 | 🟡 中 | Planner JSON 输出稳定性 | 影响 planning 体验，但已有 fallback |
 | 🟡 中 | 层级计划（✅ 已实现） | 复杂任务需要子目标拆解 |
 | 🟢 低 | SSE 断线重连 | 提升体验，但非核心能力 |

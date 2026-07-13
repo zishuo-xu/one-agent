@@ -15,7 +15,7 @@ describe('createBuiltInTools', () => {
     const tools = createBuiltInTools(sandbox);
 
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_time', 'list_files', 'read_file', 'write_file']);
+    expect(names).toEqual(['get_time', 'list_files', 'read_file', 'web_search', 'write_file']);
   });
 
   it('returns valid ToolDefinition objects', () => {
