@@ -68,6 +68,19 @@ function truncateTitle(text: string, maxLength = 50): string {
 
 async function main() {
   const { threadId: argThreadId, newThread } = parseArgs();
+
+  if (!process.env.OPENAI_API_KEY) {
+    console.error('Error: OPENAI_API_KEY is not set.');
+    console.error(`Current workspace: ${WORKSPACE_ROOT}`);
+    console.error('Make sure a .env file exists in the workspace with OPENAI_API_KEY and OPENAI_BASE_URL.');
+    console.error('You can also set ONE_AGENT_WORKSPACE to point to a directory containing .env.');
+    process.exit(1);
+  }
+
+  if (!process.env.OPENAI_BASE_URL) {
+    console.warn('Warning: OPENAI_BASE_URL is not set. The client will use the default OpenAI endpoint.');
+  }
+
   const db = getSharedConnection();
   const threadStore = new ThreadStore(db);
   const runStore = new RunStore(db);
