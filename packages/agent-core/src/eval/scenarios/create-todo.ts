@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const createTodoTask: EvalTask = {
   id: 'create-todo',
@@ -10,4 +11,10 @@ export const createTodoTask: EvalTask = {
   expectedFiles: [{ path: 'todo.md', contains: '任务' }],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([
+      { id: 'call_1', name: 'write_file', arguments: { path: 'todo.md', content: '1. 任务 A\n2. 任务 B\n3. 任务 C' } },
+    ]),
+    createTextResponse('Created todo.md with 3 tasks.'),
+  ],
 };

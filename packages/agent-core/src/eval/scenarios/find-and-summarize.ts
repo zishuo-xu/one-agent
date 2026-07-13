@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const findAndSummarizeTask: EvalTask = {
   id: 'find-and-summarize',
@@ -21,4 +22,8 @@ main();
   finalAnswerContains: ['AgentLoop', 'agent', '聊天', 'main', '回复', 'console'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'src/index.ts' } }]),
+    createTextResponse('This file initializes an AgentLoop and chats with it.'),
+  ],
 };

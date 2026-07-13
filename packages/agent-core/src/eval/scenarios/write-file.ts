@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const writeFileTask: EvalTask = {
   id: 'write-file',
@@ -9,4 +10,10 @@ export const writeFileTask: EvalTask = {
   finalAnswerContains: ['hello eval'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([
+      { id: 'call_1', name: 'write_file', arguments: { path: 'output.txt', content: 'hello eval' } },
+    ]),
+    createTextResponse('Created output.txt with "hello eval".'),
+  ],
 };

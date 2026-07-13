@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const summarizeLongFileTask: EvalTask = {
   id: 'summarize-long-file',
@@ -27,4 +28,8 @@ export const summarizeLongFileTask: EvalTask = {
   finalAnswerContains: ['Agent', '运行时', '核心', 'persistence', '评估', '能力'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'long-report.txt' } }]),
+    createTextResponse('The core idea is to build a single-agent runtime and evaluate its capabilities.'),
+  ],
 };

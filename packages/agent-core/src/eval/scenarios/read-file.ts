@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const readFileTask: EvalTask = {
   id: 'read-file',
@@ -11,4 +12,8 @@ export const readFileTask: EvalTask = {
   requiredTools: [{ name: 'read_file', arguments: { path: 'notes.txt' } }],
   finalAnswerContains: ['trace', 'evaluation', 'tests'],
   enablePlanning: false,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'notes.txt' } }]),
+    createTextResponse('The notes mention trace, evaluation, and tests.'),
+  ],
 };

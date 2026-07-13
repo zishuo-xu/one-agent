@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const projectOnboardingTask: EvalTask = {
   id: 'project-onboarding',
@@ -19,4 +20,9 @@ export const projectOnboardingTask: EvalTask = {
   finalAnswerContains: ['one-agent', 'Agent', '项目', 'runtime'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: {} }]),
+    createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'README.md' } }]),
+    createTextResponse('This is one-agent, a simplified agent runtime project.'),
+  ],
 };

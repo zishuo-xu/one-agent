@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const emptyWorkspaceQueryTask: EvalTask = {
   id: 'empty-workspace-query',
@@ -9,4 +10,8 @@ export const emptyWorkspaceQueryTask: EvalTask = {
   finalAnswerContains: ['没有', '空', 'no files', 'empty', '无文件'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: {} }]),
+    createTextResponse('The workspace is empty. There are no files here.'),
+  ],
 };

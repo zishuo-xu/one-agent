@@ -74,6 +74,8 @@
 
 **做法**：
 - `EvalRunnerOptions` 增加 `mode?: 'mock' | 'real'`。
+- `EvalTask` 增加 `mockResponses?: MockChatCompletionResponse[]`，在 mock 模式下按顺序回放预设模型响应。
+- `EvalRunner` 在 mock 模式下临时替换 `config.openai.chat.completions.create`，使用任务预设的 `mockResponses` 驱动 AgentLoop 执行，无需真实 API key。
 - `EvalResult` 增加指标：
   - `tokenUsage`：预留，待后续接入 token 统计
   - `planningMetrics`：`planCount`、`replanCount`、`retryCount`、`planStepCount`
@@ -83,6 +85,7 @@
 - 新增场景 `real-model-planning`：
   - 使用 `requiredTools` 而不是 `expectedTools`（更容忍真实模型的非确定性）。
   - 检查最终回答是否包含关键信息。
+- 所有内置场景都补充了 `mockResponses`，确保 `pnpm eval`（mock 模式）可直接运行并全部通过。
 - CLI `apps/cli/src/eval.ts` 支持 `--real` 参数，仅运行真实模型场景。
 
 **文件**：
@@ -91,6 +94,7 @@
 - `packages/agent-core/src/eval/assertions.ts`
 - `packages/agent-core/src/eval/scenarios/real-model-planning.ts`
 - `packages/agent-core/src/eval/scenarios/index.ts`
+- `packages/agent-core/src/eval/scenarios/*.ts`（所有内置场景补充 `mockResponses`）
 - `packages/agent-core/src/index.ts`（导出 `realModelPlanningTask`）
 - `apps/cli/src/eval.ts`
 
@@ -112,10 +116,11 @@
 
 - `pnpm build` 通过
 - `pnpm test` 全部通过：
-  - `agent-core`: 30 个测试文件，151 个测试
+  - `agent-core`: 31 个测试文件，156 个测试
   - `api`: 4 个测试文件，27 个测试
   - `cli`: 3 个测试文件，12 个测试
   - `trace-web`: 1 个测试文件，7 个测试
+- `pnpm --filter cli eval`（mock 模式）16 个任务全部通过。
 
 ---
 

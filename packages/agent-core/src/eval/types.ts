@@ -1,6 +1,19 @@
 import { AgentLoopEvent } from '../agents/AgentLoop.js';
 import { ToolCall } from '../tools/types.js';
 
+export interface MockChatCompletionResponse {
+  choices: Array<{
+    message: {
+      content?: string;
+      tool_calls?: Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
+}
+
 export interface EvalToolExpectation {
   name: string;
   arguments?: Record<string, unknown>;
@@ -26,6 +39,8 @@ export interface EvalTask {
   finalAnswerContains?: string[];
   /** Files that must exist after the task runs, optionally checked for content substring. */
   expectedFiles?: EvalFileExpectation[];
+  /** Pre-defined model responses for mock evaluation mode. Required when mode is 'mock'. */
+  mockResponses?: MockChatCompletionResponse[];
   enablePlanning?: boolean;
   timeoutMs?: number;
 }

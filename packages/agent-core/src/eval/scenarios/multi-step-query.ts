@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const multiStepQueryTask: EvalTask = {
   id: 'multi-step-query',
@@ -13,4 +14,9 @@ export const multiStepQueryTask: EvalTask = {
   finalAnswerContains: ['Meeting', 'trace', 'evaluation', 'notes'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: {} }]),
+    createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'notes.txt' } }]),
+    createTextResponse('The first txt file says: Meeting: discuss trace and evaluation.'),
+  ],
 };

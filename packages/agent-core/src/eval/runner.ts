@@ -20,6 +20,8 @@ import {
   extractToolCalls,
 } from './assertions.js';
 import { Plan } from '../planning/types.js';
+import { config } from '../config.js';
+import type { MockChatCompletionResponse } from './types.js';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -38,6 +40,7 @@ export class EvalRunner {
       const start = Date.now();
       const errors: string[] = [];
       const events: AgentLoopEvent[] = [];
+      let reply = '';
 
       const sandbox = new Sandbox(options.workspaceRoot);
 
@@ -56,6 +59,19 @@ export class EvalRunner {
       const tools = new ToolRegistry();
       tools.registerMany(createBuiltInTools(sandbox));
 
+      let originalCreate: typeof config.openai.chat.completions.create | undefined;
+      if (options.mode === 'mock') {
+        if (!task.mockResponses || task.mockResponses.length === 0) {
+          throw new Error(
+            `Task ${task.id} is missing mockResponses required for mock evaluation mode.`
+          );
+        }
+        originalCreate = config.openai.chat.completions.create;
+        config.openai.chat.completions.create = buildMockCreate(
+          task.mockResponses
+        ) as unknown as typeof config.openai.chat.completions.create;
+      }
+
       const agent = new AgentLoop({
         tools,
         enablePlanning: task.enablePlanning ?? options.enablePlanning ?? false,
@@ -65,7 +81,6 @@ export class EvalRunner {
         events.push(event);
       });
 
-      let reply = '';
       try {
         const timeoutMs = task.timeoutMs ?? options.defaultTimeoutMs ?? 60000;
         const run = await withTimeout(
@@ -76,6 +91,12 @@ export class EvalRunner {
         reply = run.reply;
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
+      } finally {
+        // Always restore the real model client so subsequent tasks or tests are not affected.
+        if (originalCreate) {
+          config.openai.chat.completions.create = originalCreate;
+          originalCreate = undefined;
+        }
       }
 
       const toolCalls = extractToolCalls(events);
@@ -171,6 +192,18 @@ export class EvalRunner {
       results,
     };
   }
+}
+
+function buildMockCreate(responses: MockChatCompletionResponse[]) {
+  let index = 0;
+  return async function mockCreate(_params: unknown, _options?: unknown) {
+    if (index >= responses.length) {
+      throw new Error(
+        `Mock model exhausted at response index ${index}; add more mockResponses to the eval task.`
+      );
+    }
+    return responses[index++] as unknown;
+  };
 }
 
 function countPlanSteps(plan: Plan): number {

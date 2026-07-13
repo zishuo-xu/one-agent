@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const listThenReadTask: EvalTask = {
   id: 'list-then-read',
@@ -14,4 +15,9 @@ export const listThenReadTask: EvalTask = {
   ],
   finalAnswerContains: ['revenue', '12%'],
   enablePlanning: false,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: { path: '' } }]),
+    createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'report.txt' } }]),
+    createTextResponse('Q3 revenue increased by 12%.'),
+  ],
 };

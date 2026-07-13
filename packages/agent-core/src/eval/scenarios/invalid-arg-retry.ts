@@ -1,4 +1,5 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
 
 export const invalidArgRetryTask: EvalTask = {
   id: 'invalid-arg-retry',
@@ -12,4 +13,9 @@ export const invalidArgRetryTask: EvalTask = {
   finalAnswerContains: ['milk', '牛奶'],
   enablePlanning: false,
   timeoutMs: 30000,
+  mockResponses: [
+    createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'wrong.txt' } }]),
+    createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'notes.txt' } }]),
+    createTextResponse('The reminder is to buy milk.'),
+  ],
 };

@@ -1,4 +1,30 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
+
+const planResponse = {
+  choices: [
+    {
+      message: {
+        content: JSON.stringify({
+          reasoning: 'Read notes.txt to answer.',
+          steps: [
+            { id: '1', description: 'Read notes.txt', toolName: 'read_file', expectedOutcome: 'Content retrieved' },
+          ],
+        }),
+      },
+    },
+  ],
+};
+
+const judgeResponse = {
+  choices: [
+    {
+      message: {
+        content: JSON.stringify({ complete: true, reasoning: 'Done', nextAction: 'finalize' }),
+      },
+    },
+  ],
+};
 
 export const realModelPlanningTask: EvalTask = {
   id: 'real-model-planning',
@@ -12,4 +38,10 @@ export const realModelPlanningTask: EvalTask = {
   finalAnswerContains: ['artificial intelligence', 'software engineering', 'topic'],
   enablePlanning: true,
   timeoutMs: 120000,
+  mockResponses: [
+    planResponse,
+    createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'notes.txt' } }]),
+    judgeResponse,
+    createTextResponse('The main topic is artificial intelligence and software engineering.'),
+  ],
 };

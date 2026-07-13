@@ -166,7 +166,7 @@
    目前只有 pass/fail。可增加：token 消耗、运行步数、重试次数、耗时、规划质量评分。
 
 5. **真实模型评估** ✅  
-   已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式继续用确定性 fixtures，real 模式直接调用真实模型；`EvalResult` 增加 `planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行 `real-model-planning` 场景。
+   已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式通过 `EvalTask.mockResponses` 回放预设响应，无需真实 API key；real 模式直接调用真实模型；`EvalResult` 增加 `planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行 `real-model-planning` 场景。
 
 6. **Trace 与 Evaluation 联动**  
    评估失败时自动把相关 trace 保存到失败案例集，用于后续调试或 prompt 迭代。

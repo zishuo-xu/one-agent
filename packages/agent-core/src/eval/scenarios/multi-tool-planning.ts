@@ -1,4 +1,37 @@
 import { EvalTask } from '../types.js';
+import { createToolCallResponse, createTextResponse } from '../fixtures.js';
+
+const planResponse = {
+  choices: [
+    {
+      message: {
+        content: JSON.stringify({
+          reasoning: 'List files then read the first txt.',
+          steps: [
+            { id: '1', description: 'List txt files', toolName: 'list_files', expectedOutcome: 'File list' },
+            { id: '2', description: 'Read first txt file', toolName: 'read_file', expectedOutcome: 'Content retrieved' },
+          ],
+        }),
+      },
+    },
+  ],
+};
+
+const continueJudge = {
+  choices: [{
+    message: {
+      content: JSON.stringify({ complete: false, reasoning: 'Need to read file.', nextAction: 'continue' }),
+    },
+  }],
+};
+
+const finalizeJudge = {
+  choices: [{
+    message: {
+      content: JSON.stringify({ complete: true, reasoning: 'Done.', nextAction: 'finalize' }),
+    },
+  }],
+};
 
 export const multiToolPlanningTask: EvalTask = {
   id: 'multi-tool-planning',
@@ -12,4 +45,12 @@ export const multiToolPlanningTask: EvalTask = {
   finalAnswerContains: ['evaluation', 'idempotency', 'Today', 'finish'],
   enablePlanning: true,
   timeoutMs: 60000,
+  mockResponses: [
+    planResponse,
+    createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: {} }]),
+    continueJudge,
+    createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'notes.txt' } }]),
+    finalizeJudge,
+    createTextResponse('The notes mention finishing evaluation and adding idempotency.'),
+  ],
 };
