@@ -7,47 +7,82 @@ function createMockFetch(response: unknown, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 200 ? 'OK' : 'Error',
+    text: async () => (typeof response === 'string' ? response : ''),
     json: async () => response,
   });
 }
 
 describe('web_search tool', () => {
-  it('returns summary and related results from DuckDuckGo', async () => {
-    const mockFetch = createMockFetch({
-      AbstractText: 'JavaScript is a programming language.',
-      AbstractURL: 'https://example.com/js',
-      Heading: 'JavaScript',
-      RelatedTopics: [
-        { Text: 'JavaScript - MDN Web Docs', FirstURL: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript' },
-        { Text: 'Node.js - JavaScript runtime', FirstURL: 'https://nodejs.org/' },
-      ],
-    });
+  it('returns results from DuckDuckGo HTML search', async () => {
+    const html = `
+      <div class="result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen%2Fabout%2F">Node.js</a>
+        <a class="result__snippet">Node.js® is a JavaScript runtime built on Chrome's V8 JavaScript engine.</a>
+      </div>
+      <div class="result">
+        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnodejs.org%2Fen%2Fdownload%2F">Download Node.js</a>
+        <a class="result__snippet">Download Node.js the way you want.</a>
+      </div>
+    `;
+    const mockFetch = createMockFetch(html);
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    const tool = createWebSearchTool(new Sandbox('/tmp'));
+    const result = await tool.execute({ query: 'Node.js LTS', limit: 2 });
+
+    expect(result.query).toBe('Node.js LTS');
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0].url).toBe('https://nodejs.org/en/about/');
+    expect(result.results[0].title).toBe('Node.js');
+    expect(result.results[1].url).toBe('https://nodejs.org/en/download/');
+  });
+
+  it('falls back to Instant Answer when HTML search returns no results', async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '<html></html>',
+        json: async () => ({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: async () => '',
+        json: async () => ({
+          AbstractText: 'JavaScript is a programming language.',
+          AbstractURL: 'https://example.com/js',
+          Heading: 'JavaScript',
+          RelatedTopics: [
+            { Text: 'JavaScript - MDN Web Docs', FirstURL: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript' },
+          ],
+        }),
+      });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
 
     const tool = createWebSearchTool(new Sandbox('/tmp'));
     const result = await tool.execute({ query: 'JavaScript', limit: 2 });
 
-    expect(result.query).toBe('JavaScript');
-    expect(result.summary).toBe('JavaScript is a programming language.');
-    expect(result.sourceUrl).toBe('https://example.com/js');
     expect(result.results).toHaveLength(2);
-    expect(result.results[0].url).toBe('https://developer.mozilla.org/en-US/docs/Web/JavaScript');
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('https://api.duckduckgo.com/?q=JavaScript'),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Accept: 'application/json',
-        }),
-      })
-    );
+    expect(result.results[0].url).toBe('https://example.com/js');
   });
 
-  it('throws when search request fails', async () => {
-    const mockFetch = createMockFetch({}, 500);
+  it('returns empty result when all search backends fail', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Error',
+      text: async () => '',
+      json: async () => ({}),
+    });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
 
     const tool = createWebSearchTool(new Sandbox('/tmp'));
-    await expect(tool.execute({ query: 'error' })).rejects.toThrow('Search request failed');
+    const result = await tool.execute({ query: 'error' });
+
+    expect(result.results).toHaveLength(0);
+    expect(result.summary).toContain('No useful results');
   });
 });
