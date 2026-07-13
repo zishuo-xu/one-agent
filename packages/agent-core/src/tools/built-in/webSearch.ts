@@ -51,6 +51,77 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
     return null;
   }
 
+  if (isTavilyUrl(apiUrl)) {
+    return searchTavily(apiUrl, apiKey, query, limit);
+  }
+
+  if (isBraveUrl(apiUrl)) {
+    return searchBrave(apiUrl, apiKey, query, limit);
+  }
+
+  return searchGenericApi(apiUrl, apiKey, query, limit);
+}
+
+function isTavilyUrl(url: string): boolean {
+  return url.includes('api.tavily.com');
+}
+
+function isBraveUrl(url: string): boolean {
+  return url.includes('api.search.brave.io');
+}
+
+async function searchTavily(
+  apiUrl: string,
+  apiKey: string | undefined,
+  query: string,
+  limit: number
+): Promise<SearchResult[] | null> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'User-Agent': 'one-agent/1.0',
+  };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      query,
+      max_results: limit,
+      search_depth: 'basic',
+    }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json() as {
+    results?: Array<{ title?: string; url?: string; content?: string }>;
+    answer?: string;
+  };
+
+  const results = (data.results ?? [])
+    .filter((item) => item.title && item.url)
+    .slice(0, limit)
+    .map((item) => ({
+      title: item.title!,
+      snippet: item.content ?? item.title!,
+      url: item.url!,
+    }));
+
+  return results.length > 0 ? results : null;
+}
+
+async function searchBrave(
+  apiUrl: string,
+  apiKey: string | undefined,
+  query: string,
+  limit: number
+): Promise<SearchResult[] | null> {
   const url = apiUrl
     .replace('{query}', encodeURIComponent(query))
     .replace('{limit}', String(limit));
@@ -59,13 +130,8 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
     Accept: 'application/json',
     'User-Agent': 'one-agent/1.0',
   };
-
   if (apiKey) {
-    if (isBraveUrl(url)) {
-      headers['X-Subscription-Token'] = apiKey;
-    } else {
-      headers.Authorization = `Bearer ${apiKey}`;
-    }
+    headers['X-Subscription-Token'] = apiKey;
   }
 
   const response = await fetch(url, { headers });
@@ -74,14 +140,34 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
   }
 
   const data = await response.json() as unknown;
-  if (isBraveUrl(url)) {
-    return parseBraveResults(data, limit);
-  }
-  return normalizeSearchResults(data, limit);
+  return parseBraveResults(data, limit);
 }
 
-function isBraveUrl(url: string): boolean {
-  return url.includes('api.search.brave.io');
+async function searchGenericApi(
+  apiUrl: string,
+  apiKey: string | undefined,
+  query: string,
+  limit: number
+): Promise<SearchResult[] | null> {
+  const url = apiUrl
+    .replace('{query}', encodeURIComponent(query))
+    .replace('{limit}', String(limit));
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': 'one-agent/1.0',
+  };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json() as unknown;
+  return normalizeSearchResults(data, limit);
 }
 
 function parseBraveResults(data: unknown, limit: number): SearchResult[] | null {

@@ -126,4 +126,46 @@ describe('web_search tool', () => {
       delete process.env.SEARCH_API_KEY;
     }
   });
+
+  it('parses Tavily Search API response', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '',
+      json: async () => ({
+        results: [
+          { title: 'Node.js', url: 'https://nodejs.org/', content: 'JavaScript runtime' },
+          { title: 'Node.js LTS', url: 'https://nodejs.org/en/about/', content: 'Long Term Support' },
+        ],
+      }),
+    });
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    process.env.SEARCH_API_URL = 'https://api.tavily.com/search';
+    process.env.SEARCH_API_KEY = 'tavily-key';
+
+    try {
+      const tool = createWebSearchTool(new Sandbox('/tmp'));
+      const result = await tool.execute({ query: 'Node.js LTS', limit: 2 });
+
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0].url).toBe('https://nodejs.org/');
+      expect(result.results[0].snippet).toBe('JavaScript runtime');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.tavily.com/search',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            Authorization: 'Bearer tavily-key',
+          }),
+          body: expect.stringContaining('Node.js LTS'),
+        })
+      );
+    } finally {
+      delete process.env.SEARCH_API_URL;
+      delete process.env.SEARCH_API_KEY;
+    }
+  });
 });
