@@ -489,7 +489,7 @@ async function main() {
           process.stdout.write(event.content);
         } else if (event.type === 'message') {
           progress.stop();
-          if (!hasStreamedMessage) {
+          if (!hasStreamedMessage && event.content) {
             console.log(`\n${event.content}`);
           }
         }
@@ -505,6 +505,8 @@ async function main() {
       process.stdout.write('\n');
       if (reply && !hasStreamedMessage) {
         console.log(`\n${reply}`);
+      } else if (!reply && !hasStreamedMessage) {
+        console.log('\n[Model returned an empty response]');
       }
       console.log(`\n(${elapsed}ms)`);
 

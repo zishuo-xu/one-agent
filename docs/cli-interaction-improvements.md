@@ -70,7 +70,15 @@
 - 列出每个推理步骤的 planStepId、thought、action、observation、reflection、failureAnalysis 等关键字段。
 - 无推理链时提示 `No reasoning trace for the current turn.`。
 
-### 7. 命令提示不够一致（已修复）
+### 7. 真实模型返回空响应时无提示（已修复）
+
+**问题**：某些兼容 OpenAI 接口的模型在流式输出时返回空内容，CLI 只显示耗时，没有提示。
+
+**修复**：
+- `AgentLoop.streamModel` 增加 `extractDeltaContent`，兼容 `choices[0].delta.content`、`choices[0].delta.message.content` 和 `choices[0].message.content` 三种格式。
+- 当最终 `reply` 为空时，CLI 显示 `[Model returned an empty response]`，提示用户检查模型配置。
+
+### 8. 命令提示不够一致（已修复）
 
 **问题**：启动提示包含 `/traces`，但用户不易知道用途；`/thread` 缺少参数时只提示 `Unknown command`。
 
@@ -89,12 +97,15 @@
   - `chat` 支持 `AbortSignal` 参数
   - `callModel` / `streamModel` 透传 `signal`
   - 新增 `getUserFacingHistory()`
+  - 新增 `extractDeltaContent()` 兼容多种流式响应格式
+  - 空响应时给出提示
 - `apps/cli/src/index.ts`：
   - `--help` / `--version` / `--init` 支持
   - 后置 API key 检查与友好引导
   - 阶段化进度指示器 + 耗时显示
   - Ctrl-C 中断处理
   - `/history` / `/context` / `/reasoning` 改进
+  - 空响应提示 `[Model returned an empty response]`
   - 命令提示改进
 
 ---

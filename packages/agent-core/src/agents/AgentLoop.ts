@@ -665,7 +665,7 @@ export class AgentLoop extends EventEmitter {
         if (Symbol.asyncIterator in response) {
           for await (const chunk of response) {
             this.checkSignal();
-            const delta = (chunk.choices[0]?.delta?.content ?? '') as string;
+            const delta = this.extractDeltaContent(chunk);
             if (delta) {
               content += delta;
               this.emitEvent({ type: 'message_delta', content: delta });
@@ -699,6 +699,33 @@ export class AgentLoop extends EventEmitter {
       return content;
     }
     return content;
+  }
+
+  private extractDeltaContent(chunk: unknown): string {
+    if (!chunk || typeof chunk !== 'object') {
+      return '';
+    }
+    const choice = (chunk as Record<string, unknown>).choices;
+    if (!Array.isArray(choice) || choice.length === 0) {
+      return '';
+    }
+    const first = choice[0] as Record<string, unknown>;
+    // Standard OpenAI streaming format: choices[0].delta.content
+    const delta = first?.delta as Record<string, unknown> | undefined;
+    if (delta?.content && typeof delta.content === 'string') {
+      return delta.content;
+    }
+    // Some compatibility endpoints wrap content in choices[0].delta.message.content
+    const message = delta?.message as Record<string, unknown> | undefined;
+    if (message?.content && typeof message.content === 'string') {
+      return message.content;
+    }
+    // Fallback for non-streaming-like chunks
+    const msg = first?.message as Record<string, unknown> | undefined;
+    if (msg?.content && typeof msg.content === 'string') {
+      return msg.content;
+    }
+    return '';
   }
 
   private emitEvent(event: AgentLoopEvent): void {
