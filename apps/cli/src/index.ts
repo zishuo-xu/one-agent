@@ -5,7 +5,6 @@ import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import {
   AgentLoop,
-  AgentLoopEvent,
   config,
   createBuiltInTools,
   Sandbox,
@@ -24,10 +23,9 @@ import { sanitizeTerminalText } from './output.js';
 import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
 import { categorizeError, printError } from './errors.js';
-import { isUsableApiKey, parseArgs } from './args.js';
+import { createChatEventHandler } from './chat-events.js';
+import { isUsableApiKey, parseArgs, resolveThread } from './args.js';
 import {
-  bold,
-  cyan,
   dim,
   formatDuration,
   formatRelativeTime,
@@ -66,6 +64,8 @@ function createEnvTemplate(): void {
     'OPENAI_API_KEY=your-api-key',
     'OPENAI_BASE_URL=https://api.openai.com/v1',
     'OPENAI_MODEL=gpt-3.5-turbo',
+    '# Optional: per-request timeout in ms (default 30000)',
+    '# OPENAI_TIMEOUT_MS=60000',
     '# Optional: Tavily/Brave/DuckDuckGo search configuration',
     '# SEARCH_API_URL=',
     '# SEARCH_API_KEY=',
@@ -121,24 +121,6 @@ function getFirstUserMessageSummary(messageStore: MessageStore, threadId: string
   const messages = messageStore.getByThread(threadId);
   const firstUser = messages.find((m) => m.role === 'user');
   return firstUser ? truncateTitle(firstUser.content, 50) : '(no title)';
-}
-
-function formatToolResultSummary(toolResult: { success: boolean; data?: unknown; error?: string }): string {
-  if (!toolResult.success) {
-    return toolResult.error ?? 'failed';
-  }
-
-  const data = toolResult.data as Record<string, unknown> | undefined;
-  if (!data || typeof data !== 'object') {
-    return 'ok';
-  }
-
-  if (typeof data.results === 'object' && Array.isArray(data.results)) {
-    const count = data.results.length;
-    return count > 0 ? `found ${count} result(s)` : 'no results';
-  }
-
-  return 'ok';
 }
 
 function printSeparator() {
@@ -221,28 +203,21 @@ async function main() {
   let threadId: string;
   let title: string | null = null;
 
-  if (argThreadId && newThread) {
-    if (threadStore.getById(argThreadId)) {
-      console.error(`Cannot create thread ${argThreadId}: it already exists.`);
-      process.exitCode = 1;
-      return;
-    }
-    threadId = threadStore.create({ id: argThreadId }).id;
-    printStartup(threadId);
-  } else if (argThreadId) {
-    const existing = threadStore.getById(argThreadId);
-    if (existing) {
-      threadId = existing.id;
-      title = existing.title;
-      printStartup(threadId);
-    } else {
-      threadId = argThreadId;
-      threadStore.create({ id: threadId });
-      printStartup(threadId);
-    }
-  } else {
-    threadId = threadStore.create({}).id;
-    printStartup(threadId);
+  try {
+    const resolution = resolveThread(
+      { threadId: argThreadId, newThread, verbose, help, version, init, plan },
+      threadStore.list().map((t) => ({ id: t.id, title: t.title })),
+      (id) => Boolean(threadStore.getById(id)),
+      (id) => threadStore.create(id ? { id } : {}).id,
+    );
+    threadId = resolution.threadId;
+    const resolved = threadStore.getById(threadId);
+    title = resolved?.title ?? null;
+    printStartup(threadId, resolution.mode);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
   }
 
   let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
@@ -508,73 +483,18 @@ async function main() {
       sigintCount = 0;
       abortController = new AbortController();
 
-      let stage: 'request' | 'tool' | 'answer' = 'request';
-      let streamedContent = '';
-      let hasEvents = false;
-      let firstDeltaTime = 0;
-      let toolStartTime = 0;
-      let toolEndTime = 0;
-      let toolCallCount = 0;
-      let answerStartTime = 0;
-      let answerEndTime = 0;
       let currentRunId: string | undefined;
 
       const progress = createProgressIndicator(`正在请求 ${config.model}…`);
       progress.start();
       const startTime = Date.now();
 
-      const onEvent = (event: AgentLoopEvent) => {
-        if (!hasEvents) {
-          hasEvents = true;
-        }
-
-        if (event.type === 'plan') {
-          stage = 'tool';
-          progress.setLabel('Working');
-          if (verbose) {
-            process.stdout.write(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
-          }
-        } else if (event.type === 'tool_call') {
-          stage = 'tool';
-          progress.setLabel('Working');
-          if (toolStartTime === 0) toolStartTime = Date.now();
-          toolCallCount++;
-          process.stdout.write(`\n[tool_call] ${event.toolCall.name}\n`);
-        } else if (event.type === 'tool_result') {
-          const summary = formatToolResultSummary(event.toolResult);
-          toolEndTime = Date.now();
-          process.stdout.write(`[tool_result] ${summary}\n`);
-        } else if (event.type === 'thought' && verbose) {
-          process.stdout.write(`\n[thought] ${event.content.slice(0, 120)}\n`);
-        } else if (event.type === 'reflection') {
-          stage = 'request';
-          progress.setLabel('Re-planning');
-          if (verbose) {
-            process.stdout.write(`\n[reflection] ${event.content.slice(0, 120)}\n`);
-          }
-        } else if (event.type === 'message_delta') {
-          if (firstDeltaTime === 0) {
-            firstDeltaTime = Date.now();
-          }
-          if (answerStartTime === 0) {
-            answerStartTime = Date.now();
-          }
-          answerEndTime = Date.now();
-          if (stage !== 'answer') {
-            stage = 'answer';
-            progress.setLabel('Answering');
-          }
-          const cleanContent = sanitizeTerminalText(event.content);
-          streamedContent += cleanContent;
-        } else if (event.type === 'message') {
-          if (answerEndTime === 0) {
-            answerEndTime = Date.now();
-          }
-          if (streamedContent.length === 0 && event.content) {
-            streamedContent = sanitizeTerminalText(event.content);
-          }
-        }
-      };
+      const { handler: onEvent, result: timeline } = createChatEventHandler({
+        onDelta: (text) => process.stdout.write(text),
+        onInfo: (text) => process.stdout.write(text),
+        progress,
+        verbose,
+      });
 
       agent.on('event', onEvent);
       let runResult: { reply: string; runId?: string };
@@ -591,30 +511,47 @@ async function main() {
       abortController = null;
       currentRunId = runResult.runId;
 
-      const elapsed = Date.now() - startTime;
-      const ttfa = firstDeltaTime > 0 ? firstDeltaTime - startTime : elapsed;
-      const answerDuration = answerStartTime > 0 && answerEndTime > 0 ? answerEndTime - answerStartTime : 0;
-      const toolDuration = toolStartTime > 0 && toolEndTime > 0 ? toolEndTime - toolStartTime : 0;
+      const ttfa = timeline.firstDeltaTime > 0 ? timeline.firstDeltaTime - startTime : 0;
+      const answerDuration =
+        timeline.answerStartTime > 0 && timeline.answerEndTime > 0
+          ? timeline.answerEndTime - timeline.answerStartTime
+          : 0;
+      const toolDuration =
+        timeline.toolStartTime > 0 && timeline.toolEndTime > 0
+          ? timeline.toolEndTime - timeline.toolStartTime
+          : 0;
 
       const reply = runResult.reply;
       const renderable = sanitizeTerminalText(reply).trim();
 
       process.stdout.write('\n');
-      if (renderable.length > 0) {
+      if (timeline.hasStreamedLive) {
+        // Tokens were printed live; no re-render needed.
+        if (timeline.streamedContent.trim().length === 0) {
+          console.log('[Model returned an empty response]');
+        }
+      } else if (renderable.length > 0) {
+        // Non-streamed reply: render Markdown once at the end.
         const rendered = renderMarkdown(renderable);
         console.log(`\n${rendered}`);
-      } else if (streamedContent.trim().length === 0) {
+      } else if (timeline.streamedContent.trim().length === 0) {
         console.log('\n[Model returned an empty response]');
       }
 
       const parts: string[] = [];
-      parts.push(`首字 ${formatDuration(ttfa)}`);
+      if (ttfa > 0) parts.push(`首字 ${formatDuration(ttfa)}`);
       if (answerDuration > 0) parts.push(`回答 ${formatDuration(answerDuration)}`);
       if (toolDuration > 0) parts.push(`工具 ${formatDuration(toolDuration)}`);
-      parts.push('记忆后台处理中');
-      console.log(`\n(${parts.join(' · ')})`);
+      if (memoryStore && memoryExtractor) {
+        if (verbose) parts.push('记忆：后台提取已启动');
+      } else if (verbose) {
+        parts.push('记忆：未配置');
+      }
+      if (parts.length > 0) {
+        console.log(`\n(${parts.join(' · ')})`);
+      }
 
-      if (!renderable && currentRunId) {
+      if (!renderable && !timeline.hasStreamedLive && currentRunId) {
         console.log(dim(`可执行 /runs 或 /traces ${shortId(currentRunId)} 查看详情。`));
       }
 

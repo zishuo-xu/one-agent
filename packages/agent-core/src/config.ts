@@ -19,6 +19,8 @@ export const config = {
     apiKey: getEnv('OPENAI_API_KEY', ''),
   }),
   model: process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo',
+  /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
+  timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? '30000'),
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
     'You are a helpful assistant. Answer concisely and in Chinese by default. ' +

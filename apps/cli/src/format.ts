@@ -1,6 +1,6 @@
 import process from 'node:process';
 
-export const supportsColor = !process.env.NO_COLOR && process.stdout.isTTY;
+export const supportsColor = Boolean(!process.env.NO_COLOR && process.stdout.isTTY);
 
 export function color(code: string, text: string): string {
   if (!supportsColor) return text;

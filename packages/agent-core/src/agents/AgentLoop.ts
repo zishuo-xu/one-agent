@@ -86,11 +86,12 @@ export class AgentLoop extends EventEmitter {
     super();
     this.systemPrompt = options.systemPrompt ?? config.systemPrompt;
     this.maxRetries = options.maxRetries ?? 2;
-    this.timeoutMs = options.timeoutMs ?? 30000;
     this.maxToolIterations = options.maxToolIterations ?? 5;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
     this.maxRetryAttempts = options.maxRetryAttempts ?? 2;
     this.enablePlanning = options.enablePlanning ?? false;
+    this.timeoutMs =
+      options.timeoutMs ?? (typeof config.timeoutMs === 'number' ? config.timeoutMs : 30000);
     this.threadId = options.threadId;
     this.taskId = options.taskId;
     this.toolRegistry = options.tools;
