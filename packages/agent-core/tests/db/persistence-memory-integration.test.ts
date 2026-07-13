@@ -1,0 +1,85 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { createConnection } from '../../src/db/connection.js';
+import { ThreadStore } from '../../src/db/threadStore.js';
+import { MemoryStore } from '../../src/db/memoryStore.js';
+import { MemoryExtractor } from '../../src/memory/MemoryExtractor.js';
+import { AgentLoop } from '../../src/agents/AgentLoop.js';
+
+vi.mock('../../src/config.js', () => ({
+  config: {
+    port: 3000,
+    host: '127.0.0.1',
+    model: 'gpt-test',
+    systemPrompt: 'You are a test assistant.',
+    openai: {
+      chat: {
+        completions: {
+          create: vi.fn(),
+        },
+      },
+    },
+  },
+}));
+
+import { config } from '../../src/config.js';
+
+const mockCreate = vi.mocked(config.openai.chat.completions.create);
+
+describe('AgentLoop memory integration', () => {
+  let db: Database.Database;
+  let threadStore: ThreadStore;
+  let memoryStore: MemoryStore;
+
+  beforeEach(() => {
+    db = createConnection({ path: ':memory:' });
+    threadStore = new ThreadStore(db);
+    memoryStore = new MemoryStore(db);
+    mockCreate.mockReset();
+  });
+
+  it('extracts and recalls memories across different threads', async () => {
+    const memoryExtractor = new MemoryExtractor();
+    vi.spyOn(memoryExtractor, 'extract').mockResolvedValue([
+      { key: 'preferred language', value: 'Chinese' },
+    ]);
+
+    const firstThread = threadStore.create({ id: 'thread-1' }).id;
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'Got it.' } }],
+    } as never);
+
+    const firstAgent = new AgentLoop({
+      enablePlanning: false,
+      threadId: firstThread,
+      db,
+      memoryStore,
+      memoryExtractor,
+    });
+
+    const { reply: firstReply } = await firstAgent.chat('I prefer Chinese.');
+    expect(firstReply).toBe('Got it.');
+    expect(memoryExtractor.extract).toHaveBeenCalledWith('I prefer Chinese.', 'Got it.');
+
+    const memories = memoryStore.list();
+    expect(memories).toHaveLength(1);
+    expect(memories[0].key).toBe('preferred language');
+    expect(memories[0].value).toBe('Chinese');
+
+    // New thread should still recall the globally stored memory.
+    const secondThread = threadStore.create({ id: 'thread-2' }).id;
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'You prefer Chinese.' } }],
+    } as never);
+
+    const secondAgent = new AgentLoop({
+      enablePlanning: false,
+      threadId: secondThread,
+      db,
+      memoryStore,
+    });
+
+    const { reply: secondReply } = await secondAgent.chat('What language do I prefer?');
+    expect(secondReply).toBe('You prefer Chinese.');
+  });
+});
