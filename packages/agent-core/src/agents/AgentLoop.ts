@@ -215,12 +215,15 @@ export class AgentLoop extends EventEmitter {
 
     while (toolIterations <= this.maxToolIterations) {
       this.checkSignal();
-      // Non-streaming for the model probe so we can inspect tool_calls as a whole.
-      const response = await this.callModel();
-      const assistantMessage = response.choices[0]?.message;
+      // A single streaming completion serves two purposes at once: it streams
+      // the answer text to the client token-by-token (message_delta events)
+      // and accumulates any tool-call deltas. If tool calls arrive we execute
+      // them and loop; otherwise the text already reached the user live and we
+      // just record the final message. No separate "probe" round-trip.
+      const { content, toolCalls } = await this.callModelStreaming();
 
-      if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-        const toolCalls = assistantMessage.tool_calls.map((tc) => ({
+      if (toolCalls && toolCalls.length > 0) {
+        const calls = toolCalls.map((tc) => ({
           id: tc.id,
           name: tc.function.name,
           arguments: this.safeParseArgs(tc.function.arguments),
@@ -228,12 +231,12 @@ export class AgentLoop extends EventEmitter {
 
         this.contextManager.addMessage({
           role: 'assistant',
-          content: assistantMessage.content ?? '',
-          tool_calls: assistantMessage.tool_calls,
+          content,
+          tool_calls: toolCalls,
           internal: true,
         });
 
-        for (const call of toolCalls) {
+        for (const call of calls) {
           this.emitEvent({ type: 'tool_call', toolCall: call });
 
           if (!this.toolExecutor) {
@@ -267,13 +270,7 @@ export class AgentLoop extends EventEmitter {
         continue;
       }
 
-      // No tool calls: the model is going to produce the final answer.
-      // Stream it so users see tokens appear live instead of waiting for the
-      // whole response. The probe might have already returned content; in that
-      // case fall back to the non-empty body we already have without another
-      // round-trip.
-      const probedContent = this.extractMessageContent(assistantMessage);
-      const content = await this.streamFinalAnswerOrProbe(probedContent);
+      // No tool calls: the answer was already streamed live above.
       this.contextManager.addMessage({ role: 'assistant', content });
       this.emitEvent({ type: 'message', content });
       return { reply: content, events: this.events };
@@ -340,11 +337,9 @@ export class AgentLoop extends EventEmitter {
         }
       }
 
-      step.status = 'running';
+step.status = 'running';
 
       const executionResult = await this.executeStep(step, plan, runId);
-      // eslint-disable-next-line no-console
-      console.log('DBG executeStep returned next=', executionResult.next, 'step.status=', step.status, 'retryAttempts=', retryAttempts);
 
       if (executionResult.next === 'final') {
         return this.finalizeAnswer();
@@ -672,6 +667,121 @@ export class AgentLoop extends EventEmitter {
     );
   }
 
+  /**
+   * Open a single streaming completion that simultaneously streams the answer
+   * text to the user (via message_delta events) and accumulates tool-call
+   * deltas by their `index`. This replaces the old "probe then stream" flow:
+   * there is exactly one request per turn, and for tool-less answers the text
+   * already reached the client token-by-token by the time the stream ends.
+   *
+   * Some compatible endpoints ignore `stream: true` and return a plain object;
+   * in that case we fall back to reading content + tool_calls off the whole
+   * message and emit a single message_delta so callers keep their contract.
+   */
+  private async callModelStreaming(options: { allowedTools?: string[] } = {}): Promise<{
+    content: string;
+    toolCalls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+  }> {
+    const { allowedTools } = options;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      this.checkSignal();
+      try {
+        const messages = await this.contextManager.buildContext();
+        const tools = this.toolRegistry?.getSchemas(allowedTools);
+        const response = await config.openai.chat.completions.create(
+          {
+            model: config.model,
+            messages: messages as never,
+            stream: true,
+            tools,
+          },
+          { timeout: this.timeoutMs, signal: this.signal }
+        );
+
+        if (Symbol.asyncIterator in response) {
+          let content = '';
+          // Tool-call deltas arrive fragmented across chunks and indexed by
+          // position; accumulate function name + argument fragments.
+          const toolCallMap = new Map<
+            number,
+            { id?: string; name?: string; arguments: string }
+          >();
+
+          for await (const chunk of response) {
+            this.checkSignal();
+            const text = this.extractDeltaContent(chunk);
+            if (text) {
+              content += text;
+              this.emitEvent({ type: 'message_delta', content: text });
+            }
+            const delta = (chunk as unknown as { choices?: Array<{ delta?: Record<string, unknown> }> })
+              .choices?.[0]?.delta;
+            const tcDeltas = delta?.tool_calls as
+              | Array<{
+                  index?: number;
+                  id?: string;
+                  function?: { name?: string; arguments?: string };
+                }>
+              | undefined;
+            if (tcDeltas) {
+              for (const tc of tcDeltas) {
+                const idx = tc.index ?? 0;
+                const existing = toolCallMap.get(idx) ?? {
+                  id: undefined,
+                  name: undefined,
+                  arguments: '',
+                };
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name = tc.function.name;
+                if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+                toolCallMap.set(idx, existing);
+              }
+            }
+          }
+
+          const toolCalls =
+            toolCallMap.size > 0
+              ? [...toolCallMap.entries()]
+                  .sort((a, b) => a[0] - b[0])
+                  .map(([, tc]) => ({
+                    id: tc.id ?? '',
+                    type: 'function' as const,
+                    function: { name: tc.name ?? '', arguments: tc.arguments },
+                  }))
+              : undefined;
+
+          return { content, toolCalls };
+        }
+
+        // Non-streaming fallback: endpoint ignored stream:true.
+        const nonStreamingResponse = response as unknown as {
+          choices: Array<{
+            message?: {
+              content?: string;
+              reasoning_content?: string;
+              tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+            };
+          }>;
+        };
+        const message = nonStreamingResponse.choices[0]?.message;
+        const content = this.extractMessageContent(message);
+        if (content) {
+          this.emitEvent({ type: 'message_delta', content });
+        }
+        const toolCalls = message?.tool_calls;
+        return { content, toolCalls };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    throw new Error(
+      `Model call failed after ${this.maxRetries + 1} attempt(s): ${lastError?.message}`
+    );
+  }
+
   private async streamModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}): Promise<string> {
     const { includeTools = false, allowedTools } = options;
     let lastError: Error | undefined;
@@ -722,21 +832,6 @@ export class AgentLoop extends EventEmitter {
     throw new Error(
       `Model call failed after ${this.maxRetries + 1} attempt(s): ${lastError?.message}`
     );
-  }
-
-  /**
-   * Produce the final answer text for a turn.
-   * - If the non-streaming probe already returned content, emit it as deltas
-   *   and reuse it without a second round-trip.
-   * - Otherwise open a real streaming completion so users see tokens appear
-   *   incrementally instead of waiting for the full response.
-   */
-  private async streamFinalAnswerOrProbe(probedContent: string): Promise<string> {
-    if (probedContent) {
-      this.emitEvent({ type: 'message_delta', content: probedContent });
-      return probedContent;
-    }
-    return this.streamModel({ includeTools: false });
   }
 
   private extractMessageContent(message: unknown): string {

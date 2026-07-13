@@ -107,20 +107,15 @@ describe('Fix 2: PersistenceContextManager injects system prompt exactly once', 
   });
 });
 
-describe('Fix 1: default final answer streams when probe returns no content', () => {
-  it('falls through to a streaming completion when the probe has empty content', async () => {
-    mockCreate
-      // First call: the non-streaming probe sees no tool_calls and no content.
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: '' } }],
-      } as never)
-      // Second call: real streaming completion with two deltas.
-      .mockResolvedValueOnce({
-        [Symbol.asyncIterator]: async function* () {
-          yield { choices: [{ delta: { content: 'Hel' } }] };
-          yield { choices: [{ delta: { content: 'lo' } }] };
-        },
-      } as never);
+describe('Fix 1: default final answer streams from a single streaming completion', () => {
+  it('streams a normal (content-bearing) answer token-by-token in one request', async () => {
+    // A single streaming completion emits two content deltas and no tool calls.
+    mockCreate.mockResolvedValueOnce({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: 'Hel' } }] };
+        yield { choices: [{ delta: { content: 'lo' } }] };
+      },
+    } as never);
 
     const agent = new AgentLoop({ enablePlanning: false });
     const deltas: string[] = [];
@@ -130,25 +125,32 @@ describe('Fix 1: default final answer streams when probe returns no content', ()
 
     const { reply } = await agent.chat('Hi');
     expect(reply).toBe('Hello');
+    // The answer reached the client as two separate deltas, not one burst.
     expect(deltas).toEqual(['Hel', 'lo']);
-    expect(mockCreate).toHaveBeenCalledTimes(2);
-    // Second call must be the streaming one.
-    const secondCallArg = mockCreate.mock.calls[1][0] as { stream?: boolean };
-    expect(secondCallArg.stream).toBe(true);
+    // Exactly one model request - no probe-then-stream double round-trip.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArg = mockCreate.mock.calls[0][0] as { stream?: boolean };
+    expect(callArg.stream).toBe(true);
   });
 
-  it('reuses the probed content without a second round-trip when present', async () => {
+  it('falls back to a single message_delta when the endpoint ignores stream:true', async () => {
+    // Endpoint returns a plain object instead of an async iterator.
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: { content: 'cached answer' } }],
     } as never);
 
     const agent = new AgentLoop({ enablePlanning: false });
+    const deltas: string[] = [];
+    agent.on('event', (e: AgentLoopEvent) => {
+      if (e.type === 'message_delta') deltas.push(e.content);
+    });
     const { reply } = await agent.chat('Hi');
     expect(reply).toBe('cached answer');
+    expect(deltas).toEqual(['cached answer']);
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it('uses reasoning_content as the probed content when content is empty', async () => {
+  it('uses reasoning_content when content is empty in the non-streaming fallback', async () => {
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: { content: '', reasoning_content: 'actual answer' } }],
     } as never);
@@ -157,6 +159,70 @@ describe('Fix 1: default final answer streams when probe returns no content', ()
     const { reply } = await agent.chat('Hi');
     expect(reply).toBe('actual answer');
     expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('accumulates fragmented tool-call deltas and executes the tool, then streams a final answer', async () => {
+    const echoTool: ToolDefinition = {
+      name: 'echo',
+      description: 'Echo',
+      parameters: z.object({ message: z.string() }),
+      execute: (args: unknown) => {
+        const { message } = args as { message: string };
+        return { success: true, data: { message } };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    // Turn 1: stream interleaves a content fragment and a tool call whose
+    // arguments arrive split across two deltas (real OpenAI behavior).
+    // Turn 2: after the tool result, the model streams the final answer.
+    mockCreate
+      .mockResolvedValueOnce({
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'Let me echo that.' } }] };
+          yield {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    { index: 0, id: 'call_1', type: 'function', function: { name: 'echo', arguments: '{"message":"hi' } },
+                  ],
+                },
+              },
+            ],
+          };
+          yield {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [{ index: 0, function: { arguments: '"}' } }],
+                },
+              },
+            ],
+          };
+        },
+      } as never)
+      .mockResolvedValueOnce({
+        [Symbol.asyncIterator]: async function* () {
+          yield { choices: [{ delta: { content: 'Done: ' } }] };
+          yield { choices: [{ delta: { content: 'hi' } }] };
+        },
+      } as never);
+
+    const agent = new AgentLoop({ tools, enablePlanning: false });
+    const deltas: string[] = [];
+    const toolCalls: string[] = [];
+    agent.on('event', (e: AgentLoopEvent) => {
+      if (e.type === 'message_delta') deltas.push(e.content);
+      if (e.type === 'tool_call') toolCalls.push(e.toolCall.name);
+    });
+
+    const { reply } = await agent.chat('echo hi');
+    expect(toolCalls).toEqual(['echo']);
+    // First turn streamed the thinking text, second turn streamed the answer.
+    expect(deltas).toEqual(['Let me echo that.', 'Done: ', 'hi']);
+    expect(reply).toBe('Done: hi');
   });
 });
 

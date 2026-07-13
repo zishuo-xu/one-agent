@@ -8,23 +8,21 @@
 
 ## 一、默认聊天路径其实不是真流式
 
-**问题**：默认（非 planning）路径下 `runSimpleLoop` 用非流式 `callModel()` 拿到完整响应后才 `streamFinalAnswer()` 一次性 emit 全文。CLI 虽逐 delta 打印，但 delta 本身只有一条整段文本，用户体感仍是"等几秒后一次性显示"——这正是"你好为什么慢"的根因。
+**问题**：默认（非 planning）路径下 `runSimpleLoop` 用非流式 `callModel()` 拿到完整响应后才 `streamFinalAnswer()` 一次性 emit 全文。CLI 虽逐 delta 打印，但 delta 本身只有一条整段文本，用户体感仍是"等几秒后一次性显示"--这正是"你好为什么慢"的根因。第一版修复采用"探测+流式"两步，但大多数正常响应仍会复现"首字几秒后一次性显示"。
 
-**修复**：
-- `runSimpleLoop` 探测阶段仍用非流式 `callModel()`（需要整体拿到 `tool_calls` 才能决定是否调用工具）。
-- 一旦确认本轮无工具调用，交给新的 `streamFinalAnswerOrProbe()`：
-  - 若探测阶段已经返回内容（含 `reasoning_content` 回退），直接 emit 为 delta，避免二次请求。
-  - 否则发起真正的 `streamModel({ includeTools: false })` 流式补全，逐 token 产生 `message_delta`。
-- 工具调用阶段保持非流式，不变。
+**最终修复**：改为单条流式补全同时承担两件事：
+- 新增 `callModelStreaming()`：发起 `stream:true` 请求，边读边把 `delta.content`（含 `reasoning_content` 回退）作为 `message_delta` 事件实时抛给客户端；同时按 `index` 累积 `delta.tool_calls` 的函数名与参数分片（OpenAI 工具调用是分片到达的）。
+- `runSimpleLoop` 每轮只调用一次 `callModelStreaming()`：若流结束后有完整 tool_calls，执行工具并循环；若没有，文本已经实时输出过，只需 emit `message` 并返回。不再有"探测"二次请求，正常回答天然逐 token 流式。
+- 兼容性：若兼容端点忽略 `stream:true` 返回整对象，回退到从 `message` 一次性读取 content + tool_calls，仍 emit 一条 `message_delta` 保持调用方契约。
 
 **相关文件**：
-- `packages/agent-core/src/agents/AgentLoop.ts`（`runSimpleLoop`、`streamFinalAnswerOrProbe`）
+- `packages/agent-core/src/agents/AgentLoop.ts`（`runSimpleLoop`、`callModelStreaming`，删除 `streamFinalAnswerOrProbe`）
 - `packages/agent-core/tests/correctness-fixes.test.ts`
 
 **验证**：
-- 探测返回空内容时，第二次 `create` 调用带 `stream:true` 且产出 `['Hel','lo']` 两条 delta。
-- 探测已返回内容时，只调用一次模型，不二次请求。
-- 探测仅返回 `reasoning_content` 时也能正确复用。
+- 正常（带内容）回答：单次请求、`stream:true`、产出 `['Hel','lo']` 两条独立 delta，证明逐 token 流式而非一次性。
+- 工具调用：流中交错出现 content 分片和被拆成两段的 tool_call 参数分片，能正确累积成 `echo({"message":"hi"})` 并执行，第二轮流式输出最终回答。
+- 非流式回退：端点返回整对象时仍 emit 一条 `message_delta`，`reasoning_content` 回退也生效。
 
 ---
 
@@ -90,11 +88,21 @@
 
 ---
 
+## 六、清理遗留 DBG 输出
+
+**问题**：`runPlanningLoop` 中残留 `console.log('DBG executeStep returned next=...')`，会污染 CLI、API 日志和 trace 阅读。
+
+**修复**：直接删除该调试输出（已确认无其它依赖）。若未来需要诊断，应走可注入 logger 并仅在 verbose/debug 模式启用，而非裸 `console.log`。
+
+**相关文件**：`packages/agent-core/src/agents/AgentLoop.ts`
+
+---
+
 ## 六、验证结果
 
 - `pnpm build` 通过。
 - `pnpm test` 全绿：
-  - `agent-core`：32 文件 / 166 测试（含新增 `tests/correctness-fixes.test.ts` 6 个）
+  - `agent-core`：32 文件 / 167 测试（含 `tests/correctness-fixes.test.ts` 7 个）
   - `api`：4 文件 / 27 测试
   - `cli`：8 文件 / 57 测试
   - `trace-web`：1 文件 / 7 测试
