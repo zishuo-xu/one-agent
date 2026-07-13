@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT,
   tool_calls TEXT,
   tool_call_id TEXT,
+  sequence INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
 );
@@ -147,6 +148,16 @@ export function migrate(instance: Database.Database): void {
     instance.exec('ALTER TABLE tasks ADD COLUMN idempotency_key TEXT UNIQUE');
   } catch {
     // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE messages ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_sequence ON messages(thread_id, sequence)');
+  } catch {
+    // Index already exists or pending creation.
   }
 }
 

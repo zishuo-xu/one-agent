@@ -505,9 +505,13 @@ async function main() {
         const latestRun = runStore.getByThread(threadId)[0];
         runIdFromError = latestRun?.id;
         throw error;
+      } finally {
+        // Always release the per-turn listener and spinner, even on the error
+        // path — otherwise a stale onEvent stays attached to the agent and the
+        // progress indicator keeps spinning across the next turn.
+        agent.off('event', onEvent);
+        progress.stop();
       }
-      agent.off('event', onEvent);
-      progress.stop();
       abortController = null;
       currentRunId = runResult.runId;
 
@@ -565,6 +569,7 @@ async function main() {
         const categorized = categorizeError(error, runIdFromError ?? latestRun?.id, verbose);
         printError(categorized, verbose);
       }
+      printSeparator();
     }
   }
 }

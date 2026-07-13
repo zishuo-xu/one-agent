@@ -10,6 +10,7 @@ interface MessageRow {
   content: string;
   tool_calls: string | null;
   tool_call_id: string | null;
+  sequence: number;
   created_at: string;
 }
 
@@ -32,10 +33,19 @@ export class MessageStore {
     const id = crypto.randomUUID();
     const persisted = messageToPersisted(message);
 
+    // Assign a per-thread monotonic sequence so messages written within the
+    // same second still resume in the exact order they were saved. SQLite's
+    // datetime('now') has 1-second resolution, which is too coarse to order
+    // tool_call/tool_result/final-reply reliably on a fast turn.
+    const row = this.db
+      .prepare('SELECT COALESCE(MAX(sequence), -1) AS max_seq FROM messages WHERE thread_id = ?')
+      .get(threadId) as { max_seq: number } | undefined;
+    const sequence = (row?.max_seq ?? -1) + 1;
+
     this.db
       .prepare(
-        `INSERT INTO messages (id, thread_id, role, content, tool_calls, tool_call_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+        `INSERT INTO messages (id, thread_id, role, content, tool_calls, tool_call_id, sequence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
       )
       .run(
         id,
@@ -43,7 +53,8 @@ export class MessageStore {
         persisted.role,
         persisted.content,
         persisted.toolCalls ?? null,
-        persisted.toolCallId ?? null
+        persisted.toolCallId ?? null,
+        sequence
       );
 
     return this.getById(id)!;
@@ -60,7 +71,7 @@ export class MessageStore {
   getByThread(threadId: string): PersistedMessage[] {
     const rows = this.db
       .prepare(
-        'SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC'
+        'SELECT * FROM messages WHERE thread_id = ? ORDER BY sequence ASC, created_at ASC, id ASC'
       )
       .all(threadId) as MessageRow[];
 

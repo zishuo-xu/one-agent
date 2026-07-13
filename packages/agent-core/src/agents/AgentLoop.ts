@@ -215,6 +215,7 @@ export class AgentLoop extends EventEmitter {
 
     while (toolIterations <= this.maxToolIterations) {
       this.checkSignal();
+      // Non-streaming for the model probe so we can inspect tool_calls as a whole.
       const response = await this.callModel();
       const assistantMessage = response.choices[0]?.message;
 
@@ -266,7 +267,13 @@ export class AgentLoop extends EventEmitter {
         continue;
       }
 
-      const content = await this.streamFinalAnswer(this.extractMessageContent(assistantMessage));
+      // No tool calls: the model is going to produce the final answer.
+      // Stream it so users see tokens appear live instead of waiting for the
+      // whole response. The probe might have already returned content; in that
+      // case fall back to the non-empty body we already have without another
+      // round-trip.
+      const probedContent = this.extractMessageContent(assistantMessage);
+      const content = await this.streamFinalAnswerOrProbe(probedContent);
       this.contextManager.addMessage({ role: 'assistant', content });
       this.emitEvent({ type: 'message', content });
       return { reply: content, events: this.events };
@@ -336,6 +343,8 @@ export class AgentLoop extends EventEmitter {
       step.status = 'running';
 
       const executionResult = await this.executeStep(step, plan, runId);
+      // eslint-disable-next-line no-console
+      console.log('DBG executeStep returned next=', executionResult.next, 'step.status=', step.status, 'retryAttempts=', retryAttempts);
 
       if (executionResult.next === 'final') {
         return this.finalizeAnswer();
@@ -354,6 +363,14 @@ export class AgentLoop extends EventEmitter {
         step.status = 'pending';
         retryAttempts++;
         continue;
+      }
+
+      // A failed step must never be silently promoted to 'completed'. If we
+      // got here via a retry outcome that the retry budget couldn't absorb,
+      // surface the failure to the user instead of lying about success.
+      // (executeStep sets step.status='failed' before returning 'retry'.)
+      if (executionResult.next === 'retry') {
+        return this.finalizeAnswer();
       }
 
       step.status = 'completed';
@@ -478,16 +495,27 @@ export class AgentLoop extends EventEmitter {
 
         if (!result.success) {
           step.status = 'failed';
+          const failureAnalysis: FailureAnalysis = {
+            category: 'tool_failure',
+            affectedStepIds: [step.id],
+            rootCause: `Tool ${call.name} failed: ${result.error ?? 'unknown'}`,
+            recommendation: 'Retry the tool call or replan to work around the failure.',
+          };
+          this.reasoningChain.addFailureAnalysis(failureAnalysis);
           const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
           if (judge.complete || judge.nextAction === 'finalize') {
             return { next: 'final' };
           }
           if (judge.nextAction === 'retry') {
-            return { next: 'retry', failureAnalysis: judge.failureAnalysis };
+            return { next: 'retry', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
           }
           if (judge.nextAction === 'replan') {
-            return { next: 'replan', failureAnalysis: judge.failureAnalysis };
+            return { next: 'replan', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
           }
+          // Tool failed and Judge did not ask for retry/replan/finalize.
+          // Never treat a failed step as completed — surface it as a retry so
+          // the outer loop can bound attempts and eventually fail loudly.
+          return { next: 'retry', failureAnalysis };
         }
       }
     }
@@ -696,13 +724,19 @@ export class AgentLoop extends EventEmitter {
     );
   }
 
-  private streamFinalAnswer(content: string): string {
-    // If the content is already provided (non-streaming mode), emit it as a delta and return.
-    if (content) {
-      this.emitEvent({ type: 'message_delta', content });
-      return content;
+  /**
+   * Produce the final answer text for a turn.
+   * - If the non-streaming probe already returned content, emit it as deltas
+   *   and reuse it without a second round-trip.
+   * - Otherwise open a real streaming completion so users see tokens appear
+   *   incrementally instead of waiting for the full response.
+   */
+  private async streamFinalAnswerOrProbe(probedContent: string): Promise<string> {
+    if (probedContent) {
+      this.emitEvent({ type: 'message_delta', content: probedContent });
+      return probedContent;
     }
-    return content;
+    return this.streamModel({ includeTools: false });
   }
 
   private extractMessageContent(message: unknown): string {

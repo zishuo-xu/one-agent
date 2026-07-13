@@ -41,8 +41,10 @@ export class PersistenceContextManager extends ContextManager {
       throw new Error(`Thread not found: ${threadId}`);
     }
 
+    // clear() already restores a single system message with this.systemPrompt,
+    // so we must not push another one here (otherwise the model receives two
+    // copies of the same system prompt on every resumed thread).
     super.clear();
-    super.addMessage({ role: 'system', content: this.systemPrompt });
 
     const rows = this.messageStore.getByThread(threadId);
     for (const row of rows) {
