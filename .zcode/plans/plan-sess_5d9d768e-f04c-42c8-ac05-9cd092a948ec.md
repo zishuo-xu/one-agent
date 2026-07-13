@@ -1,211 +1,170 @@
-# Phase 4 实施计划：规划与自我纠错
+# 规划能力深度优化：计划绑定、层级计划、结构化反思、真实模型评估
 
-基于更新后的路线图，本阶段让 Agent 从「被动调用工具」升级为「先规划再执行，失败能自纠」的 ReAct 式单 Agent。
+## 目标
 
-## 一、目标
+一次性增强 Agent 的规划与评估能力：
 
-```text
-复杂任务 -> 拆解为计划 -> 逐步执行 -> 观察结果 -> 偏差则反思重试
-```
+1. **计划与执行绑定**：让模型严格按计划步骤调用指定工具，偏差时触发失败处理。
+2. **子目标拆解（层级计划）**：支持 plan step 嵌套子步骤，适应复杂任务。
+3. **反思质量提升**：Judge 输出结构化失败分析，用于更精准的重规划。
+4. **真实模型评估**：在现有 mock 回归之外，支持对真实模型跑 benchmark 并收集指标。
 
-- 显式规划：模型先输出可执行计划
-- ReAct 推理链：Thought -> Action -> Observation 显式化
-- 自我纠错：工具失败或结果不符时，反思并换方案
-- 任务完成判定：明确判断目标是否达成，而非仅看是否不再调工具
+## 实现顺序
 
-## 二、设计决策
+按依赖顺序分 4 个阶段实现，每个阶段独立 commit：
 
-| 决策 | 选择 | 原因 |
-|------|------|------|
-| 规划模式 | 默认启用 | 用户选择，让 CLI 每个任务都先出计划 |
-| 规划触发 | 所有非简单对话 | 简单对话会被计划为「单步：直接回答」 |
-| 计划结构 | 步骤数组（PlanStep） | 清晰、可追踪、可评估 |
-| 推理链 | 内置在 AgentLoop 中 | 保持单 Agent 架构简洁 |
-| 失败处理 | 记录失败，模型反思后重新规划 | 不自动无限重试，设最大反思次数 |
+### 第一阶段：计划与执行绑定
 
-## 三、新增模块
+#### 数据模型改造 `packages/agent-core/src/planning/types.ts`
 
-### 1. `packages/agent-core/src/planning/types.ts`
-
-类型定义：
+`PlanStep` 增加可选约束字段：
 
 ```ts
-interface PlanStep {
+export interface PlanStep {
   id: string;
   description: string;
   toolName?: string;
   expectedOutcome?: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
+  allowedTools?: string[];
+  requiredTool?: string;
+  strict?: boolean;
+  children?: PlanStep[];
+  parentId?: string;
 }
+```
 
-interface Plan {
-  steps: PlanStep[];
-  reasoning: string;
-}
+`ReasoningStep` 增加 `planStepId`：
 
-interface ReasoningStep {
+```ts
+export interface ReasoningStep {
   thought?: string;
   action?: ToolCall;
   observation?: ToolResult;
   reflection?: string;
-}
-
-interface JudgeResult {
-  complete: boolean;
-  reasoning: string;
-  nextAction: 'continue' | 'replan' | 'retry' | 'finalize';
+  planStepId?: string;
+  failureAnalysis?: FailureAnalysis;
 }
 ```
 
-### 2. `packages/agent-core/src/planning/Planner.ts`
+#### 执行绑定 `packages/agent-core/src/agents/AgentLoop.ts`
 
-职责：根据用户意图和可用工具生成初始计划。
+- `executeStep` 接收当前 `PlanStep`。
+- 如果 step 有 `requiredTool` 或 `allowedTools`，调用 `callModel` 时只传入这些工具的 schema（通过 `toolRegistry` 子集）。
+- 模型返回 tool calls 后，检查是否使用了允许的工具：
+  - 若偏离计划，标记 step 为 `failed`，调用 judge 决定 retry/replan。
+  - 记录 `failureAnalysis` 到 `ReasoningStep`。
+- 每次 thought/action/observation 都记录 `planStepId`。
 
-- 输入：用户消息、可用工具 schema
-- 输出：`Plan` 对象
-- 实现：通过模型调用 + system prompt 要求输出 JSON 计划
-- 失败回退：若解析失败，返回单步计划「直接回答用户」
+#### 推理链 `packages/agent-core/src/planning/ReasoningChain.ts`
 
-### 3. `packages/agent-core/src/planning/ReasoningChain.ts`
+- `commitStep(planStepId)` 方法将当前推理步骤绑定到 plan step。
+- `getStepsByPlanStep(planStepId)` 方便查询。
 
-职责：记录 ReAct 推理链。
+### 第二阶段：结构化反思 / 失败分析
 
-- `addThought(thought: string)`
-- `addAction(action: ToolCall)`
-- `addObservation(observation: ToolResult)`
-- `addReflection(reflection: string)`
-- `toMessages()`：将推理链转为 `Message[]` 供模型消费
+#### 数据模型 `packages/agent-core/src/planning/types.ts`
 
-### 4. `packages/agent-core/src/planning/TaskJudge.ts`
-
-职责：判断任务是否完成或需要重新规划。
-
-- 输入：当前计划、最近一条/多条推理步骤、工具结果
-- 输出：`JudgeResult`
-- 实现：模型调用，prompt 要求评估当前状态并给出结论
-
-## 四、修改 AgentLoop
-
-### 4.1 扩展事件类型
-
-在 `AgentLoopEvent` 中新增：
+新增 `FailureAnalysis`：
 
 ```ts
-type AgentLoopEvent =
-  | { type: 'plan'; plan: Plan }
-  | { type: 'thought'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall }
-  | { type: 'tool_result'; toolResult: ToolResult }
-  | { type: 'reflection'; content: string }
-  | { type: 'message'; content: string };
+export interface FailureAnalysis {
+  category: 'tool_failure' | 'plan_mismatch' | 'missing_info' | 'wrong_args' | 'other';
+  affectedStepIds?: string[];
+  rootCause?: string;
+  recommendation?: string;
+}
 ```
 
-### 4.2 重构内部循环
+#### Judge 改造 `packages/agent-core/src/planning/TaskJudge.ts`
 
-`AgentLoop.chat()` 改为三阶段循环：
+- `judgeSchema` 扩展 `failureAnalysis` 字段。
+- Prompt 明确要求模型输出失败类别、根因、建议。
+- 返回 `JudgeResult` 时包含结构化分析。
 
-```text
-1. Planning 阶段
-   - 调用 Planner 生成 Plan
-   - 发送 plan 事件
+#### AgentLoop 重规划 `packages/agent-core/src/agents/AgentLoop.ts`
 
-2. Execution 阶段（每步循环）
-   - 模型产生 Thought + Action
-   - 发送 thought 事件
-   - 执行工具，得到 Observation
-   - 发送 tool_call / tool_result 事件
-   - 记录 ReasoningStep
+- `replan` 接收 `failureAnalysis` 而不是简单字符串。
+- 将 `affectedStepIds` 和 `recommendation` 传给 `Planner.createPlan`，让新计划更精准。
+- 发出更丰富的 `reflection` 事件。
 
-3. Judging 阶段
-   - 调用 TaskJudge 判断是否完成
-   - 如果 complete：请求模型生成最终回答
-   - 如果 replan：回到 Planning 阶段，更新计划
-   - 如果 retry：重试上一步
-   - 如果 continue：执行下一步
-```
+### 第三阶段：层级计划
 
-### 4.3 保持向后兼容
+#### Planner 改造 `packages/agent-core/src/planning/Planner.ts`
 
-- `AgentLoopOptions` 默认启用 planning
-- 提供 `enablePlanning?: boolean` 选项，关闭后行为与 Phase 2 相同
+- Zod schema 支持 `children` 递归。
+- Prompt 要求模型对复杂步骤拆分子步骤。
+- `planSchema` 版本保持向后兼容：无 `children` 时仍是平级计划。
 
-## 五、CLI 更新
+#### AgentLoop 执行树 `packages/agent-core/src/agents/AgentLoop.ts`
 
-`apps/cli/src/index.ts` 的 `printEvent` 函数扩展：
+- 将单索引 `currentStepIndex` 改为深度优先遍历树。
+- 使用栈结构：遇到有 `children` 的 step，先执行子步骤，再回父步骤。
+- 父步骤状态由子步骤聚合：全部完成则父完成，任一失败则父失败。
+- 对每个 step 执行第一阶段绑定的逻辑。
 
-```text
-[计划]
-1. 读取 notes.txt
-2. 写入 summary.md
+#### 推理链 `packages/agent-core/src/planning/ReasoningChain.ts`
 
-[思考] 我需要先了解 notes.txt 的内容
-[调用工具] read_file: {"path":"notes.txt"}
-[工具结果] {"success":true,...}
-[思考] 已经读取，接下来写入 summary.md
-[调用工具] write_file: {...}
-[工具结果] {"success":true,...}
-[反思] 所有步骤已完成，可以生成最终回答
+- 支持嵌套 `subSteps`。
+- `toMessages()` 递归渲染层级。
 
-Agent: 已完成！已创建 summary.md
-```
+### 第四阶段：真实模型评估
 
-新增 `/reasoning` 命令显示当前推理链。
+#### EvalRunner 模式 `packages/agent-core/src/eval/types.ts` 和 `runner.ts`
 
-## 六、API 更新（可选但建议）
+- `EvalRunnerOptions` 增加 `mode?: 'mock' | 'real'`。
+- `mock` 模式保持当前行为（使用 fixture 预设响应）。
+- `real` 模式不 mock `config.openai.chat.completions.create`，直接调用真实模型。
+- `EvalResult` 增加指标：
+  - `tokenUsage?: { prompt_tokens, completion_tokens, total_tokens }`
+  - `planningMetrics?: { planCount, replanCount, retryCount, planStepCount }`
+  - `reflectionCount`
 
-`apps/api/src/routes/chat.ts` 更新为：
+#### 断言扩展 `packages/agent-core/src/eval/assertions.ts`
 
-- 创建 `ContextManager` 和 `ToolRegistry`
-- 传给 `AgentLoop`
-- 返回的 `events` 包含 planning 事件，客户端可流式展示
+- 新增 `assertPlanEventContains(events, phrases)`：检查 plan 事件是否包含预期高层步骤。
 
-本次先做基础接入，流式留到 Phase 6。
+#### 新场景 `packages/agent-core/src/eval/scenarios/real-model-planning.ts`
 
-## 七、测试计划
+- 一个适合真实模型评估的 planning 场景。
+- 使用 `requiredTools` 而不是 `expectedTools`。
+- 检查最终回答质量和 plan 事件。
 
-新增 `packages/agent-core/tests/planning/`：
+#### CLI 入口 `apps/cli/src/eval.ts`
 
-1. `planner.test.ts`：Planner 生成计划、解析失败回退
-2. `reasoning-chain.test.ts`：记录 thought/action/observation
-3. `task-judge.test.ts`：完成/重试/重新规划判断
-4. `planning-agent-loop.test.ts`：完整 planning 循环，含成功路径和失败自纠路径
+- 支持 `--real` 参数切换到真实模型评估。
 
-## 八、文件变更清单
+## 测试计划
 
-```text
-新增：
-  packages/agent-core/src/planning/types.ts
-  packages/agent-core/src/planning/Planner.ts
-  packages/agent-core/src/planning/ReasoningChain.ts
-  packages/agent-core/src/planning/TaskJudge.ts
-  packages/agent-core/tests/planning/planner.test.ts
-  packages/agent-core/tests/planning/reasoning-chain.test.ts
-  packages/agent-core/tests/planning/task-judge.test.ts
-  packages/agent-core/tests/planning/planning-agent-loop.test.ts
+每个阶段新增/更新测试：
 
-修改：
-  packages/agent-core/src/agents/AgentLoop.ts
-  packages/agent-core/src/agents/types.ts
-  packages/agent-core/src/index.ts
-  apps/cli/src/index.ts
-  apps/api/src/routes/chat.ts
-```
+1. `packages/agent-core/tests/planning/planning-agent-loop.test.ts`：计划绑定、工具偏离检测。
+2. `packages/agent-core/tests/planning/task-judge.test.ts`：结构化 failureAnalysis。
+3. `packages/agent-core/tests/planning/planner.test.ts`：层级计划解析。
+4. `packages/agent-core/tests/eval/scenarios.test.ts`：真实模型场景（mock 模式）。
 
-## 九、Git 提交
+## 文档
 
-```text
-feat: add planning and self-correction loop
-```
+- `docs/optimization-notes.md`：更新相关条目状态。
+- `docs/phase4-summary.md`：补充规划增强说明。
+- 可能新增 `docs/phase13-planning-enhancements.md` 统一记录。
 
-## 十、验证标准
+## 验证标准
 
 - `pnpm build` 通过
 - `pnpm test` 全部通过
-- CLI 实测：
-  - 复杂任务能生成计划
-  - 工具失败时模型能反思并换方案
-  - 简单任务也能直接回答
+- 手动测试：
+  1. 运行一个复杂任务，观察是否生成多步层级计划。
+  2. 观察工具偏离时是否被检测并触发反思。
+  3. 运行 `pnpm eval --real`（或对应命令）对真实模型跑评估。
 
----
+## 提交信息
 
-请确认此方案后，我开始实现 Phase 4。
+分阶段提交：
+
+```text
+feat: bind plan steps to tool execution and enforce expected tools
+feat: add structured failure analysis to task judge
+feat: support hierarchical plans with nested substeps
+feat: support real-model evaluation with metrics
+```

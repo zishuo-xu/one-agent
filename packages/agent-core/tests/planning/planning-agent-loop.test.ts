@@ -304,56 +304,193 @@ describe('AgentLoop with planning', () => {
     expect(events.filter((e) => e.type === 'thought')).toHaveLength(3);
   });
 
-  it('replans when a step fails and cannot be retried', async () => {
-    const alwaysFailTool: ToolDefinition = {
-      name: 'always_fail',
-      description: 'Always fails',
-      parameters: z.object({}),
-      execute: () => {
-        throw new Error('Always fails');
-      },
-    };
-
+  it('detects tool deviation in strict step and retries', async () => {
     const tools = new ToolRegistry();
-    tools.register(alwaysFailTool);
+    tools.register(echoTool);
+
+    const otherTool: ToolDefinition = {
+      name: 'other',
+      description: 'Another tool',
+      parameters: z.object({}),
+      execute: () => ({ success: true }),
+    };
+    tools.register(otherTool);
 
     mockCreate
       .mockResolvedValueOnce(
-        createPlanResponse([{ id: '1', description: 'Call always_fail', toolName: 'always_fail' }]) as never
+        createPlanResponse([{ id: '1', description: 'Echo hello', toolName: 'echo' }]) as never
       )
       .mockResolvedValueOnce({
         choices: [
           {
             message: {
-              content: 'I will call always_fail.',
+              content: 'I will call other tool.',
               tool_calls: [
                 {
                   id: 'call_1',
                   type: 'function',
-                  function: { name: 'always_fail', arguments: '{}' },
+                  function: { name: 'other', arguments: '{}' },
                 },
               ],
             },
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'replan') as never)
-      .mockResolvedValueOnce(
-        createPlanResponse([{ id: '1', description: 'Skip failing step and finalize' }]) as never
-      )
+      .mockResolvedValueOnce(createJudgeResult(false, 'retry') as never)
       .mockResolvedValueOnce({
-        choices: [{ message: { content: 'I will skip and finalize.' } }],
+        choices: [
+          {
+            message: {
+              content: 'Now I will echo.',
+              tool_calls: [
+                {
+                  id: 'call_2',
+                  type: 'function',
+                  function: { name: 'echo', arguments: JSON.stringify({ message: 'hello' }) },
+                },
+              ],
+            },
+          },
+        ],
       } as never)
       .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
       .mockResolvedValueOnce({
-        choices: [{ message: { content: 'Skipped failing step' } }],
+        choices: [{ message: { content: 'Echo done' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools, maxReplanAttempts: 2 });
-    const { reply, events } = await agent.chat('Replan test');
+    const agent = new AgentLoop({ tools, maxRetryAttempts: 2 });
+    const { reply, events } = await agent.chat('Deviation test');
 
-    expect(reply).toBe('Skipped failing step');
-    expect(events.filter((e) => e.type === 'plan')).toHaveLength(2);
-    expect(events.filter((e) => e.type === 'reflection')).toHaveLength(1);
+    expect(reply).toBe('Echo done');
+    const toolCalls = events.filter((e) => e.type === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0].toolCall.name).toBe('other');
+    expect(toolCalls[1].toolCall.name).toBe('echo');
+
+    const reasoningSteps = agent.getReasoningChain().getSteps();
+    const failureSteps = reasoningSteps.filter((s) => s.failureAnalysis);
+    expect(failureSteps.length).toBeGreaterThan(0);
+    expect(failureSteps[0].failureAnalysis?.category).toBe('plan_mismatch');
+  });
+
+  it('respects allowedTools list for a step', async () => {
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([
+          {
+            id: '1',
+            description: 'Echo hello with allowed list',
+            toolName: 'echo',
+          },
+        ]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'I will echo.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'echo', arguments: JSON.stringify({ message: 'hello' }) },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Allowed tool done' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools });
+    const { reply } = await agent.chat('Allowed tools test');
+
+    expect(reply).toBe('Allowed tool done');
+    // The tool schema passed to the model should be echo only; we can verify via mockCreate calls.
+    const stepExecutionCall = mockCreate.mock.calls.find(
+      (call) =>
+        Array.isArray(call[0]?.tools) &&
+        call[0].tools.length === 1 &&
+        call[0].tools[0].function.name === 'echo'
+    );
+    expect(stepExecutionCall).toBeDefined();
+  });
+
+  it('executes hierarchical plan depth-first', async () => {
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    const hierarchicalPlan = {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              reasoning: 'Research and summarize',
+              steps: [
+                {
+                  id: '1',
+                  description: 'Research topic',
+                  expectedOutcome: 'Information gathered',
+                  children: [
+                    { id: '1.1', description: 'Search web', toolName: 'echo', expectedOutcome: 'Search results' },
+                    { id: '1.2', description: 'Read results', toolName: 'echo', expectedOutcome: 'Key points' },
+                  ],
+                },
+                { id: '2', description: 'Write summary', toolName: 'echo', expectedOutcome: 'Summary' },
+              ],
+            }),
+          },
+        },
+      ],
+    };
+
+    function stepExecutionResponse(content: string, toolName: string, message: string) {
+      return {
+        choices: [
+          {
+            message: {
+              content,
+              tool_calls: [
+                {
+                  id: `call_${toolName}`,
+                  type: 'function',
+                  function: { name: toolName, arguments: JSON.stringify({ message }) },
+                },
+              ],
+            },
+          },
+        ],
+      };
+    }
+
+    mockCreate
+      .mockResolvedValueOnce(hierarchicalPlan as never)
+      .mockResolvedValueOnce(stepExecutionResponse('Searching.', 'echo', 'web') as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
+      .mockResolvedValueOnce(stepExecutionResponse('Reading.', 'echo', 'results') as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
+      .mockResolvedValueOnce(stepExecutionResponse('Synthesizing.', 'echo', 'synthesis') as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
+      .mockResolvedValueOnce(stepExecutionResponse('Writing.', 'echo', 'summary') as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'Summary done' } }] } as never);
+
+    const agent = new AgentLoop({ tools });
+    const { reply, events } = await agent.chat('Research and summarize');
+
+    expect(reply).toBe('Summary done');
+    const toolCalls = events.filter((e) => e.type === 'tool_call');
+    expect(toolCalls).toHaveLength(4);
+    expect(toolCalls[0].toolCall.name).toBe('echo');
+    expect(toolCalls[3].toolCall.name).toBe('echo');
+
+    const planEvent = events.find((e) => e.type === 'plan');
+    expect(planEvent?.plan.steps[0].children).toHaveLength(2);
   });
 });

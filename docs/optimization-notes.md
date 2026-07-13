@@ -19,6 +19,7 @@
 | Phase 8：全局 CLI 命令 | ✅ | `workspace.ts`、全局 `one-agent` 命令 |
 | Phase 9：任务持久化 | ✅ | `SqliteTaskStore`、`TaskQueue` restore、API 重启恢复 |
 | Phase 10：长期记忆检索 | ✅ | `MemoryStore`、`MemoryExtractor`、跨 thread 召回 |
+| Phase 11：规划能力深度增强 | ✅ | 计划绑定、层级计划、结构化反思、真实模型评估 |
 
 ---
 
@@ -82,20 +83,20 @@
 1. **Planner JSON 输出稳定性** ✅  
    已优化。`Planner` 与 `TaskJudge` 在解析 JSON 前先剥离 markdown 代码块、提取首个 JSON 对象；同时启用 `response_format: { type: 'json_object' }` 并在 prompt 中加入 one-shot 示例，降低回退为单步计划的概率。
 
-2. **计划与执行绑定**  
-   当前计划生成后，每步执行时模型仍可自由决定。可加强约束，让模型严格按计划步骤执行。
+2. **计划与执行绑定** ✅  
+   已支持。`PlanStep` 新增 `toolName` / `allowedTools` / `requiredTool` / `strict` 等约束；`AgentLoop.executeStep` 根据约束限制可调用工具 schema，并在工具偏离计划时记录 `failureAnalysis` 并触发重试/重规划。
 
-3. **子目标拆解**  
-   当前计划是平级步骤。可支持层级计划（目标 → 子目标 → 步骤）。
+3. **子目标拆解** ✅  
+   已支持。`Planner` 的 JSON schema 支持递归 `children`；`AgentLoop` 按后序遍历深度优先执行子步骤，父步骤状态由子步骤聚合。
 
-4. **反思质量提升**  
-   当前 reflection 是简单字符串拼接。可让模型显式输出失败原因和新方案。
+4. **反思质量提升** ✅  
+   已支持。`TaskJudge` 输出结构化 `failureAnalysis`（category、affectedStepIds、rootCause、recommendation），`AgentLoop.replan` 将其作为上下文生成更精准的新计划。
 
 5. **规划开关粒度**  
    目前是整个 AgentLoop 开启/关闭 planning。可支持按任务类型自动判断是否启用 planning（简单问题直接回答，复杂问题才规划）。
 
-6. **推理链持久化**  
-   当前 reasoning chain 只存在于内存。Phase 5 持久化后可跨会话查看。
+6. **推理链持久化** ✅  
+   当前 reasoning chain 已随 run 持久化到 `agent_runs.reasoning_chain`。`ReasoningChain` 支持 `planStepId` 绑定，方便后续按 plan step 查询。
 
 ---
 
@@ -163,8 +164,8 @@
 4. **Evaluation 指标细化**  
    目前只有 pass/fail。可增加：token 消耗、运行步数、重试次数、耗时、规划质量评分。
 
-5. **真实模型评估**  
-   当前 Evaluation 是确定性 mock 回归。可对真实模型跑定期评估（benchmark），把结果与 mock 回归分开管理。
+5. **真实模型评估** ✅  
+   已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式继续用确定性 fixtures，real 模式直接调用真实模型；`EvalResult` 增加 `planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行 `real-model-planning` 场景。
 
 6. **Trace 与 Evaluation 联动**  
    评估失败时自动把相关 trace 保存到失败案例集，用于后续调试或 prompt 迭代。
@@ -199,11 +200,15 @@
 | 🟠 高 | 任务持久化（✅ 已实现） | 当前进程重启丢失所有任务，生产环境必备 |
 | 🟠 高 | Trace 查询与可视化（✅ 已实现） | 当前只有原始存储接口，需要暴露查询能力 |
 | 🟠 高 | Evaluation 数据集扩展（✅ 已实现） | 目前只有 10 个场景，已扩展覆盖拒绝、空目录、文件恢复、长文本摘要、多工具规划等边界 |
+| 🟠 高 | 计划与执行绑定（✅ 已实现） | 防止模型在 planning 模式下偏离既定步骤，提升可预测性 |
+| 🟠 高 | 结构化反思与失败分析（✅ 已实现） | 让 Judge 显式输出根因与建议，支撑精准重规划 |
+| 🟠 高 | 真实模型评估（✅ 已实现） | mock 回归之外需对真实模型跑 benchmark 并收集指标 |
 | 🟡 中 | 任务去重与幂等（✅ 已实现） | 防止客户端重复提交导致重复执行 |
 | 🟡 中 | 任务超时（✅ 已实现） | 当前依赖外部取消，应有默认超时保护 |
 | 🟡 中 | 重试与死信队列（✅ 已实现） | 模型限流、网络抖动应可自动恢复 |
 | 🟡 中 | 长期记忆检索（✅ 已实现） | Phase 7 Evaluation 需要超越对话历史的知识 |
 | 🟡 中 | Planner JSON 输出稳定性 | 影响 planning 体验，但已有 fallback |
+| 🟡 中 | 层级计划（✅ 已实现） | 复杂任务需要子目标拆解 |
 | 🟢 低 | SSE 断线重连 | 提升体验，但非核心能力 |
 | 🟢 低 | 工具自动扫描注册（✅ 已实现） | 减少新增工具时的样板代码 |
 | 🟢 低 | 系统 prompt 热切换 | 提升 CLI 交互体验，非核心能力 |
@@ -224,6 +229,7 @@
 - `docs/phase9-task-persistence.md`
 - `docs/phase10-memory.md`
 - `docs/phase1-architecture.md`
+- `docs/phase11-planning-enhancements.md`
 - `SIMPLIFIED_AGENT_PROJECT_ROADMAP.md`
 
 ---

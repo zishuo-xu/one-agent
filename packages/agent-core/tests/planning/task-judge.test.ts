@@ -123,4 +123,59 @@ describe('TaskJudge', () => {
     expect(result.complete).toBe(true);
     expect(result.nextAction).toBe('finalize');
   });
+
+  it('parses structured failure analysis', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              complete: false,
+              reasoning: 'Tool failed',
+              nextAction: 'retry',
+              failureAnalysis: {
+                category: 'tool_failure',
+                affectedStepIds: ['1'],
+                rootCause: 'Network error',
+                recommendation: 'Retry with timeout',
+              },
+            }),
+          },
+        },
+      ],
+    } as never);
+
+    const judge = new TaskJudge();
+    const result = await judge.judge(samplePlan, []);
+
+    expect(result.nextAction).toBe('retry');
+    expect(result.failureAnalysis).toBeDefined();
+    expect(result.failureAnalysis?.category).toBe('tool_failure');
+    expect(result.failureAnalysis?.affectedStepIds).toEqual(['1']);
+    expect(result.failureAnalysis?.recommendation).toBe('Retry with timeout');
+  });
+
+  it('ignores invalid failure analysis shape', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              complete: true,
+              reasoning: 'Done',
+              nextAction: 'finalize',
+              failureAnalysis: 'not an object',
+            }),
+          },
+        },
+      ],
+    } as never);
+
+    const judge = new TaskJudge();
+    const result = await judge.judge(samplePlan, []);
+
+    expect(result.complete).toBe(false);
+    expect(result.nextAction).toBe('continue');
+    expect(result.failureAnalysis).toBeUndefined();
+  });
 });

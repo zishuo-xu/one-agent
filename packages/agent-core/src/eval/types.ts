@@ -38,6 +38,27 @@ export interface EvalResult {
   toolCalls: ToolCall[];
   errors: string[];
   durationMs: number;
+  tokenUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  planningMetrics?: {
+    planCount: number;
+    replanCount: number;
+    retryCount: number;
+    planStepCount: number;
+  };
+  reflectionCount?: number;
+}
+
+export interface EvalRunnerOptions {
+  tasks: EvalTask[];
+  workspaceRoot: string;
+  enablePlanning?: boolean;
+  defaultTimeoutMs?: number;
+  /** When 'real', the runner does not mock the OpenAI client and lets AgentLoop call the real model. */
+  mode?: 'mock' | 'real';
 }
 
 export interface EvalRunSummary {

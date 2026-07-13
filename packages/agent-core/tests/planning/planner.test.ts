@@ -142,26 +142,39 @@ describe('Planner', () => {
     expect(plan.steps[0].description).toContain('Say hi');
   });
 
-  it('uses plain call fallback when response_format is unsupported and returns valid JSON', async () => {
-    mockCreate
-      .mockRejectedValueOnce(new Error('Unsupported response_format') as never)
-      .mockResolvedValueOnce({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                reasoning: 'Direct answer',
-                steps: [{ id: '1', description: 'Reply' }],
-              }),
-            },
+  it('parses hierarchical plan with nested children', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              reasoning: 'Research topic and summarize',
+              steps: [
+                {
+                  id: '1',
+                  description: 'Research topic',
+                  expectedOutcome: 'Gather information',
+                  children: [
+                    { id: '1.1', description: 'Search web', toolName: 'echo', expectedOutcome: 'Search results' },
+                    { id: '1.2', description: 'Read results', toolName: 'echo', expectedOutcome: 'Key points' },
+                  ],
+                },
+                { id: '2', description: 'Write summary', toolName: 'echo', expectedOutcome: 'Summary file' },
+              ],
+            }),
           },
-        ],
-      } as never);
+        },
+      ],
+    } as never);
 
     const planner = new Planner();
-    const plan = await planner.createPlan('Say hi', [dummyTool]);
+    const plan = await planner.createPlan('Research and summarize AI', [dummyTool]);
 
-    expect(plan.steps).toHaveLength(1);
-    expect(plan.steps[0].description).toBe('Reply');
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps[0].children).toHaveLength(2);
+    expect(plan.steps[0].children?.[0].parentId).toBe('1');
+    expect(plan.steps[0].children?.[1].parentId).toBe('1');
+    expect(plan.steps[0].children?.[0].status).toBe('pending');
+    expect(plan.steps[1].parentId).toBeUndefined();
   });
 });

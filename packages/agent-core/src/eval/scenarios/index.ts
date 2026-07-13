@@ -13,6 +13,7 @@ import { emptyWorkspaceQueryTask } from './empty-workspace-query.js';
 import { fileNotFoundRecoveryTask } from './file-not-found-recovery.js';
 import { summarizeLongFileTask } from './summarize-long-file.js';
 import { multiToolPlanningTask } from './multi-tool-planning.js';
+import { realModelPlanningTask } from './real-model-planning.js';
 
 export const builtInEvalTasks = [
   simpleQaTask,
@@ -30,6 +31,7 @@ export const builtInEvalTasks = [
   fileNotFoundRecoveryTask,
   summarizeLongFileTask,
   multiToolPlanningTask,
+  realModelPlanningTask,
 ];
 
 export {
@@ -48,4 +50,5 @@ export {
   fileNotFoundRecoveryTask,
   summarizeLongFileTask,
   multiToolPlanningTask,
+  realModelPlanningTask,
 };

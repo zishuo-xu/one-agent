@@ -19,6 +19,7 @@ import {
   fileNotFoundRecoveryTask,
   summarizeLongFileTask,
   multiToolPlanningTask,
+  realModelPlanningTask,
 } from '../../src/eval/scenarios/index.js';
 import { createToolCallResponse, createTextResponse } from '../../src/eval/fixtures.js';
 
@@ -292,5 +293,46 @@ describe('EvalRunner built-in scenarios', () => {
     expect(summary.total).toBe(1);
     expect(summary.passed).toBe(1);
     expect(summary.results[0].events.some((e) => e.type === 'plan')).toBe(true);
+  });
+
+  it('passes real-model-planning in mock mode', async () => {
+    const planResponse = {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              reasoning: 'Read notes.txt to answer.',
+              steps: [
+                { id: '1', description: 'Read notes.txt', toolName: 'read_file', expectedOutcome: 'Content retrieved' },
+              ],
+            }),
+          },
+        },
+      ],
+    };
+    const judgeResponse = {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ complete: true, reasoning: 'Done', nextAction: 'finalize' }),
+          },
+        },
+      ],
+    };
+
+    mockCreate
+      .mockResolvedValueOnce(planResponse as never)
+      .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'notes.txt' } }]) as never)
+      .mockResolvedValueOnce(judgeResponse as never)
+      .mockResolvedValueOnce(createTextResponse('The main topic is artificial intelligence and software engineering.') as never);
+
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [realModelPlanningTask], workspaceRoot, mode: 'mock' });
+
+    expect(summary.total).toBe(1);
+    expect(summary.passed).toBe(1);
+    expect(summary.results[0].events.some((e) => e.type === 'plan')).toBe(true);
+    expect(summary.results[0].planningMetrics).toBeDefined();
+    expect(summary.results[0].planningMetrics?.planStepCount).toBe(1);
   });
 });

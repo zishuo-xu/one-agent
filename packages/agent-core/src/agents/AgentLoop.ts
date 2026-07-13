@@ -10,7 +10,7 @@ import { PersistenceContextManager } from '../context/PersistenceContextManager.
 import { Planner } from '../planning/Planner.js';
 import { ReasoningChain } from '../planning/ReasoningChain.js';
 import { TaskJudge } from '../planning/TaskJudge.js';
-import { JudgeResult, Plan, PlanStep } from '../planning/types.js';
+import { JudgeResult, Plan, PlanStep, FailureAnalysis } from '../planning/types.js';
 import { getSharedConnection } from '../db/connection.js';
 import { RunStore } from '../db/runStore.js';
 import { ThreadStore } from '../db/threadStore.js';
@@ -263,13 +263,14 @@ export class AgentLoop extends EventEmitter {
     let plan = await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memories);
     this.emitEvent({ type: 'plan', plan });
 
+    let executionOrder = this.flattenPlanPostOrder(plan);
     let currentStepIndex = 0;
     let replanAttempts = 0;
     let retryAttempts = 0;
 
     while (true) {
       this.checkSignal();
-      const step = plan.steps[currentStepIndex];
+      const step = executionOrder[currentStepIndex];
 
       if (!step) {
         const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
@@ -277,13 +278,41 @@ export class AgentLoop extends EventEmitter {
           return this.finalizeAnswer();
         }
         if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
-          plan = await this.replan(userMessage, plan);
+          plan = await this.replan(userMessage, plan, judge.failureAnalysis);
+          executionOrder = this.flattenPlanPostOrder(plan);
           replanAttempts++;
           currentStepIndex = 0;
           retryAttempts = 0;
           continue;
         }
         return this.finalizeAnswer();
+      }
+
+      if (step.children && step.children.length > 0) {
+        const anyChildFailed = step.children.some((child) => child.status === 'failed');
+        if (anyChildFailed) {
+          step.status = 'failed';
+          const failureAnalysis: FailureAnalysis = {
+            category: 'tool_failure',
+            affectedStepIds: [step.id, ...step.children.filter((c) => c.status === 'failed').map((c) => c.id)],
+            rootCause: 'One or more sub-steps failed.',
+            recommendation: 'Replan the affected sub-steps or provide a fallback.',
+          };
+          this.reasoningChain.addFailureAnalysis(failureAnalysis);
+          const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+          if (judge.complete || judge.nextAction === 'finalize') {
+            return this.finalizeAnswer();
+          }
+          if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
+            plan = await this.replan(userMessage, plan, judge.failureAnalysis ?? failureAnalysis);
+            executionOrder = this.flattenPlanPostOrder(plan);
+            replanAttempts++;
+            currentStepIndex = 0;
+            retryAttempts = 0;
+            continue;
+          }
+          return this.finalizeAnswer();
+        }
       }
 
       step.status = 'running';
@@ -294,17 +323,18 @@ export class AgentLoop extends EventEmitter {
         return this.finalizeAnswer();
       }
 
-      if (executionResult.next === 'retry' && retryAttempts < this.maxRetryAttempts) {
-        step.status = 'pending';
-        retryAttempts++;
-        continue;
-      }
-
       if (executionResult.next === 'replan' && replanAttempts < this.maxReplanAttempts) {
-        plan = await this.replan(userMessage, plan);
+        plan = await this.replan(userMessage, plan, executionResult.failureAnalysis);
+        executionOrder = this.flattenPlanPostOrder(plan);
         replanAttempts++;
         currentStepIndex = 0;
         retryAttempts = 0;
+        continue;
+      }
+
+      if (executionResult.next === 'retry' && retryAttempts < this.maxRetryAttempts) {
+        step.status = 'pending';
+        retryAttempts++;
         continue;
       }
 
@@ -314,18 +344,41 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
+  private flattenPlanPostOrder(plan: Plan): PlanStep[] {
+    const order: PlanStep[] = [];
+    const visit = (step: PlanStep) => {
+      if (step.children && step.children.length > 0) {
+        for (const child of step.children) {
+          visit(child);
+        }
+      }
+      order.push(step);
+    };
+    for (const step of plan.steps) {
+      visit(step);
+    }
+    return order;
+  }
+
   private async executeStep(
     step: PlanStep,
     plan: Plan,
     runId?: string
-  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final' }> {
+  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+    this.reasoningChain.setCurrentPlanStepId(step.id);
+
+    const constraint = this.resolveStepToolConstraint(step);
+    const allowedToolNames = constraint.requiredTool
+      ? [constraint.requiredTool]
+      : constraint.allowedTools;
+
     this.contextManager.addMessage({
       role: 'user',
-      content: this.buildStepPrompt(step, plan),
+      content: this.buildStepPrompt(step, plan, allowedToolNames, constraint.strict),
     });
 
     this.checkSignal();
-    const response = await this.callModel();
+    const response = await this.callModel({ allowedTools: allowedToolNames });
     const assistantMessage = response.choices[0]?.message;
 
     const thought = assistantMessage?.content?.trim() ?? '';
@@ -342,6 +395,7 @@ export class AgentLoop extends EventEmitter {
         arguments: this.safeParseArgs(tc.function.arguments),
       }));
 
+      // Record the model's tool calls before validating them so the trace is complete.
       this.contextManager.addMessage({
         role: 'assistant',
         content: thought,
@@ -351,7 +405,32 @@ export class AgentLoop extends EventEmitter {
       for (const call of toolCalls) {
         this.reasoningChain.addAction(call);
         this.emitEvent({ type: 'tool_call', toolCall: call });
+      }
 
+      const deviation = this.detectToolDeviation(toolCalls, constraint);
+      if (deviation) {
+        const failureAnalysis: FailureAnalysis = {
+          category: 'plan_mismatch',
+          affectedStepIds: [step.id],
+          rootCause: `Step required ${this.formatExpectedTools(constraint)} but model used: ${toolCalls.map((c) => c.name).join(', ')}`,
+          recommendation: 'Retry the step with the expected tool or replan if the tool set is insufficient.',
+        };
+        this.reasoningChain.addFailureAnalysis(failureAnalysis);
+        step.status = 'failed';
+        const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+        if (judge.complete || judge.nextAction === 'finalize') {
+          return { next: 'final' };
+        }
+        if (judge.nextAction === 'retry') {
+          return { next: 'retry', failureAnalysis };
+        }
+        if (judge.nextAction === 'replan') {
+          return { next: 'replan', failureAnalysis };
+        }
+        return { next: 'retry', failureAnalysis };
+      }
+
+      for (const call of toolCalls) {
         if (!this.toolExecutor) {
           const result: ToolResult = { success: false, error: 'No tool executor available' };
           this.reasoningChain.addObservation(result);
@@ -383,25 +462,64 @@ export class AgentLoop extends EventEmitter {
             return { next: 'final' };
           }
           if (judge.nextAction === 'retry') {
-            return { next: 'retry' };
+            return { next: 'retry', failureAnalysis: judge.failureAnalysis };
           }
           if (judge.nextAction === 'replan') {
-            return { next: 'replan' };
+            return { next: 'replan', failureAnalysis: judge.failureAnalysis };
           }
         }
       }
     }
 
     this.reasoningChain.commitStep();
+    this.reasoningChain.setCurrentPlanStepId(undefined);
     const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
 
     if (judge.complete || judge.nextAction === 'finalize') {
       return { next: 'final' };
     }
     if (judge.nextAction === 'replan') {
-      return { next: 'replan' };
+      return { next: 'replan', failureAnalysis: judge.failureAnalysis };
     }
     return { next: 'continue' };
+  }
+
+  private resolveStepToolConstraint(step: PlanStep): {
+    requiredTool?: string;
+    allowedTools?: string[];
+    strict: boolean;
+  } {
+    const requiredTool = step.requiredTool ?? step.toolName;
+    const strict = step.strict ?? (requiredTool !== undefined);
+    return { requiredTool, allowedTools: step.allowedTools, strict };
+  }
+
+  private detectToolDeviation(
+    toolCalls: ToolCall[],
+    constraint: { requiredTool?: string; allowedTools?: string[]; strict: boolean }
+  ): boolean {
+    if (!constraint.strict) {
+      return false;
+    }
+    if (constraint.requiredTool) {
+      return toolCalls.some((call) => call.name !== constraint.requiredTool);
+    }
+    if (constraint.allowedTools && constraint.allowedTools.length > 0) {
+      return toolCalls.some((call) => !constraint.allowedTools!.includes(call.name));
+    }
+    return false;
+  }
+
+  private formatExpectedTools(
+    constraint: { requiredTool?: string; allowedTools?: string[] }
+  ): string {
+    if (constraint.requiredTool) {
+      return `tool "${constraint.requiredTool}"`;
+    }
+    if (constraint.allowedTools && constraint.allowedTools.length > 0) {
+      return `one of [${constraint.allowedTools.join(', ')}]`;
+    }
+    return 'any available tool';
   }
 
   private async finalizeAnswer(): Promise<{ reply: string; events: AgentLoopEvent[] }> {
@@ -411,7 +529,7 @@ export class AgentLoop extends EventEmitter {
     });
 
     this.checkSignal();
-    const content = await this.streamModel(false);
+    const content = await this.streamModel({ includeTools: false });
 
     this.contextManager.addMessage({ role: 'assistant', content });
     this.emitEvent({ type: 'message', content });
@@ -419,22 +537,43 @@ export class AgentLoop extends EventEmitter {
     return { reply: content, events: this.events };
   }
 
-  private async replan(userMessage: string, currentPlan: Plan): Promise<Plan> {
-    const reflection = `The previous plan did not succeed. Plan: ${currentPlan.steps
-      .map((s) => s.description)
-      .join('; ')}`;
+  private async replan(userMessage: string, currentPlan: Plan, failureAnalysis?: FailureAnalysis): Promise<Plan> {
+    const reflection = failureAnalysis
+      ? `The previous plan did not succeed. Category: ${failureAnalysis.category}. ` +
+        `Root cause: ${failureAnalysis.rootCause ?? 'unknown'}. ` +
+        `Recommendation: ${failureAnalysis.recommendation ?? 'none'}. ` +
+        `Affected steps: ${failureAnalysis.affectedStepIds?.join(', ') ?? 'unknown'}.`
+      : `The previous plan did not succeed. Plan: ${currentPlan.steps
+          .map((s) => s.description)
+          .join('; ')}`;
     this.reasoningChain.addReflection(reflection);
     this.emitEvent({ type: 'reflection', content: reflection });
 
-    const newPlan = await this.planner.createPlan(userMessage, this.toolRegistry!.list());
+    const newPlan = await this.planner.createPlan(
+      userMessage,
+      this.toolRegistry!.list(),
+      this.currentMemoryText,
+      currentPlan,
+      failureAnalysis
+    );
     this.emitEvent({ type: 'plan', plan: newPlan });
     return newPlan;
   }
 
-  private buildStepPrompt(step: PlanStep, plan: Plan): string {
+  private buildStepPrompt(
+    step: PlanStep,
+    plan: Plan,
+    allowedToolNames?: string[],
+    strict?: boolean
+  ): string {
     const steps = plan.steps
       .map((s) => `${s.id}. ${s.description} ${s.status === 'completed' ? '✓' : ''}`)
       .join('\n');
+
+    const toolConstraint = allowedToolNames
+      ? `You must use one of these tools for this step: ${allowedToolNames.join(', ')}`
+      : 'You may use any available tool if needed.';
+    const strictHint = strict ? 'Do not deviate from the specified tool.' : '';
 
     return [
       'Execute the following step from the plan.',
@@ -445,24 +584,31 @@ export class AgentLoop extends EventEmitter {
       `Current step: ${step.description}`,
       step.expectedOutcome ? `Expected outcome: ${step.expectedOutcome}` : '',
       '',
+      toolConstraint,
+      strictHint,
+      '',
       'Think step by step. If you need a tool, call it. If the step can be completed without a tool, just explain.',
     ]
       .filter(Boolean)
       .join('\n');
   }
 
-  private async callModel(includeTools = true) {
+  private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}) {
+    const { includeTools = true, allowedTools } = options;
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
       try {
         const messages = await this.contextManager.buildContext();
+        const tools = includeTools
+          ? this.toolRegistry?.getSchemas(allowedTools)
+          : undefined;
         return await config.openai.chat.completions.create(
           {
             model: config.model,
             messages: messages as never,
-            tools: includeTools ? this.toolRegistry?.getSchemas() : undefined,
+            tools,
           },
           { timeout: this.timeoutMs }
         );
@@ -476,19 +622,23 @@ export class AgentLoop extends EventEmitter {
     );
   }
 
-  private async streamModel(includeTools = false): Promise<string> {
+  private async streamModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}): Promise<string> {
+    const { includeTools = false, allowedTools } = options;
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
       try {
         const messages = await this.contextManager.buildContext();
+        const tools = includeTools
+          ? this.toolRegistry?.getSchemas(allowedTools)
+          : undefined;
         const response = await config.openai.chat.completions.create(
           {
             model: config.model,
             messages: messages as never,
             stream: true,
-            tools: includeTools ? this.toolRegistry?.getSchemas() : undefined,
+            tools,
           },
           { timeout: this.timeoutMs }
         );

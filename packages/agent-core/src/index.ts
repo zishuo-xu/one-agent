@@ -74,7 +74,7 @@ export type {
 } from './planning/types.js';
 
 export { EvalRunner } from './eval/runner.js';
-export { builtInEvalTasks } from './eval/scenarios/index.js';
+export { builtInEvalTasks, realModelPlanningTask } from './eval/scenarios/index.js';
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
 export type { ExtractedFact } from './memory/MemoryExtractor.js';
 export type {

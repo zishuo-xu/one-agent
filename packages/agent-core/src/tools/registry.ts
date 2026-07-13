@@ -33,8 +33,11 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
-  getSchemas(): ToolSchema[] {
-    return this.list().map((tool) => ({
+  getSchemas(toolNames?: string[]): ToolSchema[] {
+    const tools = toolNames
+      ? toolNames.map((name) => this.get(name))
+      : this.list();
+    return tools.map((tool) => ({
       type: 'function',
       function: {
         name: tool.name,

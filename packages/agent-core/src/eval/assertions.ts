@@ -1,5 +1,6 @@
 import { AgentLoopEvent } from '../agents/AgentLoop.js';
 import { ToolCall } from '../tools/types.js';
+import { Plan } from '../planning/types.js';
 
 export function extractToolCalls(events: AgentLoopEvent[]): ToolCall[] {
   return events
@@ -79,6 +80,36 @@ export function assertToolEventuallyCalled(
 export function assertEventType(events: AgentLoopEvent[], type: AgentLoopEvent['type']): string | undefined {
   if (!events.some((e) => e.type === type)) {
     return `Expected event of type ${type}, but none found`;
+  }
+  return undefined;
+}
+
+export function assertPlanEventContains(
+  events: AgentLoopEvent[],
+  phrases: string[]
+): string | undefined {
+  if (phrases.length === 0) return undefined;
+  const planEvents = events.filter(
+    (e): e is { type: 'plan'; plan: Plan } => e.type === 'plan'
+  );
+  const descriptions: string[] = [];
+  const collect = (step: { description: string; children?: Array<{ description: string }> }) => {
+    descriptions.push(step.description);
+    if (step.children) {
+      for (const child of step.children) {
+        collect(child);
+      }
+    }
+  };
+  for (const event of planEvents) {
+    for (const step of event.plan.steps) {
+      collect(step);
+    }
+  }
+  const combined = descriptions.join('\n').toLowerCase();
+  const missing = phrases.filter((phrase) => !combined.includes(phrase.toLowerCase()));
+  if (missing.length > 0) {
+    return `Plan is missing expected descriptions: ${missing.join(', ')}`;
   }
   return undefined;
 }

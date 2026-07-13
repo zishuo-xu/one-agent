@@ -10,20 +10,16 @@ import {
   EvalRunSummary,
   EvalResult,
   EvalTask,
+  EvalRunnerOptions,
 } from './types.js';
 import {
   assertFinalAnswer,
   assertNoToolCalled,
   assertToolEventuallyCalled,
+  assertPlanEventContains,
   extractToolCalls,
 } from './assertions.js';
-
-export interface EvalRunnerOptions {
-  tasks: EvalTask[];
-  workspaceRoot: string;
-  enablePlanning?: boolean;
-  defaultTimeoutMs?: number;
-}
+import { Plan } from '../planning/types.js';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -83,6 +79,9 @@ export class EvalRunner {
       }
 
       const toolCalls = extractToolCalls(events);
+      const planEvents = events.filter(
+        (e): e is { type: 'plan'; plan: Plan } => e.type === 'plan'
+      );
 
       // Exact-order tool calls (for deterministic regression)
       if (task.expectedTools) {
@@ -155,6 +154,13 @@ export class EvalRunner {
         toolCalls,
         errors,
         durationMs: Date.now() - start,
+        planningMetrics: {
+          planCount: planEvents.length,
+          replanCount: Math.max(0, planEvents.length - 1),
+          retryCount: 0,
+          planStepCount: planEvents.reduce((sum, event) => sum + countPlanSteps(event.plan), 0),
+        },
+        reflectionCount: events.filter((e) => e.type === 'reflection').length,
       });
     }
 
@@ -165,4 +171,20 @@ export class EvalRunner {
       results,
     };
   }
+}
+
+function countPlanSteps(plan: Plan): number {
+  let count = 0;
+  const visit = (step: Plan['steps'][number]) => {
+    count++;
+    if (step.children) {
+      for (const child of step.children) {
+        visit(child);
+      }
+    }
+  };
+  for (const step of plan.steps) {
+    visit(step);
+  }
+  return count;
 }

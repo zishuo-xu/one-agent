@@ -1,31 +1,50 @@
 import { Message } from '../agents/types.js';
 import { ToolCall, ToolResult } from '../tools/types.js';
-import { ReasoningStep } from './types.js';
+import { ReasoningStep, FailureAnalysis } from './types.js';
 
 export class ReasoningChain {
   private steps: ReasoningStep[] = [];
   private currentStep: ReasoningStep = {};
+  private currentPlanStepId?: string;
+
+  setCurrentPlanStepId(planStepId?: string): void {
+    this.currentPlanStepId = planStepId;
+  }
+
+  getCurrentPlanStepId(): string | undefined {
+    return this.currentPlanStepId;
+  }
 
   addThought(thought: string): void {
     this.currentStep.thought = thought;
+    this.currentStep.planStepId = this.currentPlanStepId;
   }
 
   addAction(action: ToolCall): void {
     this.currentStep.action = action;
+    this.currentStep.planStepId = this.currentPlanStepId;
   }
 
   addObservation(observation: ToolResult): void {
     this.currentStep.observation = observation;
+    this.currentStep.planStepId = this.currentPlanStepId;
     this.steps.push({ ...this.currentStep });
     this.currentStep = {};
   }
 
   addReflection(reflection: string): void {
     this.currentStep.reflection = reflection;
+    this.currentStep.planStepId = this.currentPlanStepId;
+  }
+
+  addFailureAnalysis(failureAnalysis: FailureAnalysis): void {
+    this.currentStep.failureAnalysis = failureAnalysis;
+    this.currentStep.planStepId = this.currentPlanStepId;
   }
 
   commitStep(): void {
     if (this.hasCurrentStep()) {
+      this.currentStep.planStepId = this.currentPlanStepId;
       this.steps.push({ ...this.currentStep });
       this.currentStep = {};
     }
@@ -33,6 +52,10 @@ export class ReasoningChain {
 
   getSteps(): ReasoningStep[] {
     return [...this.steps];
+  }
+
+  getStepsByPlanStep(planStepId: string): ReasoningStep[] {
+    return this.steps.filter((s) => s.planStepId === planStepId);
   }
 
   toMessages(): Message[] {
@@ -84,7 +107,8 @@ export class ReasoningChain {
       !!this.currentStep.thought ||
       !!this.currentStep.action ||
       !!this.currentStep.observation ||
-      !!this.currentStep.reflection
+      !!this.currentStep.reflection ||
+      !!this.currentStep.failureAnalysis
     );
   }
 }
