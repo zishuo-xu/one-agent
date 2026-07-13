@@ -81,4 +81,87 @@ describe('Planner', () => {
 
     expect(plan.steps).toHaveLength(1);
   });
+
+  it('parses JSON wrapped in markdown fences', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: '```json\n' +
+              JSON.stringify({
+                reasoning: 'Read then write',
+                steps: [{ id: '1', description: 'Read file', toolName: 'read_file' }],
+              }) +
+              '\n```',
+          },
+        },
+      ],
+    } as never);
+
+    const planner = new Planner();
+    const plan = await planner.createPlan('Summarize notes', [dummyTool]);
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].description).toBe('Read file');
+  });
+
+  it('extracts JSON object from explanatory prefix', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content:
+              'Here is the plan in JSON format:\n' +
+              JSON.stringify({
+                reasoning: 'Direct answer',
+                steps: [{ id: '1', description: 'Reply to the user' }],
+              }),
+          },
+        },
+      ],
+    } as never);
+
+    const planner = new Planner();
+    const plan = await planner.createPlan('Say hi', [dummyTool]);
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].description).toBe('Reply to the user');
+  });
+
+  it('falls back when response_format is unsupported and response is still invalid', async () => {
+    mockCreate
+      .mockRejectedValueOnce(new Error('Unsupported response_format') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'not json' } }],
+      } as never);
+
+    const planner = new Planner();
+    const plan = await planner.createPlan('Say hi', [dummyTool]);
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].description).toContain('Say hi');
+  });
+
+  it('uses plain call fallback when response_format is unsupported and returns valid JSON', async () => {
+    mockCreate
+      .mockRejectedValueOnce(new Error('Unsupported response_format') as never)
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                reasoning: 'Direct answer',
+                steps: [{ id: '1', description: 'Reply' }],
+              }),
+            },
+          },
+        ],
+      } as never);
+
+    const planner = new Planner();
+    const plan = await planner.createPlan('Say hi', [dummyTool]);
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].description).toBe('Reply');
+  });
 });

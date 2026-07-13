@@ -196,10 +196,12 @@ d2f29d8 feat: add context manager with summarization
 
 ## 九、已知限制与后续优化
 
-1. **Planner JSON 输出不稳定**：当前 `glm-5.2` 模型对严格 JSON 格式输出不够稳定。后续可：
-   - 针对模型优化 prompt
-   - 使用支持 `response_format: json_object` 的模型
-   - 增加更多解析策略（如正则提取 JSON）
+1. **Planner JSON 输出稳定性** ✅ 已优化：
+   - 使用 `response_format: { type: 'json_object' }` 约束模型输出。
+   - 解析前剥离 markdown 代码块、提取首个 JSON 对象，兼容模型带前缀说明或包裹 JSON 的情况。
+   - 在 prompt 中加入 one-shot 示例，强化格式预期。
+   - 对 `TaskJudge` 同样使用 JSON 提取，避免判定阶段解析失败。
+   - 若模型仍返回非法 JSON，仍回退为单步计划。
 
 2. **计划步骤与工具调用不完全绑定**：模型即使计划中没有指定工具，也可能在执行步骤时调用工具。这是合理的 ReAct 行为，但需进一步评估。
 

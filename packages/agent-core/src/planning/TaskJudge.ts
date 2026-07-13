@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { config } from '../config.js';
 import { JudgeOptions, JudgeResult, Plan, ReasoningStep } from './types.js';
+import { extractJsonObject } from './extractJson.js';
 
 const judgeSchema = z.object({
   complete: z.boolean(),
@@ -117,8 +118,17 @@ export class TaskJudge {
   }
 
   private parseResult(raw: string): JudgeResult {
+    const extracted = extractJsonObject(raw);
+    if (!extracted) {
+      return {
+        complete: false,
+        reasoning: 'Judge response did not contain a JSON object; continuing execution.',
+        nextAction: 'continue',
+      };
+    }
+
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(extracted);
       const validated = judgeSchema.parse(parsed);
       return validated;
     } catch {

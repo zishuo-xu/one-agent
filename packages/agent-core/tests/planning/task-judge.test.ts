@@ -82,4 +82,45 @@ describe('TaskJudge', () => {
     expect(result.complete).toBe(false);
     expect(result.nextAction).toBe('continue');
   });
+
+  it('extracts JSON from markdown fences', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: '```json\n' +
+              JSON.stringify({ complete: false, reasoning: 'More steps needed', nextAction: 'continue' }) +
+              '\n```',
+          },
+        },
+      ],
+    } as never);
+
+    const judge = new TaskJudge();
+    const result = await judge.judge(samplePlan, []);
+
+    expect(result.complete).toBe(false);
+    expect(result.nextAction).toBe('continue');
+    expect(result.reasoning).toBe('More steps needed');
+  });
+
+  it('extracts JSON from explanatory prefix', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content:
+              'Based on the plan and history, here is my judgment:\n' +
+              JSON.stringify({ complete: true, reasoning: 'Done', nextAction: 'finalize' }),
+          },
+        },
+      ],
+    } as never);
+
+    const judge = new TaskJudge();
+    const result = await judge.judge(samplePlan, []);
+
+    expect(result.complete).toBe(true);
+    expect(result.nextAction).toBe('finalize');
+  });
 });
