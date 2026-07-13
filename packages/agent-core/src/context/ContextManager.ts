@@ -11,9 +11,10 @@ export class ContextManager {
   private messages: Message[] = [];
   private summaryMessage: Message | null = null;
   private lastSummarizedIndex = 0;
-  private readonly systemPrompt: string;
+  protected readonly systemPrompt: string;
   private readonly maxRecentMessages: number;
   private readonly summaryTrigger: number;
+  private memoryContext: string | null = null;
 
   constructor(options: ContextManagerOptions) {
     this.systemPrompt = options.systemPrompt;
@@ -27,6 +28,10 @@ export class ContextManager {
     this.messages.push(message);
   }
 
+  setMemoryContext(content: string): void {
+    this.memoryContext = content;
+  }
+
   getHistory(): Message[] {
     return [...this.messages];
   }
@@ -35,11 +40,12 @@ export class ContextManager {
     this.messages = [{ role: 'system', content: this.systemPrompt }];
     this.summaryMessage = null;
     this.lastSummarizedIndex = 1;
+    this.memoryContext = null;
   }
 
   async buildContext(): Promise<Message[]> {
     if (this.messages.length <= this.summaryTrigger) {
-      return [...this.messages];
+      return this.buildOutput(this.messages.slice(1));
     }
 
     const recentStart = Math.max(1, this.messages.length - this.maxRecentMessages);
@@ -52,27 +58,27 @@ export class ContextManager {
       this.lastSummarizedIndex = recentStart;
     }
 
-    return this.buildWithSummary(this.messages.slice(recentStart));
+    return this.buildOutput(this.messages.slice(recentStart));
   }
 
   getContextForDisplay(): Message[] {
     const recentStart = Math.max(1, this.messages.length - this.maxRecentMessages);
-    const context: Message[] = [];
-    context.push({ role: 'system', content: this.systemPrompt });
-    if (this.summaryMessage) {
-      context.push(this.summaryMessage);
-    }
-    context.push(...this.messages.slice(recentStart));
-    return context;
+    return this.buildOutput(this.messages.slice(recentStart));
   }
 
-  private buildWithSummary(recentMessages: Message[]): Message[] {
+  private buildOutput(messages: Message[]): Message[] {
     const context: Message[] = [];
     context.push({ role: 'system', content: this.systemPrompt });
+    if (this.memoryContext) {
+      context.push({
+        role: 'system',
+        content: `Relevant context from past conversations: ${this.memoryContext}`,
+      });
+    }
     if (this.summaryMessage) {
       context.push(this.summaryMessage);
     }
-    context.push(...recentMessages);
+    context.push(...messages);
     return context;
   }
 

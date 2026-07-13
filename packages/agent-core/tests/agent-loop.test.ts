@@ -48,8 +48,9 @@ describe('AgentLoop', () => {
     const { reply, events } = await agent.chat('Hi');
 
     expect(reply).toBe('Hello from assistant');
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({ type: 'message', content: 'Hello from assistant' });
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('message_delta');
+    expect(events[1]).toEqual({ type: 'message', content: 'Hello from assistant' });
     expect(agent.getHistory()).toHaveLength(3); // system + user + assistant
     expect(agent.getHistory()[1]).toEqual({ role: 'user', content: 'Hi' });
     expect(agent.getHistory()[2]).toEqual({
@@ -123,9 +124,10 @@ describe('AgentLoop', () => {
     const { reply, events } = await agent.chat('Please echo hello');
 
     expect(reply).toBe('Echo: hello');
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(4);
     expect(events[0].type).toBe('tool_call');
     expect(events[1].type).toBe('tool_result');
-    expect(events[2].type).toBe('message');
+    expect(events[2].type).toBe('message_delta');
+    expect(events[3].type).toBe('message');
   });
 });

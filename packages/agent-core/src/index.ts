@@ -17,6 +17,47 @@ export type {
 
 export { ContextManager } from './context/ContextManager.js';
 export type { ContextManagerOptions } from './context/ContextManager.js';
+export { PersistenceContextManager } from './context/PersistenceContextManager.js';
+export type { PersistenceContextManagerOptions } from './context/PersistenceContextManager.js';
+
+export {
+  createConnection,
+  getSharedConnection,
+  resetSharedConnection,
+} from './db/connection.js';
+export { ThreadStore } from './db/threadStore.js';
+export { MessageStore } from './db/messageStore.js';
+export { RunStore } from './db/runStore.js';
+export { ToolCallStore } from './db/toolCallStore.js';
+export { TraceEventStore } from './db/traceEventStore.js';
+export { SqliteTaskStore } from './db/taskStore.js';
+export { MemoryStore } from './db/memoryStore.js';
+export type {
+  Thread,
+  PersistedMessage,
+  AgentRun,
+  PersistedToolCall,
+  TraceEvent,
+  PersistedTask,
+  Memory,
+  CreateThreadInput,
+  CreateRunInput,
+  CreateToolCallInput,
+  CreateTraceEventInput,
+  CreateTaskPersistedInput,
+  CreateMemoryInput,
+} from './db/types.js';
+
+export { TaskQueue } from './tasks/TaskQueue.js';
+export { TaskStatusStore } from './tasks/TaskStatusStore.js';
+export { QueueWorker } from './tasks/QueueWorker.js';
+export type {
+  Task,
+  TaskStatus,
+  TaskEvent,
+  TaskStore,
+  CreateTaskInput,
+} from './tasks/types.js';
 
 export { Planner } from './planning/Planner.js';
 export { ReasoningChain } from './planning/ReasoningChain.js';
@@ -32,3 +73,13 @@ export type {
   JudgeOptions,
 } from './planning/types.js';
 
+export { EvalRunner } from './eval/runner.js';
+export { builtInEvalTasks } from './eval/scenarios/index.js';
+export { MemoryExtractor } from './memory/MemoryExtractor.js';
+export type { ExtractedFact } from './memory/MemoryExtractor.js';
+export type {
+  EvalTask,
+  EvalResult,
+  EvalRunSummary,
+  EvalToolExpectation,
+} from './eval/types.js';
