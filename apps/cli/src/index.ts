@@ -440,8 +440,6 @@ async function main() {
       }
 
       printSeparator();
-      console.log(`> ${trimmed}`);
-      printSeparator();
 
       sigintCount = 0;
       abortController = new AbortController();
