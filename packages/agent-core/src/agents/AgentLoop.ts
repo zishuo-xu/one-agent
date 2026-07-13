@@ -262,7 +262,7 @@ export class AgentLoop extends EventEmitter {
         continue;
       }
 
-      const content = await this.streamFinalAnswer(assistantMessage?.content ?? '');
+      const content = await this.streamFinalAnswer(this.extractMessageContent(assistantMessage));
       this.contextManager.addMessage({ role: 'assistant', content });
       this.emitEvent({ type: 'message', content });
       return { reply: content, events: this.events };
@@ -396,7 +396,7 @@ export class AgentLoop extends EventEmitter {
     const response = await this.callModel({ allowedTools: allowedToolNames });
     const assistantMessage = response.choices[0]?.message;
 
-    const thought = assistantMessage?.content?.trim() ?? '';
+    const thought = this.extractMessageContent(assistantMessage).trim();
     if (thought) {
       this.reasoningChain.addThought(thought);
       this.emitEvent({ type: 'thought', content: thought });
@@ -673,9 +673,9 @@ export class AgentLoop extends EventEmitter {
           }
         } else {
           const nonStreamingResponse = response as unknown as {
-            choices: Array<{ message?: { content?: string } }>;
+            choices: Array<{ message?: Record<string, unknown> }>;
           };
-          const fallback = nonStreamingResponse.choices[0]?.message?.content ?? '';
+          const fallback = this.extractMessageContent(nonStreamingResponse.choices[0]?.message);
           content = fallback;
           if (content) {
             this.emitEvent({ type: 'message_delta', content });
@@ -699,6 +699,22 @@ export class AgentLoop extends EventEmitter {
       return content;
     }
     return content;
+  }
+
+  private extractMessageContent(message: unknown): string {
+    if (!message || typeof message !== 'object') {
+      return '';
+    }
+    const msg = message as Record<string, unknown>;
+    if (msg.content && typeof msg.content === 'string') {
+      return msg.content;
+    }
+    // Volcengine GLM-5.2 sometimes returns generated text in reasoning_content
+    // even for non-streaming completions.
+    if (msg.reasoning_content && typeof msg.reasoning_content === 'string') {
+      return msg.reasoning_content;
+    }
+    return '';
   }
 
   private extractDeltaContent(chunk: unknown): string {
