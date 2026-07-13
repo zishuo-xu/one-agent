@@ -51,13 +51,14 @@ function createAgent(
   });
 }
 
-function parseArgs(): { threadId?: string; newThread: boolean } {
+function parseArgs(): { threadId?: string; newThread: boolean; verbose: boolean } {
   const args = process.argv.slice(2);
   const threadIndex = args.indexOf('--thread');
   const threadId =
     threadIndex >= 0 && args[threadIndex + 1] ? args[threadIndex + 1] : undefined;
   const newThread = args.includes('--new-thread');
-  return { threadId, newThread };
+  const verbose = args.includes('--verbose') || args.includes('-v');
+  return { threadId, newThread, verbose };
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -84,8 +85,36 @@ function formatToolResultSummary(toolResult: { success: boolean; data?: unknown;
   return 'ok';
 }
 
+function printSeparator() {
+  console.log('─'.repeat(60));
+}
+
+function createProgressIndicator(label = 'Thinking'): { start: () => void; stop: () => void } {
+  let interval: NodeJS.Timeout | null = null;
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let index = 0;
+
+  return {
+    start: () => {
+      if (interval) return;
+      process.stdout.write(`${frames[0]} ${label}...`);
+      interval = setInterval(() => {
+        index = (index + 1) % frames.length;
+        process.stdout.write(`\r${frames[index]} ${label}...  `);
+      }, 120);
+    },
+    stop: () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      process.stdout.write('\r' + ' '.repeat(20) + '\r');
+    },
+  };
+}
+
 async function main() {
-  const { threadId: argThreadId, newThread } = parseArgs();
+  const { threadId: argThreadId, newThread, verbose } = parseArgs();
 
   if (!process.env.OPENAI_API_KEY) {
     console.error('Error: OPENAI_API_KEY is not set.');
@@ -129,6 +158,7 @@ async function main() {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   console.log('Type a message or a command. Commands: /history /context /reasoning /threads /runs /traces /thread <id> /exit');
+  console.log('Use --verbose to show thoughts, plans, and reflections.');
   console.log(`Thread: ${threadId}`);
 
   while (true) {
@@ -237,9 +267,21 @@ async function main() {
         threadStore.updateTitle(threadId, title);
       }
 
+      printSeparator();
+      console.log(`> ${trimmed}`);
+      printSeparator();
+
       let hasStreamedMessage = false;
+      let hasEvents = false;
+      const progress = createProgressIndicator('Thinking');
+      progress.start();
 
       const onEvent = (event: AgentLoopEvent) => {
+        if (!hasEvents) {
+          hasEvents = true;
+          progress.stop();
+        }
+
         if (event.type === 'message_delta') {
           hasStreamedMessage = true;
           process.stdout.write(event.content);
@@ -248,11 +290,11 @@ async function main() {
         } else if (event.type === 'tool_result') {
           const summary = formatToolResultSummary(event.toolResult);
           process.stdout.write(`[tool_result] ${summary}\n`);
-        } else if (event.type === 'thought') {
+        } else if (event.type === 'thought' && verbose) {
           process.stdout.write(`\n[thought] ${event.content.slice(0, 120)}\n`);
-        } else if (event.type === 'reflection') {
+        } else if (event.type === 'reflection' && verbose) {
           process.stdout.write(`\n[reflection] ${event.content.slice(0, 120)}\n`);
-        } else if (event.type === 'plan') {
+        } else if (event.type === 'plan' && verbose) {
           process.stdout.write(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
         }
       };
@@ -260,10 +302,14 @@ async function main() {
       agent.on('event', onEvent);
       const { reply } = await agent.chat(trimmed);
       agent.off('event', onEvent);
+      progress.stop();
+
       process.stdout.write('\n');
       if (reply && !hasStreamedMessage) {
-        console.log(`\nAgent: ${reply}`);
+        console.log(`\n${reply}`);
       }
+
+      printSeparator();
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : String(error));
     }
