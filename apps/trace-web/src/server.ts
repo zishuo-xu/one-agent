@@ -328,15 +328,59 @@ function renderViewerPage(): string {
         container.innerHTML = '<div class="empty">No traces found</div>';
         return;
       }
-      container.innerHTML = traces.map(e => \`
-        <div class="event \${e.eventType}">
-          <div class="event-header">
-            <span class="event-type">\${e.eventType}</span>
-            <span class="event-time">\${formatTime(e.createdAt)}</span>
+
+      // Group consecutive message_delta / reasoning_delta events into a
+      // single "stream" entry so the timeline isn't flooded with 100+ chunks.
+      const grouped = [];
+      let i = 0;
+      while (i < traces.length) {
+        const e = traces[i];
+        if (e.eventType === 'message_delta' || e.eventType === 'reasoning_delta') {
+          // Collect all consecutive delta events of the same type.
+          const type = e.eventType;
+          const chunks = [];
+          const startTime = e.createdAt;
+          let endTime = e.createdAt;
+          while (i < traces.length && traces[i].eventType === type) {
+            const content = traces[i].eventData?.content ?? '';
+            if (content) chunks.push(content);
+            endTime = traces[i].createdAt;
+            i++;
+          }
+          grouped.push({
+            eventType: type,
+            createdAt: startTime,
+            endTime,
+            chunkCount: chunks.length,
+            fullText: chunks.join(''),
+          });
+        } else {
+          grouped.push(e);
+          i++;
+        }
+      }
+
+      container.innerHTML = grouped.map(e => {
+        const isStream = e.chunkCount !== undefined;
+        const typeLabel = isStream
+          ? \`\${e.eventType} (\${e.chunkCount} chunks)\`
+          : e.eventType;
+        const data = isStream
+          ? e.fullText
+          : JSON.stringify(e.eventData, null, 2);
+        const timeLabel = isStream && e.endTime
+          ? \`\${formatTime(e.createdAt)} - \${formatTime(e.endTime)}\`
+          : formatTime(e.createdAt);
+        return \`
+          <div class="event \${e.eventType}">
+            <div class="event-header">
+              <span class="event-type">\${typeLabel}</span>
+              <span class="event-time">\${timeLabel}</span>
+            </div>
+            <div class="event-data">\${escapeHtml(data)}</div>
           </div>
-          <div class="event-data">\${escapeHtml(JSON.stringify(e.eventData, null, 2))}</div>
-        </div>
-      \`).join('');
+        \`;
+      }).join('');
     }
 
     function escapeHtml(text) {
