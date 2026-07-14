@@ -42,6 +42,8 @@ export interface AgentLoopOptions {
   memoryStore?: MemoryStore;
   memoryExtractor?: MemoryExtractor;
   awaitMemoryExtraction?: boolean;
+  maxContextTokens?: number;
+  recentTokenBudget?: number;
   signal?: AbortSignal;
 }
 
@@ -107,10 +109,14 @@ export class AgentLoop extends EventEmitter {
         systemPrompt: this.systemPrompt,
         threadId: options.threadId,
         db,
+        maxContextTokens: options.maxContextTokens,
+        recentTokenBudget: options.recentTokenBudget,
       });
     } else {
       this.contextManager = new ContextManager({
         systemPrompt: this.systemPrompt,
+        maxContextTokens: options.maxContextTokens,
+        recentTokenBudget: options.recentTokenBudget,
       });
     }
 
@@ -201,6 +207,16 @@ export class AgentLoop extends EventEmitter {
 
   getContext(): Message[] {
     return this.contextManager.getContextForDisplay();
+  }
+
+  getContextInfo(): {
+    messageCount: number;
+    estimatedTokens: number;
+    maxContextTokens?: number;
+    hasSummary: boolean;
+    recentTokenBudget?: number;
+  } {
+    return this.contextManager.getContextInfo();
   }
 
   getReasoningChain(): ReasoningChain {

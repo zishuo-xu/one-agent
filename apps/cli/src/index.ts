@@ -66,6 +66,10 @@ function createEnvTemplate(): void {
     'OPENAI_MODEL=gpt-3.5-turbo',
     '# Optional: per-request timeout in ms (default 30000)',
     '# OPENAI_TIMEOUT_MS=60000',
+    '# Optional: context window token budget (default 4096)',
+    '# MAX_CONTEXT_TOKENS=8192',
+    '# Optional: recent message token budget (default 2048)',
+    '# RECENT_TOKEN_BUDGET=4096',
     '# Optional: Tavily/Brave/DuckDuckGo search configuration',
     '# SEARCH_API_URL=',
     '# SEARCH_API_KEY=',
@@ -307,10 +311,11 @@ async function main() {
 
     if (trimmed === '/context') {
       const context = agent.getContext();
+      const info = agent.getContextInfo();
       const nonSystem = context.filter((m) => m.role !== 'system');
       const summary = context.find((m) => m.role === 'system' && m.content.startsWith('Earlier conversation summary:'));
       const memory = context.find((m) => m.role === 'system' && m.content.startsWith('Relevant context from past conversations:'));
-      console.log(`Context has ${nonSystem.length} recent message(s).`);
+      console.log(`Context: ${nonSystem.length} message(s) | ~${info.estimatedTokens} tokens${info.maxContextTokens ? ` / ${info.maxContextTokens} budget` : ''}${info.hasSummary ? ' | summarized' : ''}`);
       if (summary) {
         console.log(`Summary: ${summary.content.slice(0, 200)}`);
       }

@@ -1,170 +1,119 @@
-# 规划能力深度优化：计划绑定、层级计划、结构化反思、真实模型评估
+# 上下文管理增强：Token 计数压缩
 
 ## 目标
+将上下文压缩从"按消息数量"改为"按 token 估算"，避免长对话超出模型上下文窗口。不引入外部 tokenizer 依赖，使用轻量启发式估算。
 
-一次性增强 Agent 的规划与评估能力：
+---
 
-1. **计划与执行绑定**：让模型严格按计划步骤调用指定工具，偏差时触发失败处理。
-2. **子目标拆解（层级计划）**：支持 plan step 嵌套子步骤，适应复杂任务。
-3. **反思质量提升**：Judge 输出结构化失败分析，用于更精准的重规划。
-4. **真实模型评估**：在现有 mock 回归之外，支持对真实模型跑 benchmark 并收集指标。
+## 第一阶段：Token 估算工具
 
-## 实现顺序
-
-按依赖顺序分 4 个阶段实现，每个阶段独立 commit：
-
-### 第一阶段：计划与执行绑定
-
-#### 数据模型改造 `packages/agent-core/src/planning/types.ts`
-
-`PlanStep` 增加可选约束字段：
+### 新增 `packages/agent-core/src/context/tokenEstimate.ts`
 
 ```ts
-export interface PlanStep {
-  id: string;
-  description: string;
-  toolName?: string;
-  expectedOutcome?: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  allowedTools?: string[];
-  requiredTool?: string;
-  strict?: boolean;
-  children?: PlanStep[];
-  parentId?: string;
+export function estimateTokens(text: string): number
+```
+
+启发式策略（无需外部依赖，对中英文混合文本合理近似）：
+- CJK 字符（中日韩）：约 1 token/字
+- ASCII 字符：约 4 字符/token
+- 其他：约 2 字符/token
+- 空消息（role 等）：每条消息额外 ~4 token 开销
+
+```ts
+export function estimateMessageTokens(message: Message): number
+```
+对单条 Message 估算 token（content + tool_calls + role 开销）。
+
+---
+
+## 第二阶段：ContextManager 改造
+
+### 新增配置 `packages/agent-core/src/config.ts`
+
+```ts
+maxContextTokens: Number(process.env.MAX_CONTEXT_TOKENS ?? '4096'),
+recentTokenBudget: Number(process.env.RECENT_TOKEN_BUDGET ?? '2048'),
+```
+
+### `ContextManagerOptions` 扩展
+
+```ts
+export interface ContextManagerOptions {
+  systemPrompt: string;
+  maxRecentMessages?: number;   // 保留作为后备（向后兼容）
+  summaryTrigger?: number;      // 保留作为后备
+  maxContextTokens?: number;    // 新：上下文总 token 预算
+  recentTokenBudget?: number;   // 新：保留的最近消息 token 预算
 }
 ```
 
-`ReasoningStep` 增加 `planStepId`：
+### `buildContext()` 重写 `packages/agent-core/src/context/ContextManager.ts`
 
-```ts
-export interface ReasoningStep {
-  thought?: string;
-  action?: ToolCall;
-  observation?: ToolResult;
-  reflection?: string;
-  planStepId?: string;
-  failureAnalysis?: FailureAnalysis;
-}
-```
+新逻辑（token 优先，消息数后备）：
+1. 估算所有消息的总 token 数
+2. 如果 totalTokens <= maxContextTokens，直接返回全部（不压缩）
+3. 如果 totalTokens > maxContextTokens：
+   - 从最新消息向前累积，直到达到 recentTokenBudget，确定 recentStart
+   - 如果 lastSummarizedIndex < recentStart，对 [lastSummarizedIndex, recentStart) 的消息做摘要
+   - 返回 system + memory + summary + recent 消息
+4. 向后兼容：如果 maxContextTokens 未设置（undefined），回退到原有消息数逻辑
 
-#### 执行绑定 `packages/agent-core/src/agents/AgentLoop.ts`
+### 修复 `summarize()` 超时
 
-- `executeStep` 接收当前 `PlanStep`。
-- 如果 step 有 `requiredTool` 或 `allowedTools`，调用 `callModel` 时只传入这些工具的 schema（通过 `toolRegistry` 子集）。
-- 模型返回 tool calls 后，检查是否使用了允许的工具：
-  - 若偏离计划，标记 step 为 `failed`，调用 judge 决定 retry/replan。
-  - 记录 `failureAnalysis` 到 `ReasoningStep`。
-- 每次 thought/action/observation 都记录 `planStepId`。
+`{ timeout: 30000 }` 改为 `{ timeout: config.timeoutMs }`。
 
-#### 推理链 `packages/agent-core/src/planning/ReasoningChain.ts`
+### `getContextForDisplay()` 增强
 
-- `commitStep(planStepId)` 方法将当前推理步骤绑定到 plan step。
-- `getStepsByPlanStep(planStepId)` 方便查询。
+新增方法返回 token 估算信息，供 CLI `/context` 命令显示。
 
-### 第二阶段：结构化反思 / 失败分析
+---
 
-#### 数据模型 `packages/agent-core/src/planning/types.ts`
+## 第三阶段：AgentLoop + CLI 接入
 
-新增 `FailureAnalysis`：
+### `AgentLoopOptions` 透传
 
-```ts
-export interface FailureAnalysis {
-  category: 'tool_failure' | 'plan_mismatch' | 'missing_info' | 'wrong_args' | 'other';
-  affectedStepIds?: string[];
-  rootCause?: string;
-  recommendation?: string;
-}
-```
+`AgentLoopOptions` 新增 `maxContextTokens?` 和 `recentTokenBudget?`，构造 ContextManager/PersistenceContextManager 时透传。
 
-#### Judge 改造 `packages/agent-core/src/planning/TaskJudge.ts`
+### CLI `/context` 命令增强 `apps/cli/src/index.ts`
 
-- `judgeSchema` 扩展 `failureAnalysis` 字段。
-- Prompt 明确要求模型输出失败类别、根因、建议。
-- 返回 `JudgeResult` 时包含结构化分析。
+`/context` 输出新增：
+- 当前上下文估算 token 数
+- token 预算（maxContextTokens）
+- 是否已触发摘要
 
-#### AgentLoop 重规划 `packages/agent-core/src/agents/AgentLoop.ts`
+---
 
-- `replan` 接收 `failureAnalysis` 而不是简单字符串。
-- 将 `affectedStepIds` 和 `recommendation` 传给 `Planner.createPlan`，让新计划更精准。
-- 发出更丰富的 `reflection` 事件。
+## 第四阶段：测试 + 文档
 
-### 第三阶段：层级计划
+### 测试 `packages/agent-core/tests/context/`
 
-#### Planner 改造 `packages/agent-core/src/planning/Planner.ts`
+- 新增 `tokenEstimate.test.ts`：测试 estimateTokens 和 estimateMessageTokens 的基本正确性
+- 更新 `ContextManager.test.ts`：新增 token 触发压缩的测试（设置 maxContextTokens，添加大量文本，验证压缩触发）
 
-- Zod schema 支持 `children` 递归。
-- Prompt 要求模型对复杂步骤拆分子步骤。
-- `planSchema` 版本保持向后兼容：无 `children` 时仍是平级计划。
+### 文档
 
-#### AgentLoop 执行树 `packages/agent-core/src/agents/AgentLoop.ts`
+- 更新 `docs/optimization-notes.md` Phase 3 条目
+- `--init` 模板新增 `MAX_CONTEXT_TOKENS` 和 `RECENT_TOKEN_BUDGET` 配置项说明
 
-- 将单索引 `currentStepIndex` 改为深度优先遍历树。
-- 使用栈结构：遇到有 `children` 的 step，先执行子步骤，再回父步骤。
-- 父步骤状态由子步骤聚合：全部完成则父完成，任一失败则父失败。
-- 对每个 step 执行第一阶段绑定的逻辑。
+---
 
-#### 推理链 `packages/agent-core/src/planning/ReasoningChain.ts`
+## 改动文件清单
 
-- 支持嵌套 `subSteps`。
-- `toMessages()` 递归渲染层级。
-
-### 第四阶段：真实模型评估
-
-#### EvalRunner 模式 `packages/agent-core/src/eval/types.ts` 和 `runner.ts`
-
-- `EvalRunnerOptions` 增加 `mode?: 'mock' | 'real'`。
-- `mock` 模式保持当前行为（使用 fixture 预设响应）。
-- `real` 模式不 mock `config.openai.chat.completions.create`，直接调用真实模型。
-- `EvalResult` 增加指标：
-  - `tokenUsage?: { prompt_tokens, completion_tokens, total_tokens }`
-  - `planningMetrics?: { planCount, replanCount, retryCount, planStepCount }`
-  - `reflectionCount`
-
-#### 断言扩展 `packages/agent-core/src/eval/assertions.ts`
-
-- 新增 `assertPlanEventContains(events, phrases)`：检查 plan 事件是否包含预期高层步骤。
-
-#### 新场景 `packages/agent-core/src/eval/scenarios/real-model-planning.ts`
-
-- 一个适合真实模型评估的 planning 场景。
-- 使用 `requiredTools` 而不是 `expectedTools`。
-- 检查最终回答质量和 plan 事件。
-
-#### CLI 入口 `apps/cli/src/eval.ts`
-
-- 支持 `--real` 参数切换到真实模型评估。
-
-## 测试计划
-
-每个阶段新增/更新测试：
-
-1. `packages/agent-core/tests/planning/planning-agent-loop.test.ts`：计划绑定、工具偏离检测。
-2. `packages/agent-core/tests/planning/task-judge.test.ts`：结构化 failureAnalysis。
-3. `packages/agent-core/tests/planning/planner.test.ts`：层级计划解析。
-4. `packages/agent-core/tests/eval/scenarios.test.ts`：真实模型场景（mock 模式）。
-
-## 文档
-
-- `docs/optimization-notes.md`：更新相关条目状态。
-- `docs/phase4-summary.md`：补充规划增强说明。
-- 可能新增 `docs/phase13-planning-enhancements.md` 统一记录。
+| 文件 | 改动 |
+|---|---|
+| `packages/agent-core/src/context/tokenEstimate.ts` | 新增 token 估算工具 |
+| `packages/agent-core/src/context/ContextManager.ts` | token 压缩逻辑 + 配置 |
+| `packages/agent-core/src/config.ts` | 新增 maxContextTokens/recentTokenBudget |
+| `packages/agent-core/src/agents/AgentLoop.ts` | 透传 token 配置 |
+| `apps/cli/src/index.ts` | /context 显示 token 估算 |
+| `packages/agent-core/tests/context/tokenEstimate.test.ts` | 新增 |
+| `packages/agent-core/tests/context/ContextManager.test.ts` | 新增 token 压缩测试 |
+| `docs/optimization-notes.md` | 更新 Phase 3 状态 |
 
 ## 验证标准
 
 - `pnpm build` 通过
-- `pnpm test` 全部通过
-- 手动测试：
-  1. 运行一个复杂任务，观察是否生成多步层级计划。
-  2. 观察工具偏离时是否被检测并触发反思。
-  3. 运行 `pnpm eval --real`（或对应命令）对真实模型跑评估。
-
-## 提交信息
-
-分阶段提交：
-
-```text
-feat: bind plan steps to tool execution and enforce expected tools
-feat: add structured failure analysis to task judge
-feat: support hierarchical plans with nested substeps
-feat: support real-model evaluation with metrics
-```
+- `pnpm test` 全绿（含新测试）
+- 向后兼容：不设置 maxContextTokens 时行为不变
+- 设置 maxContextTokens 后，长文本对话触发压缩
+- `/context` 显示 token 估算

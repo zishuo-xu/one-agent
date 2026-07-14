@@ -21,6 +21,10 @@ export const config = {
   model: process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo',
   /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
   timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? '30000'),
+  /** Maximum estimated tokens in the context window before summarization triggers. */
+  maxContextTokens: Number(process.env.MAX_CONTEXT_TOKENS ?? '4096'),
+  /** Token budget for the recent (non-summarized) message window. */
+  recentTokenBudget: Number(process.env.RECENT_TOKEN_BUDGET ?? '2048'),
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
     'You are a helpful assistant. Answer concisely and in Chinese by default. ' +

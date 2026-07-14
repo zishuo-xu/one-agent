@@ -6,6 +6,9 @@ vi.mock('../../src/config.js', () => ({
     host: '127.0.0.1',
     model: 'gpt-test',
     systemPrompt: 'You are a test assistant.',
+    timeoutMs: 30000,
+    maxContextTokens: undefined,
+    recentTokenBudget: undefined,
     openai: {
       chat: {
         completions: {
@@ -178,5 +181,69 @@ describe('ContextManager', () => {
     const userPrompt = callArgs.messages[1].content;
     expect(userPrompt).toContain('read_file');
     expect(userPrompt).toContain('tool (call_1)');
+  });
+
+  it('triggers summarization by token budget, not message count', async () => {
+    // Small token budget so a few long messages trigger compression.
+    const manager = new ContextManager({
+      systemPrompt: 'You are a test assistant.',
+      maxContextTokens: 100,
+      recentTokenBudget: 30,
+    });
+
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'Summary of old messages.' } }],
+    } as never);
+
+    // Add messages with enough text to exceed 100 tokens.
+    const longText = 'x'.repeat(200); // ~50 tokens each
+    for (let i = 1; i <= 5; i++) {
+      manager.addMessage({ role: 'user', content: `Msg ${i}: ${longText}` });
+      manager.addMessage({ role: 'assistant', content: `Reply ${i}: ${longText}` });
+    }
+
+    const context = await manager.buildContext();
+
+    // Should have called the model for summarization.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    // Output should be smaller than full history: system + summary + recent window.
+    expect(context.length).toBeLessThan(12);
+    // System prompt preserved.
+    expect(context[0].role).toBe('system');
+    // Summary present.
+    expect(context.some((m) => m.role === 'system' && m.content.includes('Earlier conversation summary'))).toBe(true);
+  });
+
+  it('does not trigger summarization when within token budget', async () => {
+    const manager = new ContextManager({
+      systemPrompt: 'You are a test assistant.',
+      maxContextTokens: 10000,
+      recentTokenBudget: 5000,
+    });
+
+    manager.addMessage({ role: 'user', content: 'Hi' });
+    manager.addMessage({ role: 'assistant', content: 'Hello' });
+
+    const context = await manager.buildContext();
+
+    expect(context).toHaveLength(3);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('getContextInfo reports token estimate and budget', () => {
+    const manager = new ContextManager({
+      systemPrompt: 'You are a test assistant.',
+      maxContextTokens: 4096,
+      recentTokenBudget: 2048,
+    });
+
+    manager.addMessage({ role: 'user', content: '你好世界' });
+
+    const info = manager.getContextInfo();
+    expect(info.messageCount).toBe(1);
+    expect(info.estimatedTokens).toBeGreaterThan(0);
+    expect(info.maxContextTokens).toBe(4096);
+    expect(info.recentTokenBudget).toBe(2048);
+    expect(info.hasSummary).toBe(false);
   });
 });
