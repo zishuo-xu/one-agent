@@ -4,16 +4,19 @@ import type { AgentLoopEvent } from '@one-agent/agent-core';
 
 function makeTimeline(verbose = false) {
   const deltas: string[] = [];
+  const reasoning: string[] = [];
   const infos: string[] = [];
   const labels: string[] = [];
   const flags = { stopped: false };
   return {
     deltas,
+    reasoning,
     infos,
     labels,
     flags,
     verbose,
     onDelta: (t: string) => deltas.push(t),
+    onReasoning: (t: string) => reasoning.push(t),
     onInfo: (t: string) => infos.push(t),
     progress: {
       setLabel: (l: string) => labels.push(l),
@@ -103,5 +106,37 @@ describe('createChatEventHandler streaming', () => {
     handler({ type: 'message_delta', content: '   ' } as AgentLoopEvent);
     expect(result.hasStreamedLive).toBe(false);
     expect(tl.deltas).toEqual([]);
+  });
+
+  it('streams reasoning_delta live via onReasoning (not onDelta)', () => {
+    const tl = makeTimeline();
+    const { handler, result } = createChatEventHandler(tl);
+
+    handler({ type: 'reasoning_delta', content: 'The user said hello.' } as AgentLoopEvent);
+    handler({ type: 'reasoning_delta', content: ' I should greet back.' } as AgentLoopEvent);
+
+    expect(tl.reasoning).toEqual(['The user said hello.', ' I should greet back.']);
+    expect(tl.deltas).toEqual([]);
+    expect(result.hasStreamedLive).toBe(false);
+  });
+
+  it('sets firstDeltaTime on first reasoning_delta', () => {
+    const tl = makeTimeline();
+    const { handler, result } = createChatEventHandler(tl);
+    const before = Date.now();
+    handler({ type: 'reasoning_delta', content: 'thinking...' } as AgentLoopEvent);
+    expect(result.firstDeltaTime).toBeGreaterThanOrEqual(before);
+  });
+
+  it('inserts a separator between reasoning and real answer', () => {
+    const tl = makeTimeline();
+    const { handler } = createChatEventHandler(tl);
+
+    handler({ type: 'reasoning_delta', content: 'Let me think...' } as AgentLoopEvent);
+    handler({ type: 'message_delta', content: 'Hello!' } as AgentLoopEvent);
+
+    // The separator (\n) should appear in infos, and the answer in deltas.
+    expect(tl.infos).toContain('\n');
+    expect(tl.deltas).toContain('Hello!');
   });
 });

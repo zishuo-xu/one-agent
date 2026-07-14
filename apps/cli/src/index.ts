@@ -496,6 +496,7 @@ async function main() {
 
       const { handler: onEvent, result: timeline } = createChatEventHandler({
         onDelta: (text) => process.stdout.write(text),
+        onReasoning: (text) => process.stdout.write(dim(text)),
         onInfo: (text) => process.stdout.write(text),
         progress,
         verbose,

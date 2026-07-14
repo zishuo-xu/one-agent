@@ -53,6 +53,7 @@ export type AgentLoopEvent =
   | { type: 'reflection'; content: string }
   | { type: 'tool_call'; toolCall: ToolCall }
   | { type: 'tool_result'; toolResult: ToolResult }
+  | { type: 'reasoning_delta'; content: string }
   | { type: 'message_delta'; content: string }
   | { type: 'message'; content: string };
 
@@ -742,6 +743,7 @@ export class AgentLoop extends EventEmitter {
           // it as a fallback only if the stream ends with no real content.
           let reasoningBuffer = '';
           let hasRealContent = false;
+          let reasoningStarted = false;
           // Tool-call deltas arrive fragmented across chunks and indexed by
           // position; accumulate function name + argument fragments.
           const toolCallMap = new Map<
@@ -765,6 +767,14 @@ export class AgentLoop extends EventEmitter {
             }
             if (reasoningDelta && !hasRealContent) {
               reasoningBuffer += reasoningDelta;
+              // Emit reasoning live so the user sees activity instead of
+              // staring at a blank spinner for seconds on end.
+              if (!reasoningStarted) {
+                reasoningStarted = true;
+                this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
+              } else {
+                this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
+              }
             }
 
             const tcDeltas = delta?.tool_calls as
@@ -873,7 +883,7 @@ export class AgentLoop extends EventEmitter {
         let content = '';
         if (Symbol.asyncIterator in response) {
           // Same reasoning/content separation as callModelStreaming: only
-          // stream delta.content live; buffer reasoning_content as fallback.
+          // stream delta.content live; emit reasoning_content live too.
           let reasoningBuffer = '';
           let hasRealContent = false;
           for await (const chunk of response) {
@@ -888,6 +898,7 @@ export class AgentLoop extends EventEmitter {
             }
             if (reasoningDelta && !hasRealContent) {
               reasoningBuffer += reasoningDelta;
+              this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
             }
           }
           if (!hasRealContent && reasoningBuffer) {

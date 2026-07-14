@@ -28,6 +28,8 @@ export interface ProgressIndicator {
 export interface ChatTimeline {
   /** Called with each live token from message_delta events. */
   onDelta: (text: string) => void;
+  /** Called with dimmed reasoning tokens (chain of thought). */
+  onReasoning: (text: string) => void;
   /** Called for tool_call/tool_result/thought/reflection (verbose only for some). */
   onInfo: (text: string) => void;
   /** Progress indicator to drive labels and stop. */
@@ -85,11 +87,25 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       if (timeline.verbose) {
         timeline.onInfo(`\n[reflection] ${event.content.slice(0, 120)}\n`);
       }
+    } else if (event.type === 'reasoning_delta') {
+      // GLM-5.2 sends a chain-of-thought before the actual answer.
+      // Show it live (dimmed) so the user sees activity instead of a blank
+      // spinner. Stop the spinner first so it doesn't interleave.
+      const cleanContent = sanitizeTerminalText(event.content);
+      if (cleanContent) {
+        timeline.progress.stop();
+        if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
+        timeline.onReasoning(cleanContent);
+      }
     } else if (event.type === 'message_delta') {
       const cleanContent = sanitizeTerminalText(event.content);
       if (!cleanContent.trim()) {
         // Whitespace-only or empty delta: ignore for live output and timing.
         return;
+      }
+      // If reasoning was shown, add a separator before the real answer.
+      if (result.firstDeltaTime > 0 && !result.hasStreamedLive) {
+        timeline.onInfo('\n');
       }
       if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
       if (result.answerStartTime === 0) result.answerStartTime = Date.now();
