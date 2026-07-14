@@ -159,14 +159,14 @@
 2. **Trace 采样与清理**  
    事件流增长很快。可支持按时间/任务/运行采样，或自动清理旧 trace。
 
-3. **Evaluation 数据集扩展**  
-   当前只有 6 个内置场景。可扩充到 20+ 条，覆盖更多工具组合、错误恢复、规划边界。
+3. **Evaluation 数据集扩展** ✅  
+   已扩展到 20 个内置场景，覆盖 get_time、工具链(read→write)、规划失败重规划、禁止工具的纯知识回答等边界。
 
-4. **Evaluation 指标细化**  
-   目前只有 pass/fail。可增加：token 消耗、运行步数、重试次数、耗时、规划质量评分。
+4. **Evaluation 指标细化** ✅  
+   已增加 token 消耗（prompt/completion/total）、运行步数、重试次数、耗时、规划指标（planCount/replanCount/planStepCount/reflectionCount）。CLI eval 输出含每任务 token 统计和汇总行。
 
 5. **真实模型评估** ✅  
-   已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式通过 `EvalTask.mockResponses` 回放预设响应，无需真实 API key；real 模式直接调用真实模型；`EvalResult` 增加 `planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行 `real-model-planning` 场景。
+   已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式通过 `EvalTask.mockResponses` 回放预设响应，无需真实 API key；real 模式直接调用真实模型；`EvalResult` 增加 `tokenUsage`、`planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行多个 real-model 场景并输出 benchmark 报告（通过率、总 token、总耗时）。AgentLoop 通过 `stream_options: { include_usage: true }` 从流式响应中提取 token 使用量。
 
 6. **Trace 与 Evaluation 联动**  
    评估失败时自动把相关 trace 保存到失败案例集，用于后续调试或 prompt 迭代。

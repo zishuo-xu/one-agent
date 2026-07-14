@@ -81,6 +81,7 @@ export class AgentLoop extends EventEmitter {
   private currentMemoryText?: string;
   private reasoningChain: ReasoningChain;
   private events: AgentLoopEvent[] = [];
+  private tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
   constructor(options: AgentLoopOptions = {}) {
     super();
@@ -130,11 +131,12 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
-  async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string }> {
+  async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
     this.signal = signal ?? this.signal;
     this.checkSignal();
     this.contextManager.addMessage({ role: 'user', content: message });
     this.events = [];
+    this.tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.reasoningChain = new ReasoningChain();
     this.taskJudge.reset();
 
@@ -162,17 +164,16 @@ export class AgentLoop extends EventEmitter {
     }
 
     try {
+      let result: { reply: string; events: AgentLoopEvent[] };
       if (!this.enablePlanning || !this.toolRegistry) {
-        const result = await this.runSimpleLoop(runId);
-        this.completeRun(runId);
-        await this.persistMemories(message, result.reply);
-        return { ...result, runId };
+        result = await this.runSimpleLoop(runId);
+      } else {
+        result = await this.runPlanningLoop(message, runId, this.currentMemoryText);
       }
-
-      const result = await this.runPlanningLoop(message, runId, this.currentMemoryText);
       this.completeRun(runId);
       await this.persistMemories(message, result.reply);
-      return { ...result, runId };
+      const usage = this.tokenUsage.totalTokens > 0 ? this.tokenUsage : undefined;
+      return { ...result, runId, tokenUsage: usage };
     } catch (error) {
       if (runId && this.runStore) {
         this.runStore.fail(runId, error instanceof Error ? error.message : String(error));
@@ -630,6 +631,17 @@ export class AgentLoop extends EventEmitter {
       .join('\n');
   }
 
+  private accumulateUsage(usage: unknown): void {
+    if (!usage || typeof usage !== 'object') return;
+    const u = usage as Record<string, unknown>;
+    const pt = typeof u.prompt_tokens === 'number' ? u.prompt_tokens : 0;
+    const ct = typeof u.completion_tokens === 'number' ? u.completion_tokens : 0;
+    const tt = typeof u.total_tokens === 'number' ? u.total_tokens : pt + ct;
+    this.tokenUsage.promptTokens += pt;
+    this.tokenUsage.completionTokens += ct;
+    this.tokenUsage.totalTokens += tt;
+  }
+
   private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}) {
     const { includeTools = true, allowedTools } = options;
     let lastError: Error | undefined;
@@ -641,7 +653,7 @@ export class AgentLoop extends EventEmitter {
         const tools = includeTools
           ? this.toolRegistry?.getSchemas(allowedTools)
           : undefined;
-        return await config.openai.chat.completions.create(
+        const response = await config.openai.chat.completions.create(
           {
             model: config.model,
             messages: messages as never,
@@ -649,6 +661,8 @@ export class AgentLoop extends EventEmitter {
           },
           { timeout: this.timeoutMs, signal: this.signal }
         );
+        this.accumulateUsage((response as unknown as Record<string, unknown>).usage);
+        return response;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }
@@ -692,6 +706,7 @@ export class AgentLoop extends EventEmitter {
             model: config.model,
             messages: messages as never,
             stream: true,
+            stream_options: { include_usage: true },
             tools,
           },
           { timeout: this.timeoutMs, signal: this.signal }
@@ -714,6 +729,7 @@ export class AgentLoop extends EventEmitter {
 
           for await (const chunk of response) {
             this.checkSignal();
+            this.accumulateUsage((chunk as unknown as Record<string, unknown>).usage);
             const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
             const delta = (chunk as unknown as { choices?: Array<{ delta?: Record<string, unknown> }> })
               .choices?.[0]?.delta;
@@ -783,7 +799,9 @@ export class AgentLoop extends EventEmitter {
               tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
             };
           }>;
+          usage?: Record<string, unknown>;
         };
+        this.accumulateUsage(nonStreamingResponse.usage);
         const message = nonStreamingResponse.choices[0]?.message;
         const content = this.extractMessageContent(message);
         if (content) {
@@ -824,6 +842,7 @@ export class AgentLoop extends EventEmitter {
             model: config.model,
             messages: messages as never,
             stream: true,
+            stream_options: { include_usage: true },
             tools,
           },
           { timeout: this.timeoutMs, signal: this.signal }
@@ -837,6 +856,7 @@ export class AgentLoop extends EventEmitter {
           let hasRealContent = false;
           for await (const chunk of response) {
             this.checkSignal();
+            this.accumulateUsage((chunk as unknown as Record<string, unknown>).usage);
             const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
             if (contentDelta) {
               content += contentDelta;

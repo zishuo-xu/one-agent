@@ -81,6 +81,7 @@ export class EvalRunner {
         events.push(event);
       });
 
+      let tokenUsage: EvalResult['tokenUsage'] | undefined;
       try {
         const timeoutMs = task.timeoutMs ?? options.defaultTimeoutMs ?? 60000;
         const run = await withTimeout(
@@ -89,6 +90,7 @@ export class EvalRunner {
           `Task ${task.id}`
         );
         reply = run.reply;
+        tokenUsage = run.tokenUsage;
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
       } finally {
@@ -175,6 +177,7 @@ export class EvalRunner {
         toolCalls,
         errors,
         durationMs: Date.now() - start,
+        tokenUsage,
         planningMetrics: {
           planCount: planEvents.length,
           replanCount: Math.max(0, planEvents.length - 1),

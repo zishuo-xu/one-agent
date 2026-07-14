@@ -14,6 +14,11 @@ import { fileNotFoundRecoveryTask } from './file-not-found-recovery.js';
 import { summarizeLongFileTask } from './summarize-long-file.js';
 import { multiToolPlanningTask } from './multi-tool-planning.js';
 import { realModelPlanningTask } from './real-model-planning.js';
+import { getTimeTask } from './get-time.js';
+import { toolChainTask } from './tool-chain.js';
+import { replanScenarioTask } from './replan-scenario.js';
+import { offlineAnswerTask } from './offline-answer.js';
+import { realModelBenchmarkTask } from './real-model-benchmark.js';
 
 export const builtInEvalTasks = [
   simpleQaTask,
@@ -32,6 +37,16 @@ export const builtInEvalTasks = [
   summarizeLongFileTask,
   multiToolPlanningTask,
   realModelPlanningTask,
+  getTimeTask,
+  toolChainTask,
+  replanScenarioTask,
+  offlineAnswerTask,
+];
+
+/** Scenarios designed for real-model evaluation (no mockResponses needed). */
+export const realModelBenchmarkTasks = [
+  realModelPlanningTask,
+  realModelBenchmarkTask,
 ];
 
 export {
@@ -51,4 +66,9 @@ export {
   summarizeLongFileTask,
   multiToolPlanningTask,
   realModelPlanningTask,
+  getTimeTask,
+  toolChainTask,
+  replanScenarioTask,
+  offlineAnswerTask,
+  realModelBenchmarkTask,
 };

@@ -20,6 +20,10 @@ import {
   summarizeLongFileTask,
   multiToolPlanningTask,
   realModelPlanningTask,
+  getTimeTask,
+  toolChainTask,
+  replanScenarioTask,
+  offlineAnswerTask,
 } from '../../src/eval/scenarios/index.js';
 import { createToolCallResponse, createTextResponse } from '../../src/eval/fixtures.js';
 
@@ -334,5 +338,70 @@ describe('EvalRunner built-in scenarios', () => {
     expect(summary.results[0].events.some((e) => e.type === 'plan')).toBe(true);
     expect(summary.results[0].planningMetrics).toBeDefined();
     expect(summary.results[0].planningMetrics?.planStepCount).toBe(1);
+  });
+
+  it('passes get-time (tool call to get_time)', async () => {
+    mockCreate
+      .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_1', name: 'get_time', arguments: {} }]) as never)
+      .mockResolvedValueOnce(createTextResponse('当前时间是 14:30。') as never);
+
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [getTimeTask], workspaceRoot });
+
+    expect(summary.total).toBe(1);
+    expect(summary.passed).toBe(1);
+  });
+
+  it('passes tool-chain (read_file then write_file in order)', async () => {
+    mockCreate
+      .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'source.txt' } }]) as never)
+      .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_2', name: 'write_file', arguments: { path: 'copy.txt', content: 'Hello from source file.' } }]) as never)
+      .mockResolvedValueOnce(createTextResponse('已将内容写入 copy.txt。') as never);
+
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [toolChainTask], workspaceRoot });
+
+    expect(summary.total).toBe(1);
+    expect(summary.passed).toBe(1);
+    // Verify copy.txt was created with correct content
+    const fs = await import('node:fs');
+    const copyPath = join(workspaceRoot, 'copy.txt');
+    expect(fs.existsSync(copyPath)).toBe(true);
+    expect(fs.readFileSync(copyPath, 'utf-8')).toContain('Hello from source file.');
+  });
+
+  it('passes replan-scenario (plan fails, agent replans and succeeds)', async () => {
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [replanScenarioTask], workspaceRoot, mode: 'mock' });
+
+    expect(summary.total).toBe(1);
+    expect(summary.passed).toBe(1);
+    // Should have at least 2 plan events (original + replan)
+    expect(summary.results[0].planningMetrics?.planCount).toBeGreaterThanOrEqual(2);
+    expect(summary.results[0].planningMetrics?.replanCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('passes offline-answer (no tools used, knowledge only)', async () => {
+    mockCreate.mockResolvedValueOnce(createTextResponse('水的沸点在标准大气压下是 100 摄氏度。') as never);
+
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [offlineAnswerTask], workspaceRoot });
+
+    expect(summary.total).toBe(1);
+    expect(summary.passed).toBe(1);
+  });
+
+  it('tracks token usage from mock responses', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        ...createTextResponse('水的沸点是 100 度。'),
+        usage: { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 },
+      } as never);
+
+    const runner = new EvalRunner();
+    const summary = await runner.run({ tasks: [offlineAnswerTask], workspaceRoot });
+
+    expect(summary.results[0].tokenUsage).toBeDefined();
+    expect(summary.results[0].tokenUsage?.totalTokens).toBe(100);
   });
 });
