@@ -699,6 +699,12 @@ export class AgentLoop extends EventEmitter {
 
         if (Symbol.asyncIterator in response) {
           let content = '';
+          // GLM-5.2 streams a reasoning_content "chain of thought" before the
+          // actual answer in delta.content. We must NOT mix them: only stream
+          // delta.content to the client live. Buffer reasoning_content and use
+          // it as a fallback only if the stream ends with no real content.
+          let reasoningBuffer = '';
+          let hasRealContent = false;
           // Tool-call deltas arrive fragmented across chunks and indexed by
           // position; accumulate function name + argument fragments.
           const toolCallMap = new Map<
@@ -708,14 +714,21 @@ export class AgentLoop extends EventEmitter {
 
           for await (const chunk of response) {
             this.checkSignal();
-            const text = this.extractDeltaContent(chunk);
-            if (text) {
-              content += text;
-              emittedDelta = true;
-              this.emitEvent({ type: 'message_delta', content: text });
-            }
+            const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
             const delta = (chunk as unknown as { choices?: Array<{ delta?: Record<string, unknown> }> })
               .choices?.[0]?.delta;
+
+            // Prefer real content; only buffer reasoning as fallback.
+            if (contentDelta) {
+              content += contentDelta;
+              if (contentDelta.trim()) hasRealContent = true;
+              emittedDelta = true;
+              this.emitEvent({ type: 'message_delta', content: contentDelta });
+            }
+            if (reasoningDelta && !hasRealContent) {
+              reasoningBuffer += reasoningDelta;
+            }
+
             const tcDeltas = delta?.tool_calls as
               | Array<{
                   index?: number;
@@ -737,6 +750,14 @@ export class AgentLoop extends EventEmitter {
                 toolCallMap.set(idx, existing);
               }
             }
+          }
+
+          // If the model only produced reasoning_content (no real content),
+          // use it as the answer so the user is not left with an empty reply.
+          if (!hasRealContent && reasoningBuffer) {
+            content = reasoningBuffer;
+            emittedDelta = true;
+            this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
           }
 
           const toolCalls =
@@ -792,6 +813,7 @@ export class AgentLoop extends EventEmitter {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      let emittedDelta = false;
       try {
         const messages = await this.contextManager.buildContext();
         const tools = includeTools
@@ -809,13 +831,27 @@ export class AgentLoop extends EventEmitter {
 
         let content = '';
         if (Symbol.asyncIterator in response) {
+          // Same reasoning/content separation as callModelStreaming: only
+          // stream delta.content live; buffer reasoning_content as fallback.
+          let reasoningBuffer = '';
+          let hasRealContent = false;
           for await (const chunk of response) {
             this.checkSignal();
-            const delta = this.extractDeltaContent(chunk);
-            if (delta) {
-              content += delta;
-              this.emitEvent({ type: 'message_delta', content: delta });
+            const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
+            if (contentDelta) {
+              content += contentDelta;
+              if (contentDelta.trim()) hasRealContent = true;
+              emittedDelta = true;
+              this.emitEvent({ type: 'message_delta', content: contentDelta });
             }
+            if (reasoningDelta && !hasRealContent) {
+              reasoningBuffer += reasoningDelta;
+            }
+          }
+          if (!hasRealContent && reasoningBuffer) {
+            content = reasoningBuffer;
+            emittedDelta = true;
+            this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
           }
         } else {
           const nonStreamingResponse = response as unknown as {
@@ -824,12 +860,16 @@ export class AgentLoop extends EventEmitter {
           const fallback = this.extractMessageContent(nonStreamingResponse.choices[0]?.message);
           content = fallback;
           if (content) {
+            emittedDelta = true;
             this.emitEvent({ type: 'message_delta', content });
           }
         }
         return content;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        if (emittedDelta) {
+          throw lastError;
+        }
       }
     }
 
@@ -875,6 +915,37 @@ export class AgentLoop extends EventEmitter {
         return this.extractTextContent(item.text ?? item.content);
       })
       .join('');
+  }
+
+  /**
+   * Extract content and reasoning_content separately from a streaming chunk,
+   * covering all nesting levels used by OpenAI and compatible endpoints
+   * (delta.content, delta.message.content, choices[0].message.content, etc.).
+   */
+  private extractDeltaFields(chunk: unknown): { content: string; reasoning: string } {
+    if (!chunk || typeof chunk !== 'object') {
+      return { content: '', reasoning: '' };
+    }
+    const choice = (chunk as Record<string, unknown>).choices;
+    if (!Array.isArray(choice) || choice.length === 0) {
+      return { content: '', reasoning: '' };
+    }
+    const first = choice[0] as Record<string, unknown>;
+    const delta = first?.delta as Record<string, unknown> | undefined;
+    const nestedMessage = delta?.message as Record<string, unknown> | undefined;
+    const msg = first?.message as Record<string, unknown> | undefined;
+
+    const content =
+      this.extractTextContent(delta?.content) ||
+      this.extractTextContent(nestedMessage?.content) ||
+      this.extractTextContent(msg?.content);
+
+    const reasoning =
+      this.extractTextContent(delta?.reasoning_content ?? delta?.reasoningContent) ||
+      this.extractTextContent(nestedMessage?.reasoning_content ?? nestedMessage?.reasoningContent) ||
+      this.extractTextContent(msg?.reasoning_content ?? msg?.reasoningContent);
+
+    return { content, reasoning };
   }
 
   private extractDeltaContent(chunk: unknown): string {
