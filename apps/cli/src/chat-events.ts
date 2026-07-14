@@ -88,24 +88,21 @@ export function createChatEventHandler(timeline: ChatTimeline): {
         timeline.onInfo(`\n[reflection] ${event.content.slice(0, 120)}\n`);
       }
     } else if (event.type === 'reasoning_delta') {
-      // GLM-5.2 sends a chain-of-thought before the actual answer.
-      // Show it live (dimmed) so the user sees activity instead of a blank
-      // spinner. Stop the spinner first so it doesn't interleave.
+      // Reasoning content flows as part of the same stream as the answer -
+      // no visual separation, no dimming, just continuous output.
       const cleanContent = sanitizeTerminalText(event.content);
       if (cleanContent) {
         timeline.progress.stop();
         if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
-        timeline.onReasoning(cleanContent);
+        result.hasStreamedLive = true;
+        timeline.onDelta(cleanContent);
+        result.streamedContent += cleanContent;
       }
     } else if (event.type === 'message_delta') {
       const cleanContent = sanitizeTerminalText(event.content);
       if (!cleanContent.trim()) {
         // Whitespace-only or empty delta: ignore for live output and timing.
         return;
-      }
-      // If reasoning was shown, add a separator before the real answer.
-      if (result.firstDeltaTime > 0 && !result.hasStreamedLive) {
-        timeline.onInfo('\n');
       }
       if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
       if (result.answerStartTime === 0) result.answerStartTime = Date.now();
