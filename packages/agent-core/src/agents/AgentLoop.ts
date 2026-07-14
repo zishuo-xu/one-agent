@@ -215,6 +215,7 @@ export class AgentLoop extends EventEmitter {
     maxContextTokens?: number;
     hasSummary: boolean;
     recentTokenBudget?: number;
+    tokenSource: 'real' | 'estimate';
   } {
     return this.contextManager.getContextInfo();
   }
@@ -656,6 +657,11 @@ export class AgentLoop extends EventEmitter {
     this.tokenUsage.promptTokens += pt;
     this.tokenUsage.completionTokens += ct;
     this.tokenUsage.totalTokens += tt;
+    // Feed the real prompt_tokens back to the context manager so it can use
+    // "last real + delta estimate" for the next compression decision.
+    if (pt > 0) {
+      this.contextManager.updateLastKnownTokens(pt);
+    }
   }
 
   private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}) {

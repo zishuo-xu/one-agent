@@ -22,6 +22,10 @@ export class ContextManager {
   private readonly maxContextTokens?: number;
   private readonly recentTokenBudget?: number;
   private memoryContext: string | null = null;
+  /** Real prompt_tokens from the last model call (reported by the API). */
+  private lastKnownPromptTokens?: number;
+  /** Message count at the time of the last buildContext(), to compute the delta. */
+  private lastBuildMessageCount = 1;
 
   constructor(options: ContextManagerOptions) {
     this.systemPrompt = options.systemPrompt;
@@ -41,6 +45,11 @@ export class ContextManager {
     this.memoryContext = content;
   }
 
+  /** Feed back the real prompt_tokens from the model's usage response. */
+  updateLastKnownTokens(promptTokens: number): void {
+    this.lastKnownPromptTokens = promptTokens;
+  }
+
   getHistory(): Message[] {
     return [...this.messages];
   }
@@ -50,6 +59,8 @@ export class ContextManager {
     this.summaryMessage = null;
     this.lastSummarizedIndex = 1;
     this.memoryContext = null;
+    this.lastKnownPromptTokens = undefined;
+    this.lastBuildMessageCount = 1;
   }
 
   async buildContext(): Promise<Message[]> {
@@ -63,7 +74,21 @@ export class ContextManager {
 
   private async buildContextByTokens(): Promise<Message[]> {
     const nonSystemMessages = this.messages.slice(1);
-    const totalTokens = estimateMessagesTokens(nonSystemMessages);
+
+    // Estimate total tokens: prefer "last real prompt_tokens + delta" over
+    // pure estimation. The model reports the exact prompt_tokens after each
+    // call; we combine that with a heuristic estimate of messages added since.
+    let totalTokens: number;
+    if (this.lastKnownPromptTokens !== undefined && this.lastBuildMessageCount < this.messages.length) {
+      const newMessages = this.messages.slice(this.lastBuildMessageCount);
+      const delta = estimateMessagesTokens(newMessages);
+      totalTokens = this.lastKnownPromptTokens + delta;
+    } else {
+      totalTokens = estimateMessagesTokens(nonSystemMessages);
+    }
+
+    // Record the message count at this build for the next delta computation.
+    this.lastBuildMessageCount = this.messages.length;
 
     // If within budget, return everything without summarizing.
     if (totalTokens <= this.maxContextTokens!) {
@@ -122,14 +147,30 @@ export class ContextManager {
     maxContextTokens?: number;
     hasSummary: boolean;
     recentTokenBudget?: number;
+    tokenSource: 'real' | 'estimate';
   } {
     const nonSystem = this.messages.slice(1);
+    let estimatedTokens: number;
+    let tokenSource: 'real' | 'estimate' = 'estimate';
+
+    if (this.lastKnownPromptTokens !== undefined && this.lastBuildMessageCount < this.messages.length) {
+      const newMessages = this.messages.slice(this.lastBuildMessageCount);
+      estimatedTokens = this.lastKnownPromptTokens + estimateMessagesTokens(newMessages);
+      tokenSource = 'real';
+    } else if (this.lastKnownPromptTokens !== undefined) {
+      estimatedTokens = this.lastKnownPromptTokens;
+      tokenSource = 'real';
+    } else {
+      estimatedTokens = estimateMessagesTokens(nonSystem);
+    }
+
     return {
       messageCount: nonSystem.length,
-      estimatedTokens: estimateMessagesTokens(nonSystem),
+      estimatedTokens,
       maxContextTokens: this.maxContextTokens,
       hasSummary: this.summaryMessage !== null,
       recentTokenBudget: this.recentTokenBudget,
+      tokenSource,
     };
   }
 

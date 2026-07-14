@@ -315,7 +315,7 @@ async function main() {
       const nonSystem = context.filter((m) => m.role !== 'system');
       const summary = context.find((m) => m.role === 'system' && m.content.startsWith('Earlier conversation summary:'));
       const memory = context.find((m) => m.role === 'system' && m.content.startsWith('Relevant context from past conversations:'));
-      console.log(`Context: ${nonSystem.length} message(s) | ~${info.estimatedTokens} tokens${info.maxContextTokens ? ` / ${info.maxContextTokens} budget` : ''}${info.hasSummary ? ' | summarized' : ''}`);
+      console.log(`Context: ${nonSystem.length} message(s) | ~${info.estimatedTokens} tokens${info.maxContextTokens ? ` / ${info.maxContextTokens} budget` : ''}${info.hasSummary ? ' | summarized' : ''} | ${info.tokenSource === 'real' ? 'real+est' : 'est'}`);
       if (summary) {
         console.log(`Summary: ${summary.content.slice(0, 200)}`);
       }
