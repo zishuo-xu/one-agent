@@ -88,15 +88,16 @@ export function createChatEventHandler(timeline: ChatTimeline): {
         timeline.onInfo(`\n[reflection] ${event.content.slice(0, 120)}\n`);
       }
     } else if (event.type === 'reasoning_delta') {
-      // Reasoning content flows as part of the same stream as the answer -
-      // no visual separation, no dimming, just continuous output.
-      const cleanContent = sanitizeTerminalText(event.content);
-      if (cleanContent) {
-        timeline.progress.stop();
-        if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
-        result.hasStreamedLive = true;
-        timeline.onDelta(cleanContent);
-        result.streamedContent += cleanContent;
+      // In verbose mode, show reasoning live (dimmed) so the user can follow
+      // the model's thinking. In normal mode, skip it entirely - the spinner
+      // provides enough feedback that the model is working, and the final
+      // answer appears as one clean continuous block.
+      if (timeline.verbose) {
+        const cleanContent = sanitizeTerminalText(event.content);
+        if (cleanContent) {
+          timeline.progress.stop();
+          timeline.onReasoning(cleanContent);
+        }
       }
     } else if (event.type === 'message_delta') {
       const cleanContent = sanitizeTerminalText(event.content);
