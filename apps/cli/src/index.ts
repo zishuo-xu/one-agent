@@ -502,7 +502,7 @@ async function main() {
       });
 
       agent.on('event', onEvent);
-      let runResult: { reply: string; runId?: string };
+      let runResult: { reply: string; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } };
       try {
         runResult = await agent.chat(trimmed, abortController.signal);
       } catch (error) {
@@ -551,6 +551,11 @@ async function main() {
       if (ttfa > 0) parts.push(`首字 ${formatDuration(ttfa)}`);
       if (answerDuration > 0) parts.push(`回答 ${formatDuration(answerDuration)}`);
       if (toolDuration > 0) parts.push(`工具 ${formatDuration(toolDuration)}`);
+      const usage = runResult.tokenUsage;
+      if (usage) {
+        parts.push(`输入 ${usage.promptTokens} tokens`);
+        parts.push(`输出 ${usage.completionTokens} tokens`);
+      }
       if (memoryStore && memoryExtractor) {
         if (verbose) parts.push('记忆：后台提取已启动');
       } else if (verbose) {
