@@ -110,7 +110,15 @@ export class ContextManager {
     }
 
     // Convert to absolute index in this.messages (add 1 for system prompt).
-    const absRecentStart = recentStart + 1;
+    let absRecentStart = recentStart + 1;
+
+    // Never start the recent window on a 'tool' message: it must be preceded
+    // by an 'assistant' message with tool_calls, otherwise the API rejects the
+    // request with "Messages with role 'tool' must be a response to a preceding
+    // message with 'tool_calls'". Back up until we find a non-tool message.
+    while (absRecentStart < this.messages.length && this.messages[absRecentStart]?.role === 'tool') {
+      absRecentStart--;
+    }
 
     // Summarize messages that have aged out of the window.
     if (this.lastSummarizedIndex < absRecentStart) {
@@ -128,7 +136,12 @@ export class ContextManager {
       return this.buildOutput(this.messages.slice(1));
     }
 
-    const recentStart = Math.max(1, this.messages.length - this.maxRecentMessages);
+    let recentStart = Math.max(1, this.messages.length - this.maxRecentMessages);
+
+    // Same fix as buildContextByTokens: don't start on a 'tool' message.
+    while (recentStart < this.messages.length && this.messages[recentStart]?.role === 'tool') {
+      recentStart--;
+    }
 
     if (this.lastSummarizedIndex < recentStart) {
       const messagesToSummarize = this.messages.slice(this.lastSummarizedIndex, recentStart);
