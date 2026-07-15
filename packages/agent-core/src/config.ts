@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createProviderFromEnv } from './model/factory.js';
 
 function getEnv(key: string, defaultValue?: string): string {
   const value = process.env[key];
@@ -11,14 +12,23 @@ function getEnv(key: string, defaultValue?: string): string {
   return value;
 }
 
+const openai = new OpenAI({
+  baseURL: process.env.OPENAI_BASE_URL,
+  apiKey: getEnv('OPENAI_API_KEY', ''),
+});
+const model = process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo';
+
 export const config = {
   port: Number(process.env.PORT ?? '3000'),
   host: process.env.HOST ?? '127.0.0.1',
-  openai: new OpenAI({
-    baseURL: process.env.OPENAI_BASE_URL,
-    apiKey: getEnv('OPENAI_API_KEY', ''),
-  }),
-  model: process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo',
+  openai,
+  model,
+  /**
+   * Default model provider chain (primary + optional fallback configured via
+   * OPENAI_FALLBACK_* env vars). Consumers may still wrap `config.openai`
+   * directly when they need a pinned single provider (tests, eval mocks).
+   */
+  modelProvider: createProviderFromEnv(openai, model),
   /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
   timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? '30000'),
   /** Maximum estimated tokens in the context window before summarization triggers. */

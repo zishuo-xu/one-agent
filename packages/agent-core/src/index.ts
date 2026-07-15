@@ -4,6 +4,18 @@ export { AgentLoop } from './agents/AgentLoop.js';
 export type { AgentLoopOptions, AgentLoopEvent } from './agents/AgentLoop.js';
 export type { Message, MessageRole } from './agents/types.js';
 
+export { OpenAICompatibleProvider, FallbackProvider, defaultShouldFallback, createProviderFromEnv } from './model/index.js';
+export type {
+  ModelProvider,
+  ModelRequest,
+  ModelResponse,
+  ModelChunk,
+  ModelToolCall,
+  ToolCallDelta,
+  TokenUsage,
+  FallbackPredicate,
+} from './model/index.js';
+
 export { ToolRegistry } from './tools/registry.js';
 export { ToolExecutor } from './tools/executor.js';
 export { Sandbox } from './tools/sandbox.js';

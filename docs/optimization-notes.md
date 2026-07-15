@@ -20,6 +20,7 @@
 | Phase 9：任务持久化 | ✅ | `SqliteTaskStore`、`TaskQueue` restore、API 重启恢复 |
 | Phase 10：长期记忆检索 | ✅ | `MemoryStore`、`MemoryExtractor`、跨 thread 召回 |
 | Phase 11：规划能力深度增强 | ✅ | 计划绑定、层级计划、结构化反思、真实模型评估 |
+| Phase 12：多模型抽象层 | ✅ | `ModelProvider` 接口、`OpenAICompatibleProvider`、`FallbackProvider` 主备切换 |
 
 ---
 
@@ -33,8 +34,11 @@
 2. **系统 prompt 可配置化**  
    当前系统 prompt 写死在 `.env`，可支持 CLI 中 `/system <prompt>` 临时切换。
 
-3. **流式输出**  
-   当前是等模型返回完整内容再展示。后续可改为流式输出到终端。
+3. **流式输出** ✅  
+   已实现。单次流式 completion 逐 token 推送 `message_delta` 事件，CLI 实时显示回答；同时分离 `reasoning_content` 通过 `reasoning_delta` 事件流式推送推理链。
+
+4. **多模型抽象层** ✅  
+   已实现。`ModelProvider` 接口统一模型调用，`OpenAICompatibleProvider` 覆盖所有 OpenAI 兼容端点，`FallbackProvider` 支持主备自动切换（env 配置）。详见 `docs/phase12-multi-model.md`。
 
 ---
 
@@ -45,14 +49,14 @@
 1. **工具错误重试粒度**  
    目前 `TaskJudge` 控制重试，但 `ToolExecutor` 本身也可增加重试策略（如网络类工具）。
 
-2. **工具注册自动扫描**  
-   目前需要手动在 `built-in/index.ts` 注册。可改为自动扫描 `tools/built-in/` 目录下的文件。
+2. **工具注册自动扫描** ✅  
+   已实现。`built-in/index.ts` 通过 `loadBuiltInFactories()` 动态扫描目录，自动加载所有 `default export` 的工具工厂，新增工具只需添加文件即可。
 
-3. **文件工具增强** ✅  
-   - `append_file`：追加内容
-   - `delete_file`：删除文件（需要用户确认）
-   - `search_files`：按文件名或内容搜索 workspace
-   - `web_search`：调用 DuckDuckGo Instant Answer API 搜索网络，无需 API key，适合获取当前不在 workspace 中的信息
+3. **文件工具增强**（部分完成）  
+   - ✅ `web_search`：调用 DuckDuckGo Instant Answer API 搜索网络，无需 API key，适合获取当前不在 workspace 中的信息
+   - ⬜ `append_file`：追加内容
+   - ⬜ `delete_file`：删除文件（需要用户确认）
+   - ⬜ `search_files`：按文件名或内容搜索 workspace
 
 4. **工具返回值规范化**  
    当前工具返回任意对象，`ToolExecutor` 包装为 `{ success, data }`。可统一所有工具返回标准结构。
@@ -105,8 +109,8 @@
 
 **当前状态**：`threads`、`messages`、`agent_runs`、`tool_calls` 已持久化到 SQLite，CLI 和 API 均支持 thread 切换与历史查询。
 
-1. **长期记忆检索**  
-   当前只保留对话历史。可把关键事实（用户偏好、重要结论）写入单独表或文件，按需检索。
+1. **长期记忆检索** ✅  
+   已实现。每轮对话后自动提取关键事实写入 `memories` 表，后续问题按关键词召回并注入上下文，支持跨 thread 共享。详见 `docs/phase10-memory.md`。
 
 2. **Thread 标题自动生成**  
    当前标题取首条用户消息前 50 字符。可让模型基于首条消息生成更简洁的标题。
@@ -209,7 +213,7 @@
 | 🟡 中 | 重试与死信队列（✅ 已实现） | 模型限流、网络抖动应可自动恢复 |
 | 🟡 中 | 长期记忆检索（✅ 已实现） | Phase 7 Evaluation 需要超越对话历史的知识 |
 | 🟡 中 | 文件工具 / 网络搜索扩展（✅ 已实现） | 通过 `web_search` 获取 workspace 外的实时信息 |
-| 🟡 中 | Planner JSON 输出稳定性 | 影响 planning 体验，但已有 fallback |
+| 🟡 中 | Planner JSON 输出稳定性（✅ 已实现） | 影响 planning 体验，但已有 fallback |
 | 🟡 中 | 层级计划（✅ 已实现） | 复杂任务需要子目标拆解 |
 | 🟢 低 | SSE 断线重连 | 提升体验，但非核心能力 |
 | 🟢 低 | 工具自动扫描注册（✅ 已实现） | 减少新增工具时的样板代码 |
@@ -218,7 +222,7 @@
 
 ---
 
-## 十、相关文档
+## 十一、相关文档
 
 - `docs/phase1-summary.md`
 - `docs/phase2-summary.md`
@@ -232,6 +236,7 @@
 - `docs/phase10-memory.md`
 - `docs/phase1-architecture.md`
 - `docs/phase11-planning-enhancements.md`
+- `docs/phase12-multi-model.md`
 - `docs/cli-interaction-improvements.md`
 - `docs/cli-ux-optimization.md`
 - `docs/correctness-fixes.md`
@@ -239,9 +244,9 @@
 
 ---
 
-## 十一、待决策事项
+## 十二、待决策事项
 
 1. 是否引入 tokenizer 来精确控制上下文？
-2. 是否扩展更多文件工具（append/delete/search）？
+2. 是否扩展更多文件工具？（`web_search` 已实现，`append_file` / `delete_file` / `search_files` 待定）
 3. ✅ 已决定：任务状态持久化到 SQLite（`tasks` 表），暂不使用 Redis；若未来量极大再评估。
 4. 是否把 Evaluation 数据集和失败案例集独立管理，并支持人工复核？

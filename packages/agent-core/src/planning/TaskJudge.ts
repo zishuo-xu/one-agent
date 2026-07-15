@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { config } from '../config.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import type { ModelProvider } from '../model/types.js';
 import { JudgeOptions, JudgeResult, Plan, ReasoningStep } from './types.js';
 import { extractJsonObject } from './extractJson.js';
 
@@ -19,7 +21,7 @@ const judgeSchema = z.object({
 
 export class TaskJudge {
   private readonly systemPrompt: string;
-  private readonly model: string;
+  private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
   private readonly maxReplanAttempts: number;
   private readonly maxRetryAttempts: number;
@@ -31,7 +33,11 @@ export class TaskJudge {
       options.systemPrompt ??
       'You are a task judge. Given a plan and the execution history, decide whether the task is complete, ' +
       'and what the next action should be. Respond ONLY with a JSON object.';
-    this.model = options.model ?? config.model;
+    this.modelProvider =
+      options.modelProvider ??
+      (options.model
+        ? new OpenAICompatibleProvider(config.openai, options.model)
+        : config.modelProvider ?? new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
     this.maxRetryAttempts = options.maxRetryAttempts ?? 2;
@@ -41,19 +47,16 @@ export class TaskJudge {
     const prompt = this.buildPrompt(plan, steps);
 
     try {
-      const response = await config.openai.chat.completions.create(
-        {
-          model: this.model,
-          messages: [
-            { role: 'system', content: this.systemPrompt },
-            { role: 'user', content: prompt },
-          ],
-          response_format: { type: 'json_object' },
-        },
-        { timeout: this.timeoutMs }
-      );
+      const response = await this.modelProvider.complete({
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        jsonMode: true,
+        timeoutMs: this.timeoutMs,
+      });
 
-      const raw = response.choices[0]?.message?.content ?? '{}';
+      const raw = response.content || '{}';
       return this.parseResult(raw);
     } catch (error) {
       return {

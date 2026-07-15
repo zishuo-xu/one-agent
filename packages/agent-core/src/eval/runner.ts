@@ -21,6 +21,7 @@ import {
 } from './assertions.js';
 import { Plan } from '../planning/types.js';
 import { config } from '../config.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { MockChatCompletionResponse } from './types.js';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -75,6 +76,10 @@ export class EvalRunner {
       const agent = new AgentLoop({
         tools,
         enablePlanning: task.enablePlanning ?? options.enablePlanning ?? false,
+        // Pin eval to the primary provider so a configured fallback chain
+        // never re-routes mock traffic ("Mock model exhausted" must surface
+        // as an error, not trigger a silent switch to a real endpoint).
+        modelProvider: new OpenAICompatibleProvider(config.openai, config.model),
       });
 
       agent.on('event', (event: AgentLoopEvent) => {

@@ -1,5 +1,7 @@
 import { config } from '../config.js';
 import { Message } from '../agents/types.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import type { ModelProvider } from '../model/types.js';
 import { estimateMessageTokens, estimateMessagesTokens, estimateTokens } from './tokenEstimate.js';
 
 export interface ContextManagerOptions {
@@ -10,6 +12,8 @@ export interface ContextManagerOptions {
   maxContextTokens?: number;
   /** Token budget for the recent (non-summarized) message window. When set, takes priority over maxRecentMessages. */
   recentTokenBudget?: number;
+  /** Provider used for summarization calls. Defaults to the shared provider chain. */
+  modelProvider?: ModelProvider;
 }
 
 export class ContextManager {
@@ -21,6 +25,7 @@ export class ContextManager {
   private readonly summaryTrigger: number;
   private readonly maxContextTokens?: number;
   private readonly recentTokenBudget?: number;
+  private readonly modelProvider?: ModelProvider;
   private memoryContext: string | null = null;
   /** Real prompt_tokens from the last model call (reported by the API). */
   private lastKnownPromptTokens?: number;
@@ -33,6 +38,7 @@ export class ContextManager {
     this.summaryTrigger = options.summaryTrigger ?? 20;
     this.maxContextTokens = options.maxContextTokens ?? config.maxContextTokens;
     this.recentTokenBudget = options.recentTokenBudget ?? config.recentTokenBudget;
+    this.modelProvider = options.modelProvider;
     this.messages.push({ role: 'system', content: this.systemPrompt });
     this.lastSummarizedIndex = 1; // system prompt is at index 0, considered summarized
   }
@@ -222,6 +228,14 @@ export class ContextManager {
     };
   }
 
+  private resolveModelProvider(): ModelProvider {
+    return (
+      this.modelProvider ??
+      config.modelProvider ??
+      new OpenAICompatibleProvider(config.openai, config.model)
+    );
+  }
+
   private async summarize(messages: Message[]): Promise<string> {
     if (messages.length === 0) {
       return '';
@@ -237,17 +251,14 @@ export class ContextManager {
       conversationText;
 
     try {
-      const response = await config.openai.chat.completions.create(
-        {
-          model: config.model,
-          messages: [
-            { role: 'system', content: 'You are a helpful summarizer.' },
-            { role: 'user', content: prompt },
-          ],
-        },
-        { timeout: config.timeoutMs }
-      );
-      return response.choices[0]?.message?.content?.trim() ?? 'No summary available.';
+      const response = await this.resolveModelProvider().complete({
+        messages: [
+          { role: 'system', content: 'You are a helpful summarizer.' },
+          { role: 'user', content: prompt },
+        ],
+        timeoutMs: config.timeoutMs,
+      });
+      return response.content.trim() || 'No summary available.';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return `Summary unavailable: ${message}`;

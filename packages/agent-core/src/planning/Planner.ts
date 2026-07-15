@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { config } from '../config.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import type { ModelProvider } from '../model/types.js';
 import { ToolDefinition } from '../tools/types.js';
 import { Plan, PlanStep, PlannerOptions, FailureAnalysis } from './types.js';
 import { extractJsonObject } from './extractJson.js';
@@ -29,7 +31,7 @@ const planSchema = z.object({
 
 export class Planner {
   private readonly systemPrompt: string;
-  private readonly model: string;
+  private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
 
   constructor(options: PlannerOptions = {}) {
@@ -37,7 +39,11 @@ export class Planner {
       options.systemPrompt ??
       'You are a planning assistant. Break down the user request into clear, executable steps. ' +
       'Each step may optionally use a tool. Respond ONLY with a JSON object matching the requested format.';
-    this.model = options.model ?? config.model;
+    this.modelProvider =
+      options.modelProvider ??
+      (options.model
+        ? new OpenAICompatibleProvider(config.openai, options.model)
+        : config.modelProvider ?? new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
   }
 
@@ -117,39 +123,25 @@ export class Planner {
       '}';
 
     try {
-      const response = await this.callModelWithJsonFormat(prompt);
-      const raw = response.choices[0]?.message?.content ?? '{}';
+      const raw = await this.callModelWithJsonFormat(prompt);
       return this.parsePlan(raw, userRequest);
     } catch (error) {
       return this.fallbackPlan(userRequest, String(error));
     }
   }
 
-  private async callModelWithJsonFormat(prompt: string) {
-    const messages = [
-      { role: 'system', content: this.systemPrompt },
-      { role: 'user', content: prompt },
-    ] as never;
-
-    try {
-      return await config.openai.chat.completions.create(
-        {
-          model: this.model,
-          messages,
-          response_format: { type: 'json_object' },
-        },
-        { timeout: this.timeoutMs }
-      );
-    } catch {
-      // Some endpoints do not support response_format; fall back to a plain call.
-      return await config.openai.chat.completions.create(
-        {
-          model: this.model,
-          messages,
-        },
-        { timeout: this.timeoutMs }
-      );
-    }
+  private async callModelWithJsonFormat(prompt: string): Promise<string> {
+    // jsonMode fallback (retrying without response_format when the endpoint
+    // does not support it) is handled inside the provider.
+    const response = await this.modelProvider.complete({
+      messages: [
+        { role: 'system', content: this.systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      jsonMode: true,
+      timeoutMs: this.timeoutMs,
+    });
+    return response.content || '{}';
   }
 
   private parsePlan(raw: string, userRequest: string): Plan {

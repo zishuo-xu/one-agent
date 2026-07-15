@@ -1,4 +1,5 @@
 import { ToolCall, ToolResult } from '../tools/types.js';
+import type { ModelProvider } from '../model/types.js';
 
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -55,12 +56,14 @@ export interface JudgeResult {
 export interface PlannerOptions {
   systemPrompt?: string;
   model?: string;
+  modelProvider?: ModelProvider;
   timeoutMs?: number;
 }
 
 export interface JudgeOptions {
   systemPrompt?: string;
   model?: string;
+  modelProvider?: ModelProvider;
   timeoutMs?: number;
   maxReplanAttempts?: number;
   maxRetryAttempts?: number;

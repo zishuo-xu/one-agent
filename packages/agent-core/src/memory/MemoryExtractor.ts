@@ -1,4 +1,6 @@
 import { config } from '../config.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import type { ModelProvider } from '../model/types.js';
 
 export interface ExtractedFact {
   key: string;
@@ -8,12 +10,13 @@ export interface ExtractedFact {
 export interface MemoryExtractorOptions {
   systemPrompt?: string;
   model?: string;
+  modelProvider?: ModelProvider;
   timeoutMs?: number;
 }
 
 export class MemoryExtractor {
   private readonly systemPrompt: string;
-  private readonly model: string;
+  private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
 
   constructor(options: MemoryExtractorOptions = {}) {
@@ -22,7 +25,11 @@ export class MemoryExtractor {
       'You are a memory extractor. Given a user message and an assistant reply, extract concise key facts worth remembering for future conversations. ' +
       'Return ONLY a JSON array in this format, with no markdown, no explanation: [{"key": "fact name", "value": "fact content"}]. ' +
       'If there is nothing notable to remember, return [].';
-    this.model = options.model ?? config.model;
+    this.modelProvider =
+      options.modelProvider ??
+      (options.model
+        ? new OpenAICompatibleProvider(config.openai, options.model)
+        : config.modelProvider ?? new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
   }
 
@@ -38,18 +45,15 @@ export class MemoryExtractor {
     ].join('\n');
 
     try {
-      const response = await config.openai.chat.completions.create(
-        {
-          model: this.model,
-          messages: [
-            { role: 'system', content: this.systemPrompt },
-            { role: 'user', content: prompt },
-          ],
-        },
-        { timeout: this.timeoutMs }
-      );
+      const response = await this.modelProvider.complete({
+        messages: [
+          { role: 'system', content: this.systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        timeoutMs: this.timeoutMs,
+      });
 
-      const raw = response.choices[0]?.message?.content ?? '[]';
+      const raw = response.content || '[]';
       return this.parseFacts(raw);
     } catch {
       // Extraction should never break the main loop.

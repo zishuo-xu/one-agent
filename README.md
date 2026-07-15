@@ -7,11 +7,11 @@
 ```text
 one-agent/
 ├── apps/
-│   ├── api/     # Fastify + TypeScript 后端（可选 REST API）
-│   └── cli/     # 交互式 REPL CLI
+│   ├── api/        # Fastify + TypeScript 后端（可选 REST API）
+│   ├── cli/        # 交互式 REPL CLI
+│   └── trace-web/  # 运行追踪可视化 Web 界面
 └── packages/
-    ├── agent-core/  # Agent 核心：AgentLoop、配置、模型调用
-    └── shared/      # 共享类型和常量
+    └── agent-core/  # Agent 核心：AgentLoop、配置、模型调用
 ```
 
 ## 环境准备
@@ -21,6 +21,10 @@ cp .env.example .env
 # 编辑 .env，填入 OPENAI_API_KEY
 ```
 
+支持任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）。
+可选配置备用模型：设置 `OPENAI_FALLBACK_BASE_URL` / `OPENAI_FALLBACK_API_KEY` /
+`OPENAI_FALLBACK_MODEL` 后，主模型出现 5xx / 429 / 网络错误时自动 failover。
+
 ## 快速开始
 
 ### 启动 CLI REPL
@@ -28,6 +32,19 @@ cp .env.example .env
 ```bash
 pnpm install
 pnpm dev:cli
+```
+
+### 同时启动 CLI + Trace Viewer
+
+```bash
+pnpm dev          # trace-web 后台运行 + CLI 前台交互
+pnpm dev:trace-web  # 单独启动追踪可视化
+```
+
+也可以在启动 CLI 时加 `--trace` 自动拉起 trace-web：
+
+```bash
+pnpm dev:cli -- --trace
 ```
 
 ### 全局安装（输入 `one-agent` 启动）
@@ -65,21 +82,24 @@ pnpm test
 
 ## CLI 命令
 
-- 输入消息并按回车：与 Agent 对话
+- 输入消息并按回车：与 Agent 对话（回复后显示输入/输出 token 用量）
 - `/history`：查看当前会话历史
-- `/context`：查看当前压缩后的上下文
+- `/context`：查看当前上下文（含 token 估算、预算、是否已触发摘要）
 - `/reasoning`：查看当前运行的推理链
 - `/threads`：列出所有会话
 - `/runs`：列出当前会话的运行记录
+- `/traces`：查看最近运行的 trace 事件
 - `/thread <id>`：切换到指定会话
+- `/help`：查看可用命令
 - `/exit` 或 `/quit`：退出
 
 启动 CLI 时：
 
 ```bash
-pnpm dev:cli                          # 新建 thread
+pnpm dev:cli                          # 默认恢复最近会话
+pnpm dev:cli -- --new                 # 强制新建会话
 pnpm dev:cli -- --thread <id>         # 恢复指定 thread
-pnpm dev:cli -- --thread <id> --new-thread  # 强制用指定 id 新建 thread
+pnpm dev:cli -- --trace               # 同时启动 trace-web 追踪可视化
 ```
 
 ## 阶段
@@ -96,3 +116,7 @@ pnpm dev:cli -- --thread <id> --new-thread  # 强制用指定 id 新建 thread
 - [x] Phase 6：异步任务与流式输出
 - [x] Phase 7：Trace 与 Evaluation
 - [x] Phase 8：全局 CLI 命令
+- [x] Phase 9：任务持久化（SQLite TaskStore + 重启恢复）
+- [x] Phase 10：长期记忆检索（跨 thread 记忆共享）
+- [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
+- [x] Phase 12：多模型抽象层（ModelProvider 接口 + 主备 failover）

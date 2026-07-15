@@ -19,6 +19,8 @@ import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryStore } from '../db/memoryStore.js';
 import { MemoryExtractor } from '../memory/MemoryExtractor.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import type { ModelProvider, ModelResponse, ModelToolCall, TokenUsage } from '../model/types.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -31,6 +33,7 @@ export interface AgentLoopOptions {
   contextManager?: ContextManager;
   planner?: Planner;
   taskJudge?: TaskJudge;
+  modelProvider?: ModelProvider;
   enablePlanning?: boolean;
   threadId?: string;
   taskId?: string;
@@ -71,6 +74,7 @@ export class AgentLoop extends EventEmitter {
   private readonly contextManager: ContextManager;
   private readonly planner: Planner;
   private readonly taskJudge: TaskJudge;
+  private readonly modelProvider: ModelProvider;
   private readonly runStore?: RunStore;
   private readonly toolCallStore?: ToolCallStore;
   private readonly threadStore?: ThreadStore;
@@ -101,6 +105,12 @@ export class AgentLoop extends EventEmitter {
     this.toolRegistry = options.tools;
     this.toolExecutor = this.toolRegistry ? new ToolExecutor(this.toolRegistry) : undefined;
     this.signal = options.signal;
+    // Resolve the model provider chain. Falls back to wrapping config.openai
+    // directly so tests/eval that mock the raw client keep working.
+    this.modelProvider =
+      options.modelProvider ??
+      config.modelProvider ??
+      new OpenAICompatibleProvider(config.openai, config.model);
 
     if (options.contextManager) {
       this.contextManager = options.contextManager;
@@ -112,12 +122,14 @@ export class AgentLoop extends EventEmitter {
         db,
         maxContextTokens: options.maxContextTokens,
         recentTokenBudget: options.recentTokenBudget,
+        modelProvider: this.modelProvider,
       });
     } else {
       this.contextManager = new ContextManager({
         systemPrompt: this.systemPrompt,
         maxContextTokens: options.maxContextTokens,
         recentTokenBudget: options.recentTokenBudget,
+        modelProvider: this.modelProvider,
       });
     }
 
@@ -429,27 +441,29 @@ export class AgentLoop extends EventEmitter {
 
     this.checkSignal();
     const response = await this.callModel({ allowedTools: allowedToolNames });
-    const assistantMessage = response.choices[0]?.message;
 
-    const thought = this.extractMessageContent(assistantMessage).trim();
+    // Prefer real content; fall back to reasoning_content for endpoints that
+    // return generated text there (provider surfaces both separately).
+    const thought = (response.content.trim() ? response.content : (response.reasoning ?? '')).trim();
     if (thought) {
       this.reasoningChain.addThought(thought);
       this.emitEvent({ type: 'thought', content: thought });
       this.contextManager.addMessage({ role: 'assistant', content: thought, internal: true });
     }
 
-    if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-      const toolCalls = assistantMessage.tool_calls.map((tc) => ({
+    const responseToolCalls = response.toolCalls ?? [];
+    if (responseToolCalls.length > 0) {
+      const toolCalls = responseToolCalls.map((tc) => ({
         id: tc.id,
-        name: tc.function.name,
-        arguments: this.safeParseArgs(tc.function.arguments),
+        name: tc.name,
+        arguments: this.safeParseArgs(tc.arguments),
       }));
 
       // Record the model's tool calls before validating them so the trace is complete.
       this.contextManager.addMessage({
         role: 'assistant',
         content: thought,
-        tool_calls: assistantMessage.tool_calls,
+        tool_calls: this.toWireToolCalls(responseToolCalls),
         internal: true,
       });
 
@@ -649,23 +663,19 @@ export class AgentLoop extends EventEmitter {
       .join('\n');
   }
 
-  private accumulateUsage(usage: unknown): void {
-    if (!usage || typeof usage !== 'object') return;
-    const u = usage as Record<string, unknown>;
-    const pt = typeof u.prompt_tokens === 'number' ? u.prompt_tokens : 0;
-    const ct = typeof u.completion_tokens === 'number' ? u.completion_tokens : 0;
-    const tt = typeof u.total_tokens === 'number' ? u.total_tokens : pt + ct;
-    this.tokenUsage.promptTokens += pt;
-    this.tokenUsage.completionTokens += ct;
-    this.tokenUsage.totalTokens += tt;
+  private accumulateUsage(usage?: TokenUsage): void {
+    if (!usage) return;
+    this.tokenUsage.promptTokens += usage.promptTokens;
+    this.tokenUsage.completionTokens += usage.completionTokens;
+    this.tokenUsage.totalTokens += usage.totalTokens;
     // Feed the real prompt_tokens back to the context manager so it can use
     // "last real + delta estimate" for the next compression decision.
-    if (pt > 0) {
-      this.contextManager.updateLastKnownTokens(pt);
+    if (usage.promptTokens > 0) {
+      this.contextManager.updateLastKnownTokens(usage.promptTokens);
     }
   }
 
-  private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}) {
+  private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}): Promise<ModelResponse> {
     const { includeTools = true, allowedTools } = options;
     let lastError: Error | undefined;
 
@@ -676,15 +686,13 @@ export class AgentLoop extends EventEmitter {
         const tools = includeTools
           ? this.toolRegistry?.getSchemas(allowedTools)
           : undefined;
-        const response = await config.openai.chat.completions.create(
-          {
-            model: config.model,
-            messages: messages as never,
-            tools,
-          },
-          { timeout: this.timeoutMs, signal: this.signal }
-        );
-        this.accumulateUsage((response as unknown as Record<string, unknown>).usage);
+        const response = await this.modelProvider.complete({
+          messages,
+          tools,
+          timeoutMs: this.timeoutMs,
+          signal: this.signal,
+        });
+        this.accumulateUsage(response.usage);
         return response;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -699,13 +707,14 @@ export class AgentLoop extends EventEmitter {
   /**
    * Open a single streaming completion that simultaneously streams the answer
    * text to the user (via message_delta events) and accumulates tool-call
-   * deltas by their `index`. This replaces the old "probe then stream" flow:
-   * there is exactly one request per turn, and for tool-less answers the text
-   * already reached the client token-by-token by the time the stream ends.
+   * deltas by their `index`. There is exactly one request per turn, and for
+   * tool-less answers the text already reached the client token-by-token by
+   * the time the stream ends.
    *
-   * Some compatible endpoints ignore `stream: true` and return a plain object;
-   * in that case we fall back to reading content + tool_calls off the whole
-   * message and emit a single message_delta so callers keep their contract.
+   * Wire-format concerns (reasoning_content probing, non-streaming fallback
+   * for endpoints that ignore `stream: true`) live in the provider; this
+   * method only applies agent-level policy: reasoning-as-fallback and the
+   * no-retry-after-emitted-delta guard.
    */
   private async callModelStreaming(options: { allowedTools?: string[] } = {}): Promise<{
     content: string;
@@ -724,123 +733,73 @@ export class AgentLoop extends EventEmitter {
       try {
         const messages = await this.contextManager.buildContext();
         const tools = this.toolRegistry?.getSchemas(allowedTools);
-        const response = await config.openai.chat.completions.create(
-          {
-            model: config.model,
-            messages: messages as never,
-            stream: true,
-            stream_options: { include_usage: true },
-            tools,
-          },
-          { timeout: this.timeoutMs, signal: this.signal }
-        );
 
-        if (Symbol.asyncIterator in response) {
-          let content = '';
-          // GLM-5.2 streams a reasoning_content "chain of thought" before the
-          // actual answer in delta.content. We must NOT mix them: only stream
-          // delta.content to the client live. Buffer reasoning_content and use
-          // it as a fallback only if the stream ends with no real content.
-          let reasoningBuffer = '';
-          let hasRealContent = false;
-          let reasoningStarted = false;
-          // Tool-call deltas arrive fragmented across chunks and indexed by
-          // position; accumulate function name + argument fragments.
-          const toolCallMap = new Map<
-            number,
-            { id?: string; name?: string; arguments: string }
-          >();
+        let content = '';
+        // Reasoning-as-fallback policy: stream content live; buffer reasoning
+        // and use it as the answer only if the stream ends with no real content.
+        let reasoningBuffer = '';
+        let hasRealContent = false;
+        // Tool-call deltas arrive fragmented across chunks, indexed by position.
+        const toolCallMap = new Map<
+          number,
+          { id?: string; name?: string; arguments: string }
+        >();
 
-          for await (const chunk of response) {
-            this.checkSignal();
-            this.accumulateUsage((chunk as unknown as Record<string, unknown>).usage);
-            const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
-            const delta = (chunk as unknown as { choices?: Array<{ delta?: Record<string, unknown> }> })
-              .choices?.[0]?.delta;
+        for await (const chunk of this.modelProvider.stream({
+          messages,
+          tools,
+          timeoutMs: this.timeoutMs,
+          signal: this.signal,
+        })) {
+          this.checkSignal();
+          this.accumulateUsage(chunk.usage);
 
-            // Prefer real content; only buffer reasoning as fallback.
-            if (contentDelta) {
-              content += contentDelta;
-              if (contentDelta.trim()) hasRealContent = true;
-              emittedDelta = true;
-              this.emitEvent({ type: 'message_delta', content: contentDelta });
-            }
-            if (reasoningDelta && !hasRealContent) {
-              reasoningBuffer += reasoningDelta;
-              // Emit reasoning live so the user sees activity instead of
-              // staring at a blank spinner for seconds on end.
-              if (!reasoningStarted) {
-                reasoningStarted = true;
-                this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
-              } else {
-                this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
-              }
-            }
-
-            const tcDeltas = delta?.tool_calls as
-              | Array<{
-                  index?: number;
-                  id?: string;
-                  function?: { name?: string; arguments?: string };
-                }>
-              | undefined;
-            if (tcDeltas) {
-              for (const tc of tcDeltas) {
-                const idx = tc.index ?? 0;
-                const existing = toolCallMap.get(idx) ?? {
-                  id: undefined,
-                  name: undefined,
-                  arguments: '',
-                };
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.name = tc.function.name;
-                if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-                toolCallMap.set(idx, existing);
-              }
-            }
-          }
-
-          // If the model only produced reasoning_content (no real content),
-          // use it as the answer so the user is not left with an empty reply.
-          if (!hasRealContent && reasoningBuffer) {
-            content = reasoningBuffer;
+          if (chunk.content) {
+            content += chunk.content;
+            if (chunk.content.trim()) hasRealContent = true;
             emittedDelta = true;
-            this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
+            this.emitEvent({ type: 'message_delta', content: chunk.content });
           }
-
-          const toolCalls =
-            toolCallMap.size > 0
-              ? [...toolCallMap.entries()]
-                  .sort((a, b) => a[0] - b[0])
-                  .map(([, tc]) => ({
-                    id: tc.id ?? '',
-                    type: 'function' as const,
-                    function: { name: tc.name ?? '', arguments: tc.arguments },
-                  }))
-              : undefined;
-
-          return { content, toolCalls };
+          if (chunk.reasoning && !hasRealContent) {
+            reasoningBuffer += chunk.reasoning;
+            // Emit reasoning live so the user sees activity instead of
+            // staring at a blank spinner for seconds on end.
+            this.emitEvent({ type: 'reasoning_delta', content: chunk.reasoning });
+          }
+          if (chunk.toolCallDeltas) {
+            for (const tc of chunk.toolCallDeltas) {
+              const existing = toolCallMap.get(tc.index) ?? {
+                id: undefined,
+                name: undefined,
+                arguments: '',
+              };
+              if (tc.id) existing.id = tc.id;
+              if (tc.name) existing.name = tc.name;
+              if (tc.argumentsDelta) existing.arguments += tc.argumentsDelta;
+              toolCallMap.set(tc.index, existing);
+            }
+          }
         }
 
-        // Non-streaming fallback: endpoint ignored stream:true.
-        const nonStreamingResponse = response as unknown as {
-          choices: Array<{
-            message?: {
-              content?: string;
-              reasoning_content?: string;
-              tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-            };
-          }>;
-          usage?: Record<string, unknown>;
-        };
-        this.accumulateUsage(nonStreamingResponse.usage);
-        const message = nonStreamingResponse.choices[0]?.message;
-        const content = this.extractMessageContent(message);
-        if (content) {
+        // If the model only produced reasoning_content (no real content),
+        // use it as the answer so the user is not left with an empty reply.
+        if (!hasRealContent && reasoningBuffer) {
+          content = reasoningBuffer;
           emittedDelta = true;
-          this.emitEvent({ type: 'message_delta', content });
+          this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
         }
-        const toolCalls = message?.tool_calls;
+
+        const toolCalls =
+          toolCallMap.size > 0
+            ? [...toolCallMap.entries()]
+                .sort((a, b) => a[0] - b[0])
+                .map(([, tc]) => ({
+                  id: tc.id ?? '',
+                  type: 'function' as const,
+                  function: { name: tc.name ?? '', arguments: tc.arguments },
+                }))
+            : undefined;
+
         return { content, toolCalls };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -869,53 +828,34 @@ export class AgentLoop extends EventEmitter {
         const tools = includeTools
           ? this.toolRegistry?.getSchemas(allowedTools)
           : undefined;
-        const response = await config.openai.chat.completions.create(
-          {
-            model: config.model,
-            messages: messages as never,
-            stream: true,
-            stream_options: { include_usage: true },
-            tools,
-          },
-          { timeout: this.timeoutMs, signal: this.signal }
-        );
 
         let content = '';
-        if (Symbol.asyncIterator in response) {
-          // Same reasoning/content separation as callModelStreaming: only
-          // stream delta.content live; emit reasoning_content live too.
-          let reasoningBuffer = '';
-          let hasRealContent = false;
-          for await (const chunk of response) {
-            this.checkSignal();
-            this.accumulateUsage((chunk as unknown as Record<string, unknown>).usage);
-            const { content: contentDelta, reasoning: reasoningDelta } = this.extractDeltaFields(chunk);
-            if (contentDelta) {
-              content += contentDelta;
-              if (contentDelta.trim()) hasRealContent = true;
-              emittedDelta = true;
-              this.emitEvent({ type: 'message_delta', content: contentDelta });
-            }
-            if (reasoningDelta && !hasRealContent) {
-              reasoningBuffer += reasoningDelta;
-              this.emitEvent({ type: 'reasoning_delta', content: reasoningDelta });
-            }
-          }
-          if (!hasRealContent && reasoningBuffer) {
-            content = reasoningBuffer;
+        // Same reasoning/content separation policy as callModelStreaming.
+        let reasoningBuffer = '';
+        let hasRealContent = false;
+        for await (const chunk of this.modelProvider.stream({
+          messages,
+          tools,
+          timeoutMs: this.timeoutMs,
+          signal: this.signal,
+        })) {
+          this.checkSignal();
+          this.accumulateUsage(chunk.usage);
+          if (chunk.content) {
+            content += chunk.content;
+            if (chunk.content.trim()) hasRealContent = true;
             emittedDelta = true;
-            this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
+            this.emitEvent({ type: 'message_delta', content: chunk.content });
           }
-        } else {
-          const nonStreamingResponse = response as unknown as {
-            choices: Array<{ message?: Record<string, unknown> }>;
-          };
-          const fallback = this.extractMessageContent(nonStreamingResponse.choices[0]?.message);
-          content = fallback;
-          if (content) {
-            emittedDelta = true;
-            this.emitEvent({ type: 'message_delta', content });
+          if (chunk.reasoning && !hasRealContent) {
+            reasoningBuffer += chunk.reasoning;
+            this.emitEvent({ type: 'reasoning_delta', content: chunk.reasoning });
           }
+        }
+        if (!hasRealContent && reasoningBuffer) {
+          content = reasoningBuffer;
+          emittedDelta = true;
+          this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
         }
         return content;
       } catch (error) {
@@ -931,123 +871,14 @@ export class AgentLoop extends EventEmitter {
     );
   }
 
-  private extractMessageContent(message: unknown): string {
-    if (!message || typeof message !== 'object') {
-      return '';
-    }
-    const msg = message as Record<string, unknown>;
-    const content = this.extractTextContent(msg.content);
-    if (content.trim()) {
-      return content;
-    }
-    // Volcengine GLM-5.2 sometimes returns generated text in reasoning_content
-    // even for non-streaming completions.
-    const reasoning = this.extractTextContent(msg.reasoning_content ?? msg.reasoningContent);
-    if (reasoning.trim()) {
-      return reasoning;
-    }
-    return '';
-  }
-
-  private extractTextContent(value: unknown): string {
-    if (typeof value === 'string') {
-      return value;
-    }
-    if (!Array.isArray(value)) {
-      return '';
-    }
-    return value
-      .map((part) => {
-        if (typeof part === 'string') {
-          return part;
-        }
-        if (!part || typeof part !== 'object') {
-          return '';
-        }
-        const item = part as Record<string, unknown>;
-        return this.extractTextContent(item.text ?? item.content);
-      })
-      .join('');
-  }
-
-  /**
-   * Extract content and reasoning_content separately from a streaming chunk,
-   * covering all nesting levels used by OpenAI and compatible endpoints
-   * (delta.content, delta.message.content, choices[0].message.content, etc.).
-   */
-  private extractDeltaFields(chunk: unknown): { content: string; reasoning: string } {
-    if (!chunk || typeof chunk !== 'object') {
-      return { content: '', reasoning: '' };
-    }
-    const choice = (chunk as Record<string, unknown>).choices;
-    if (!Array.isArray(choice) || choice.length === 0) {
-      return { content: '', reasoning: '' };
-    }
-    const first = choice[0] as Record<string, unknown>;
-    const delta = first?.delta as Record<string, unknown> | undefined;
-    const nestedMessage = delta?.message as Record<string, unknown> | undefined;
-    const msg = first?.message as Record<string, unknown> | undefined;
-
-    const content =
-      this.extractTextContent(delta?.content) ||
-      this.extractTextContent(nestedMessage?.content) ||
-      this.extractTextContent(msg?.content);
-
-    const reasoning =
-      this.extractTextContent(delta?.reasoning_content ?? delta?.reasoningContent) ||
-      this.extractTextContent(nestedMessage?.reasoning_content ?? nestedMessage?.reasoningContent) ||
-      this.extractTextContent(msg?.reasoning_content ?? msg?.reasoningContent);
-
-    return { content, reasoning };
-  }
-
-  private extractDeltaContent(chunk: unknown): string {
-    if (!chunk || typeof chunk !== 'object') {
-      return '';
-    }
-    const choice = (chunk as Record<string, unknown>).choices;
-    if (!Array.isArray(choice) || choice.length === 0) {
-      return '';
-    }
-    const first = choice[0] as Record<string, unknown>;
-    // Standard OpenAI streaming format: choices[0].delta.content
-    const delta = first?.delta as Record<string, unknown> | undefined;
-    const deltaContent = this.extractTextContent(delta?.content);
-    if (deltaContent.trim()) {
-      return deltaContent;
-    }
-    // Volcengine GLM-5.2 returns generated text in reasoning_content when streaming
-    const deltaReasoning = this.extractTextContent(
-      delta?.reasoning_content ?? delta?.reasoningContent
-    );
-    if (deltaReasoning.trim()) {
-      return deltaReasoning;
-    }
-    // Some compatibility endpoints wrap content in choices[0].delta.message.content
-    const message = delta?.message as Record<string, unknown> | undefined;
-    const nestedContent = this.extractTextContent(message?.content);
-    if (nestedContent.trim()) {
-      return nestedContent;
-    }
-    const nestedReasoning = this.extractTextContent(
-      message?.reasoning_content ?? message?.reasoningContent
-    );
-    if (nestedReasoning.trim()) {
-      return nestedReasoning;
-    }
-    // Fallback for non-streaming-like chunks
-    const msg = first?.message as Record<string, unknown> | undefined;
-    const messageContent = this.extractTextContent(msg?.content);
-    if (messageContent.trim()) {
-      return messageContent;
-    }
-    const messageReasoning = this.extractTextContent(
-      msg?.reasoning_content ?? msg?.reasoningContent
-    );
-    if (messageReasoning.trim()) {
-      return messageReasoning;
-    }
-    return '';
+  private toWireToolCalls(
+    toolCalls: ModelToolCall[]
+  ): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> {
+    return toolCalls.map((tc) => ({
+      id: tc.id,
+      type: 'function' as const,
+      function: { name: tc.name, arguments: tc.arguments },
+    }));
   }
 
   private emitEvent(event: AgentLoopEvent): void {
