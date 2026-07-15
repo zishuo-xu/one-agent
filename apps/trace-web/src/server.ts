@@ -4,6 +4,7 @@ import {
   RunStore,
   ThreadStore,
   TraceEventStore,
+  MessageStore,
 } from '@one-agent/agent-core';
 import type { TraceEvent } from '@one-agent/agent-core';
 
@@ -23,6 +24,7 @@ export function buildTraceWebServer(): FastifyInstance {
   const threadStore = new ThreadStore(db);
   const runStore = new RunStore(db);
   const traceEventStore = new TraceEventStore(db);
+  const messageStore = new MessageStore(db);
 
   fastify.get('/api/threads', async () => {
     return threadStore.list();
@@ -35,39 +37,22 @@ export function buildTraceWebServer(): FastifyInstance {
       return reply.status(404).send({ error: `Thread not found: ${id}` });
     }
     const runs = runStore.getByThread(id);
-    // Attach a preview (assistant reply or tool call) to each run so the
-    // list is readable without clicking into details.
+    // Match each run to the user question that triggered it by chronological
+    // order (both runs and user messages are sequential per thread).
+    const userMessages = messageStore
+      .getByThread(id)
+      .filter((m) => m.role === 'user' && !m.content.startsWith('Execute the following step'));
+
+    // Runs come back DESC (newest first); reverse to match ascending user messages.
+    const runsAsc = [...runs].reverse();
+
     return runs.map((run) => {
-      const traces = traceEventStore.getByRun(run.id);
-      let preview = '';
-      // Accumulate message_delta chunks into full text for a meaningful preview.
-      let deltaText = '';
-      for (const t of traces) {
-        if (t.eventType === 'message_delta' && t.eventData?.content) {
-          deltaText += String(t.eventData.content);
-        } else if (t.eventType === 'message' && t.eventData?.content) {
-          if (!deltaText) deltaText = String(t.eventData.content);
-          break;
-        } else if (deltaText) {
-          break; // deltas ended, stop accumulating
-        }
-      }
-      if (deltaText) {
-        preview = deltaText.replace(/\n/g, ' ').slice(0, 120);
-      }
-      if (!preview) {
-        for (const t of traces) {
-          if (t.eventType === 'tool_call' && t.eventData?.toolCall?.name) {
-            preview = '🔧 ' + t.eventData.toolCall.name;
-            break;
-          }
-          if (t.eventType === 'plan' && t.eventData?.plan?.steps?.length) {
-            preview = '📋 ' + t.eventData.plan.steps.map((s: { description: string }) => s.description).join(' -> ');
-            break;
-          }
-        }
-      }
-      return { ...run, preview: preview || run.status };
+      const runIdx = runsAsc.indexOf(run);
+      const userMsg = userMessages[runIdx];
+      const prompt = userMsg
+        ? userMsg.content.replace(/\n/g, ' ').slice(0, 120)
+        : '';
+      return { ...run, preview: prompt || run.status };
     });
   });
 
