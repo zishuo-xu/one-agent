@@ -100,7 +100,7 @@ function createAgent(
   threadId: string | undefined,
   memoryStore: MemoryStore,
   memoryExtractor: MemoryExtractor,
-  enablePlanning = false
+  enablePlanning: boolean | 'auto' = false
 ) {
   const sandbox = new Sandbox(WORKSPACE_ROOT);
   const tools = new ToolRegistry();

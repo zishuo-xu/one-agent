@@ -37,7 +37,9 @@ export class TaskJudge {
       options.modelProvider ??
       (options.model
         ? new OpenAICompatibleProvider(config.openai, options.model)
-        : config.modelProvider ?? new OpenAICompatibleProvider(config.openai, config.model));
+        : config.planningModelProvider ??
+          config.modelProvider ??
+          new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
     this.maxRetryAttempts = options.maxRetryAttempts ?? 2;

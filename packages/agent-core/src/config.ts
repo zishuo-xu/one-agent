@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { createProviderFromEnv } from './model/factory.js';
+import { OpenAICompatibleProvider } from './model/OpenAICompatibleProvider.js';
 
 function getEnv(key: string, defaultValue?: string): string {
   const value = process.env[key];
@@ -29,6 +30,20 @@ export const config = {
    * directly when they need a pinned single provider (tests, eval mocks).
    */
   modelProvider: createProviderFromEnv(openai, model),
+  /**
+   * Optional stronger model for planning/judging (PLANNING_MODEL).
+   * Falls back to modelProvider when unset.
+   */
+  planningModelProvider: process.env.PLANNING_MODEL
+    ? new OpenAICompatibleProvider(openai, process.env.PLANNING_MODEL)
+    : undefined,
+  /**
+   * Optional cheaper model for summarization and memory extraction
+   * (UTILITY_MODEL). Falls back to modelProvider when unset.
+   */
+  utilityModelProvider: process.env.UTILITY_MODEL
+    ? new OpenAICompatibleProvider(openai, process.env.UTILITY_MODEL)
+    : undefined,
   /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
   timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? '30000'),
   /** Maximum estimated tokens in the context window before summarization triggers. */

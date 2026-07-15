@@ -5,7 +5,7 @@ export interface CliArgs {
   help: boolean;
   version: boolean;
   init: boolean;
-  plan: boolean;
+  plan: boolean | 'auto';
   trace: boolean;
 }
 
@@ -23,7 +23,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     help: argv.includes('--help') || argv.includes('-h'),
     version: argv.includes('--version') || argv.includes('-v'),
     init: argv.includes('--init'),
-    plan: argv.includes('--plan'),
+    plan: argv.includes('--plan-auto') ? 'auto' : argv.includes('--plan'),
     trace: argv.includes('--trace'),
   };
 }

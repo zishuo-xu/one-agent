@@ -115,6 +115,8 @@ pnpm dev:cli                          # 默认恢复最近会话
 pnpm dev:cli -- --new                 # 强制新建会话
 pnpm dev:cli -- --thread <id>         # 恢复指定 thread
 pnpm dev:cli -- --trace               # 同时启动 trace-web 追踪可视化
+pnpm dev:cli -- --plan                # 开启规划模式（多步任务）
+pnpm dev:cli -- --plan-auto           # 自动判断：简单问题直接答、复杂问题才规划
 ```
 
 ## 阶段

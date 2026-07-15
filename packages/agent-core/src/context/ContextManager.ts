@@ -231,6 +231,7 @@ export class ContextManager {
   private resolveModelProvider(): ModelProvider {
     return (
       this.modelProvider ??
+      config.utilityModelProvider ??
       config.modelProvider ??
       new OpenAICompatibleProvider(config.openai, config.model)
     );

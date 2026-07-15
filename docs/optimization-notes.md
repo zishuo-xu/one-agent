@@ -102,10 +102,13 @@
 4. **反思质量提升** ✅  
    已支持。`TaskJudge` 输出结构化 `failureAnalysis`（category、affectedStepIds、rootCause、recommendation），`AgentLoop.replan` 将其作为上下文生成更精准的新计划。
 
-5. **规划开关粒度**  
-   目前是整个 AgentLoop 开启/关闭 planning。可支持按任务类型自动判断是否启用 planning（简单问题直接回答，复杂问题才规划）。
+5. **规划开关粒度** ✅  
+   已实现。`enablePlanning` 支持 `'auto'`：每轮对话由一次低开销分类调用判断走规划循环还是直接回答，判定结果作为 thought 事件进入 trace；分类器失败时安全降级为规划。CLI 对应 `--plan-auto` 参数。
 
-6. **推理链持久化** ✅  
+6. **按场景选模型** ✅  
+   已实现。`PLANNING_MODEL`（规划/判定）与 `UTILITY_MODEL`（摘要/记忆提取）环境变量可为不同场景指定模型；未设置时统一回退到主 provider。
+
+7. **推理链持久化** ✅  
    当前 reasoning chain 已随 run 持久化到 `agent_runs.reasoning_chain`。`ReasoningChain` 支持 `planStepId` 绑定，方便后续按 plan step 查询。
 
 ---

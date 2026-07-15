@@ -34,7 +34,7 @@ export interface AgentLoopOptions {
   planner?: Planner;
   taskJudge?: TaskJudge;
   modelProvider?: ModelProvider;
-  enablePlanning?: boolean;
+  enablePlanning?: boolean | 'auto';
   threadId?: string;
   taskId?: string;
   db?: Database.Database;
@@ -67,7 +67,7 @@ export class AgentLoop extends EventEmitter {
   private readonly maxToolIterations: number;
   private readonly maxReplanAttempts: number;
   private readonly maxRetryAttempts: number;
-  private readonly enablePlanning: boolean;
+  private readonly enablePlanning: boolean | 'auto';
   private readonly threadId?: string;
   private readonly toolRegistry?: ToolRegistry;
   private readonly toolExecutor?: ToolExecutor;
@@ -114,23 +114,29 @@ export class AgentLoop extends EventEmitter {
 
     if (options.contextManager) {
       this.contextManager = options.contextManager;
-    } else if (options.threadId) {
-      const db = options.db ?? getSharedConnection();
-      this.contextManager = new PersistenceContextManager({
-        systemPrompt: this.systemPrompt,
-        threadId: options.threadId,
-        db,
-        maxContextTokens: options.maxContextTokens,
-        recentTokenBudget: options.recentTokenBudget,
-        modelProvider: this.modelProvider,
-      });
     } else {
-      this.contextManager = new ContextManager({
-        systemPrompt: this.systemPrompt,
-        maxContextTokens: options.maxContextTokens,
-        recentTokenBudget: options.recentTokenBudget,
-        modelProvider: this.modelProvider,
-      });
+      // Summarization runs on the utility model when configured; an explicitly
+      // pinned provider (tests, eval) always wins.
+      const utilityProvider =
+        options.modelProvider ?? config.utilityModelProvider ?? this.modelProvider;
+      if (options.threadId) {
+        const db = options.db ?? getSharedConnection();
+        this.contextManager = new PersistenceContextManager({
+          systemPrompt: this.systemPrompt,
+          threadId: options.threadId,
+          db,
+          maxContextTokens: options.maxContextTokens,
+          recentTokenBudget: options.recentTokenBudget,
+          modelProvider: utilityProvider,
+        });
+      } else {
+        this.contextManager = new ContextManager({
+          systemPrompt: this.systemPrompt,
+          maxContextTokens: options.maxContextTokens,
+          recentTokenBudget: options.recentTokenBudget,
+          modelProvider: utilityProvider,
+        });
+      }
     }
 
     this.planner = options.planner ?? new Planner();
@@ -184,10 +190,15 @@ export class AgentLoop extends EventEmitter {
 
     try {
       let result: { reply: string; events: AgentLoopEvent[] };
-      if (!this.enablePlanning || !this.toolRegistry) {
+      // Planning requires both the opt-in and a tool registry; in 'auto' mode
+      // a cheap classifier decides per message whether planning is worth it.
+      const planningEnabled = this.enablePlanning !== false && this.toolRegistry;
+      if (!planningEnabled) {
         result = await this.runSimpleLoop(runId);
-      } else {
+      } else if (await this.resolvePlanningMode(message)) {
         result = await this.runPlanningLoop(message, runId, this.currentMemoryText);
+      } else {
+        result = await this.runSimpleLoop(runId);
       }
       this.completeRun(runId);
       await this.persistMemories(message, result.reply);
@@ -239,6 +250,47 @@ export class AgentLoop extends EventEmitter {
 
   getEvents(): AgentLoopEvent[] {
     return [...this.events];
+  }
+
+  /**
+   * Decide whether this message should go through the planning loop.
+   * In 'auto' mode a cheap one-call classifier judges whether the request
+   * needs multi-step tool use; the verdict is emitted as a thought event so
+   * it shows up in traces. Classifier failure defaults to planning — auto
+   * mode opted into planning, and wrongly skipping it loses capability.
+   */
+  private async resolvePlanningMode(message: string): Promise<boolean> {
+    if (this.enablePlanning !== 'auto') {
+      return this.enablePlanning === true;
+    }
+    try {
+      const response = await this.modelProvider.complete({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You decide whether a user request needs multi-step planning with tools, ' +
+              'or can be answered directly. Reply with exactly one word: "plan" or "direct".',
+          },
+          { role: 'user', content: message },
+        ],
+        timeoutMs: this.timeoutMs,
+        signal: this.signal,
+      });
+      const verdict = response.content.trim().toLowerCase();
+      const plan = verdict.startsWith('plan');
+      this.emitEvent({
+        type: 'thought',
+        content: `Auto planning decision: ${plan ? 'plan' : 'direct'}`,
+      });
+      return plan;
+    } catch {
+      this.emitEvent({
+        type: 'thought',
+        content: 'Auto planning classifier failed; defaulting to plan',
+      });
+      return true;
+    }
   }
 
   private async runSimpleLoop(runId?: string): Promise<{ reply: string; events: AgentLoopEvent[] }> {

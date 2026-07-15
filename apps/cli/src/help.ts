@@ -12,6 +12,7 @@ ${bold('Options')}:
   --thread <id>       Resume a specific thread
   --workspace <dir>   Use the given directory as the agent workspace
   --plan              Enable planning mode for multi-step tool tasks
+  --plan-auto         Let the agent decide per message whether to plan
   --verbose           Show internal thoughts, plans, and reflections
   --trace             Start the trace web viewer at http://127.0.0.1:3001
 
@@ -31,7 +32,7 @@ ${bold('REPL commands')}:
 
 ${dim('Without --thread/--new, the most recent thread is resumed automatically.')}
 ${dim('Use --verbose to show internal thoughts, plans, and reflections.')}
-${dim('Use --plan to enable multi-step planning mode.')}
+${dim('Use --plan to enable multi-step planning mode, or --plan-auto to let the agent decide.')}
 `.trim();
 
 export function printHelp(): void {

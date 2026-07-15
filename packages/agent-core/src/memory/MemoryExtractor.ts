@@ -29,7 +29,9 @@ export class MemoryExtractor {
       options.modelProvider ??
       (options.model
         ? new OpenAICompatibleProvider(config.openai, options.model)
-        : config.modelProvider ?? new OpenAICompatibleProvider(config.openai, config.model));
+        : config.utilityModelProvider ??
+          config.modelProvider ??
+          new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
   }
 
