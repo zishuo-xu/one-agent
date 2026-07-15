@@ -1,0 +1,101 @@
+{
+  "id": "multi-tool-planning",
+  "name": "多工具规划",
+  "description": "Agent 在规划模式下先列出文件再读取目标文件",
+  "prompt": "请列出当前目录的 txt 文件，然后读取第一个并总结内容",
+  "initialWorkspace": {
+    "notes.txt": "Today: finish evaluation and add idempotency."
+  },
+  "requiredTools": [
+    {
+      "name": "list_files"
+    },
+    {
+      "name": "read_file"
+    }
+  ],
+  "finalAnswerContains": [
+    "evaluation",
+    "idempotency",
+    "Today",
+    "finish"
+  ],
+  "enablePlanning": true,
+  "timeoutMs": 60000,
+  "mockResponses": [
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "{\"reasoning\":\"List files then read the first txt.\",\"steps\":[{\"id\":\"1\",\"description\":\"List txt files\",\"toolName\":\"list_files\",\"expectedOutcome\":\"File list\"},{\"id\":\"2\",\"description\":\"Read first txt file\",\"toolName\":\"read_file\",\"expectedOutcome\":\"Content retrieved\"}]}"
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "list_files",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "{\"complete\":false,\"reasoning\":\"Need to read file.\",\"nextAction\":\"continue\"}"
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"notes.txt\"}"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "{\"complete\":true,\"reasoning\":\"Done.\",\"nextAction\":\"finalize\"}"
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "The notes mention finishing evaluation and adding idempotency."
+          }
+        }
+      ]
+    }
+  ]
+}

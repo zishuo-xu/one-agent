@@ -22,6 +22,10 @@ import {
 import { Plan } from '../planning/types.js';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import { createConnection } from '../db/connection.js';
+import { ThreadStore } from '../db/threadStore.js';
+import { RunStore } from '../db/runStore.js';
+import type Database from 'better-sqlite3';
 import type { MockChatCompletionResponse } from './types.js';
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -35,7 +39,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 export class EvalRunner {
   async run(options: EvalRunnerOptions): Promise<EvalRunSummary> {
+    // Optional trace persistence: each task runs in its own thread so failed
+    // evals can be inspected in trace-web afterwards.
+    const traceDb = options.traceDbPath
+      ? createConnection({ path: options.traceDbPath })
+      : undefined;
+    try {
+      return await this.runTasks(options, traceDb);
+    } finally {
+      traceDb?.close();
+    }
+  }
+
+  private async runTasks(
+    options: EvalRunnerOptions,
+    traceDb?: Database.Database,
+  ): Promise<EvalRunSummary> {
     const results: EvalResult[] = [];
+    const threadStore = traceDb ? new ThreadStore(traceDb) : undefined;
+    const runStore = traceDb ? new RunStore(traceDb) : undefined;
 
     for (const task of options.tasks) {
       const start = Date.now();
@@ -73,6 +95,9 @@ export class EvalRunner {
         ) as unknown as typeof config.openai.chat.completions.create;
       }
 
+      // Persist this task's run in its own thread when tracing.
+      const threadId = threadStore?.create({ title: `eval: ${task.name}` }).id;
+
       const agent = new AgentLoop({
         tools,
         enablePlanning: task.enablePlanning ?? options.enablePlanning ?? false,
@@ -80,6 +105,7 @@ export class EvalRunner {
         // never re-routes mock traffic ("Mock model exhausted" must surface
         // as an error, not trigger a silent switch to a real endpoint).
         modelProvider: new OpenAICompatibleProvider(config.openai, config.model),
+        ...(threadId && traceDb ? { threadId, db: traceDb } : {}),
       });
 
       agent.on('event', (event: AgentLoopEvent) => {
@@ -87,6 +113,7 @@ export class EvalRunner {
       });
 
       let tokenUsage: EvalResult['tokenUsage'] | undefined;
+      let runId: string | undefined;
       try {
         const timeoutMs = task.timeoutMs ?? options.defaultTimeoutMs ?? 60000;
         const run = await withTimeout(
@@ -96,6 +123,7 @@ export class EvalRunner {
         );
         reply = run.reply;
         tokenUsage = run.tokenUsage;
+        runId = run.runId;
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
       } finally {
@@ -174,6 +202,16 @@ export class EvalRunner {
         }
       }
 
+      // Mark the persisted run/thread with the eval outcome so failures are
+      // easy to spot in trace-web.
+      if (threadStore && threadId) {
+        const passed = errors.length === 0;
+        threadStore.updateTitle(threadId, `${passed ? '[PASS]' : '[FAIL]'} eval: ${task.name}`);
+        if (!passed && runStore && runId) {
+          runStore.fail(runId, errors.join(' | '));
+        }
+      }
+
       results.push({
         taskId: task.id,
         passed: errors.length === 0,
@@ -190,6 +228,8 @@ export class EvalRunner {
           planStepCount: planEvents.reduce((sum, event) => sum + countPlanSteps(event.plan), 0),
         },
         reflectionCount: events.filter((e) => e.type === 'reflection').length,
+        runId,
+        threadId,
       });
     }
 

@@ -109,6 +109,7 @@ function renderViewerPage(): string {
       --message: #ec4899;
       --reflection: #6366f1;
       --message_delta: #64748b;
+      --failed: #ef4444;
     }
     * { box-sizing: border-box; }
     body {
@@ -161,6 +162,17 @@ function renderViewerPage(): string {
     .item.active {
       background: var(--panel-hover);
       border-color: var(--thought);
+    }
+    .item.failed {
+      border-left: 3px solid var(--failed);
+    }
+    .item-error {
+      font-size: 12px;
+      color: var(--failed);
+      margin-top: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .item-title { font-size: 14px; margin-bottom: 4px; }
     .item-meta { font-size: 12px; color: var(--muted); }
@@ -377,9 +389,10 @@ function renderViewerPage(): string {
         container.innerHTML = '<div class="empty">No runs for this thread</div>';
       } else {
         container.innerHTML = runs.map(r => \`
-          <div class="item \${selectedRunId === r.id ? 'active' : ''}" onclick="selectRun('\${r.id}')">
+          <div class="item \${selectedRunId === r.id ? 'active' : ''} \${r.status === 'failed' ? 'failed' : ''}" onclick="selectRun('\${r.id}')">
             <div class="item-title">\${escapeHtml(r.preview || r.status)}</div>
             <div class="item-meta">\${r.status} · \${formatTime(r.startTime)}</div>
+            \${r.status === 'failed' && r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
           </div>
         \`).join('');
       }

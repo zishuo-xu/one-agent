@@ -70,6 +70,9 @@ export interface EvalResult {
     planStepCount: number;
   };
   reflectionCount?: number;
+  /** Persisted run/thread ids when the runner was given a traceDbPath. */
+  runId?: string;
+  threadId?: string;
 }
 
 export interface EvalRunnerOptions {
@@ -79,6 +82,13 @@ export interface EvalRunnerOptions {
   defaultTimeoutMs?: number;
   /** When 'real', the runner does not mock the OpenAI client and lets AgentLoop call the real model. */
   mode?: 'mock' | 'real';
+  /**
+   * When set, each task runs in its own persisted thread in this SQLite file
+   * so failures can be inspected afterwards in trace-web
+   * (DATABASE_PATH=<path> pnpm dev:trace-web). Failed tasks mark their run
+   * as failed with the assertion errors and prefix the thread title [FAIL].
+   */
+  traceDbPath?: string;
 }
 
 export interface EvalRunSummary {

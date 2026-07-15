@@ -87,6 +87,7 @@ export type {
 
 export { EvalRunner } from './eval/runner.js';
 export { builtInEvalTasks, realModelPlanningTask, realModelBenchmarkTasks } from './eval/scenarios/index.js';
+export { loadEvalDataset, resolveBundledDatasetDir } from './eval/datasetLoader.js';
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
 export type { ExtractedFact } from './memory/MemoryExtractor.js';
 export type {

@@ -22,6 +22,7 @@
 | Phase 11：规划能力深度增强 | ✅ | 计划绑定、层级计划、结构化反思、真实模型评估 |
 | Phase 12：多模型抽象层 | ✅ | `ModelProvider` 接口、`OpenAICompatibleProvider`、`FallbackProvider` 主备切换 |
 | Phase 13：工具生态扩展 | ✅ | `run_command` Shell 工具、`append_file`/`delete_file`/`search_files`、`DISABLED_TOOLS` |
+| Phase 14：Eval+Trace 联动 | ✅ | eval trace 持久化、[FAIL]/[PASS] 标记、JSON 数据集独立管理、trace-web 失败现场 |
 
 ---
 
@@ -168,7 +169,7 @@
    事件流增长很快。可支持按时间/任务/运行采样，或自动清理旧 trace。
 
 3. **Evaluation 数据集扩展** ✅  
-   已扩展到 20 个内置场景，覆盖 get_time、工具链(read→write)、规划失败重规划、禁止工具的纯知识回答等边界。
+   已扩展到 20 个内置场景，覆盖 get_time、工具链(read→write)、规划失败重规划、禁止工具的纯知识回答等边界。数据集已迁移为独立 JSON 文件（`packages/agent-core/eval-datasets/`），支持 `--dataset <dir>` 加载外部数据集，zod 校验。
 
 4. **Evaluation 指标细化** ✅  
    已增加 token 消耗（prompt/completion/total）、运行步数、重试次数、耗时、规划指标（planCount/replanCount/planStepCount/reflectionCount）。CLI eval 输出含每任务 token 统计和汇总行。
@@ -176,8 +177,8 @@
 5. **真实模型评估** ✅  
    已支持。`EvalRunnerOptions` 新增 `mode?: 'mock' | 'real'`；mock 模式通过 `EvalTask.mockResponses` 回放预设响应，无需真实 API key；real 模式直接调用真实模型；`EvalResult` 增加 `tokenUsage`、`planningMetrics` 与 `reflectionCount` 等指标；CLI `eval` 命令支持 `--real` 参数运行多个 real-model 场景并输出 benchmark 报告（通过率、总 token、总耗时）。AgentLoop 通过 `stream_options: { include_usage: true }` 从流式响应中提取 token 使用量。
 
-6. **Trace 与 Evaluation 联动**  
-   评估失败时自动把相关 trace 保存到失败案例集，用于后续调试或 prompt 迭代。
+6. **Trace 与 Evaluation 联动** ✅  
+   已实现。`EvalRunner` 支持 `traceDbPath`：每个任务在独立 thread 运行并持久化完整 trace，断言失败的任务标记 run 为 failed（含断言错误）、thread 标题前缀 `[FAIL]`/`[PASS]`；trace-web runs 列表红色标记失败 run 并显示错误摘要。详见 `docs/phase14-eval-trace.md`。
 
 ---
 
@@ -242,6 +243,7 @@
 - `docs/phase11-planning-enhancements.md`
 - `docs/phase12-multi-model.md`
 - `docs/phase13-tool-ecosystem.md`
+- `docs/phase14-eval-trace.md`
 - `docs/cli-interaction-improvements.md`
 - `docs/cli-ux-optimization.md`
 - `docs/correctness-fixes.md`
@@ -254,4 +256,4 @@
 1. 是否引入 tokenizer 来精确控制上下文？
 2. ✅ 已决定：文件工具已扩展 `append_file` / `delete_file` / `search_files` / `run_command`（Phase 13）；删除确认机制、工具返回值规范化留作后续。
 3. ✅ 已决定：任务状态持久化到 SQLite（`tasks` 表），暂不使用 Redis；若未来量极大再评估。
-4. 是否把 Evaluation 数据集和失败案例集独立管理，并支持人工复核？
+4. ✅ 已决定：Evaluation 数据集已独立为 JSON 文件管理（`eval-datasets/`，Phase 14），eval trace 持久化支持失败现场回放；失败案例集归档与人工复核留作后续。

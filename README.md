@@ -74,10 +74,15 @@ one-agent --workspace ~/my-agent
 pnpm dev:api
 ```
 
-### 测试
+### 测试与评估
 
 ```bash
-pnpm test
+pnpm test                    # 全套单元测试
+pnpm eval                    # eval 场景回归（agent-core vitest）
+pnpm --filter cli eval       # CLI eval（mock 模式，20 个内置场景）
+pnpm --filter cli eval -- --real             # 真实模型 benchmark
+pnpm --filter cli eval -- --trace            # 持久化 trace，失败可在 trace-web 查看
+pnpm --filter cli eval -- --dataset <dir>    # 加载外部 JSON 数据集
 ```
 
 ## 内置工具
@@ -131,3 +136,4 @@ pnpm dev:cli -- --trace               # 同时启动 trace-web 追踪可视化
 - [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
 - [x] Phase 12：多模型抽象层（ModelProvider 接口 + 主备 failover）
 - [x] Phase 13：工具生态扩展（run_command + 文件工具补齐）
+- [x] Phase 14：Eval+Trace 联动（失败案例可观测闭环 + JSON 数据集）
