@@ -34,7 +34,41 @@ export function buildTraceWebServer(): FastifyInstance {
     if (!thread) {
       return reply.status(404).send({ error: `Thread not found: ${id}` });
     }
-    return runStore.getByThread(id);
+    const runs = runStore.getByThread(id);
+    // Attach a preview (assistant reply or tool call) to each run so the
+    // list is readable without clicking into details.
+    return runs.map((run) => {
+      const traces = traceEventStore.getByRun(run.id);
+      let preview = '';
+      // Accumulate message_delta chunks into full text for a meaningful preview.
+      let deltaText = '';
+      for (const t of traces) {
+        if (t.eventType === 'message_delta' && t.eventData?.content) {
+          deltaText += String(t.eventData.content);
+        } else if (t.eventType === 'message' && t.eventData?.content) {
+          if (!deltaText) deltaText = String(t.eventData.content);
+          break;
+        } else if (deltaText) {
+          break; // deltas ended, stop accumulating
+        }
+      }
+      if (deltaText) {
+        preview = deltaText.replace(/\n/g, ' ').slice(0, 120);
+      }
+      if (!preview) {
+        for (const t of traces) {
+          if (t.eventType === 'tool_call' && t.eventData?.toolCall?.name) {
+            preview = '🔧 ' + t.eventData.toolCall.name;
+            break;
+          }
+          if (t.eventType === 'plan' && t.eventData?.plan?.steps?.length) {
+            preview = '📋 ' + t.eventData.plan.steps.map((s: { description: string }) => s.description).join(' -> ');
+            break;
+          }
+        }
+      }
+      return { ...run, preview: preview || run.status };
+    });
   });
 
   fastify.get<{ Params: { id: string } }>('/api/threads/:id/traces', async (request, reply) => {
@@ -293,8 +327,8 @@ function renderViewerPage(): string {
       } else {
         container.innerHTML = runs.map(r => \`
           <div class="item \${selectedRunId === r.id ? 'active' : ''}" onclick="selectRun('\${r.id}')">
-            <div class="item-title">\${r.status}</div>
-            <div class="item-meta">\${r.id} · \${formatTime(r.startTime)}</div>
+            <div class="item-title">\${escapeHtml(r.preview || r.status)}</div>
+            <div class="item-meta">\${r.status} · \${formatTime(r.startTime)}</div>
           </div>
         \`).join('');
       }
@@ -322,6 +356,46 @@ function renderViewerPage(): string {
       else if (selectedThreadId) await showAllThreadTraces();
     }
 
+    function summarizeEvent(e) {
+      const d = e.eventData ?? {};
+      switch (e.eventType) {
+        case 'plan': {
+          const steps = d.plan?.steps ?? [];
+          const stepText = steps.map(s => s.description + (s.toolName ? ' [' + s.toolName + ']' : '')).join(' → ');
+          return { label: steps.length + ' steps', preview: stepText };
+        }
+        case 'thought':
+          return { label: '', preview: (d.content ?? '').slice(0, 200) };
+        case 'reflection':
+          return { label: '', preview: (d.content ?? '').slice(0, 200) };
+        case 'tool_call': {
+          const tc = d.toolCall ?? {};
+          const args = tc.arguments ? JSON.stringify(tc.arguments) : '';
+          return { label: tc.name ?? '?', preview: args };
+        }
+        case 'tool_result': {
+          const tr = d.toolResult ?? {};
+          if (!tr.success) return { label: 'failed', preview: tr.error ?? '' };
+          const data = tr.data;
+          if (data?.results && Array.isArray(data.results)) {
+            return { label: data.results.length + ' results', preview: data.results.map(r => r.title ?? r.url ?? '').slice(0, 3).join(' | ') };
+          }
+          if (typeof data === 'object' && data !== null) {
+            const keys = Object.keys(data);
+            return { label: 'ok', preview: keys.slice(0, 5).join(', ') };
+          }
+          return { label: 'ok', preview: typeof data === 'string' ? data.slice(0, 200) : '' };
+        }
+        case 'message':
+          return { label: '', preview: (d.content ?? '').slice(0, 300) };
+        case 'message_delta':
+        case 'reasoning_delta':
+          return { label: e.chunkCount + ' chunks', preview: (e.fullText ?? d.content ?? '').slice(0, 300) };
+        default:
+          return { label: '', preview: JSON.stringify(d).slice(0, 200) };
+      }
+    }
+
     function renderTraces(traces, context) {
       const container = document.getElementById('timeline');
       if (traces.length === 0) {
@@ -336,7 +410,6 @@ function renderViewerPage(): string {
       while (i < traces.length) {
         const e = traces[i];
         if (e.eventType === 'message_delta' || e.eventType === 'reasoning_delta') {
-          // Collect all consecutive delta events of the same type.
           const type = e.eventType;
           const chunks = [];
           const startTime = e.createdAt;
@@ -362,22 +435,19 @@ function renderViewerPage(): string {
 
       container.innerHTML = grouped.map(e => {
         const isStream = e.chunkCount !== undefined;
-        const typeLabel = isStream
-          ? \`\${e.eventType} (\${e.chunkCount} chunks)\`
-          : e.eventType;
-        const data = isStream
-          ? e.fullText
-          : JSON.stringify(e.eventData, null, 2);
+        const summary = summarizeEvent(e);
+        const typeLabel = e.eventType + (summary.label ? ' · ' + summary.label : '');
         const timeLabel = isStream && e.endTime
-          ? \`\${formatTime(e.createdAt)} - \${formatTime(e.endTime)}\`
+          ? formatTime(e.createdAt) + ' - ' + formatTime(e.endTime)
           : formatTime(e.createdAt);
+        const preview = summary.preview || '(empty)';
         return \`
           <div class="event \${e.eventType}">
             <div class="event-header">
-              <span class="event-type">\${typeLabel}</span>
+              <span class="event-type">\${escapeHtml(typeLabel)}</span>
               <span class="event-time">\${timeLabel}</span>
             </div>
-            <div class="event-data">\${escapeHtml(data)}</div>
+            <div class="event-data">\${escapeHtml(preview)}</div>
           </div>
         \`;
       }).join('');
