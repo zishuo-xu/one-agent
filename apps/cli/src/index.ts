@@ -26,6 +26,7 @@ import { categorizeError, printError } from './errors.js';
 import { createChatEventHandler } from './chat-events.js';
 import { isUsableApiKey, parseArgs, resolveThread } from './args.js';
 import {
+  cyan,
   dim,
   formatDuration,
   formatRelativeTime,
@@ -169,7 +170,7 @@ function createProgressIndicator(label = 'Thinking'): {
 }
 
 async function main() {
-  const { threadId: argThreadId, newThread, verbose, help, version, init, plan } = parseArgs();
+  const { threadId: argThreadId, newThread, verbose, help, version, init, plan, trace } = parseArgs();
 
   if (help) {
     printHelp();
@@ -209,7 +210,7 @@ async function main() {
 
   try {
     const resolution = resolveThread(
-      { threadId: argThreadId, newThread, verbose, help, version, init, plan },
+      { threadId: argThreadId, newThread, verbose, help, version, init, plan, trace },
       threadStore.list().map((t) => ({ id: t.id, title: t.title })),
       (id) => Boolean(threadStore.getById(id)),
       (id) => threadStore.create(id ? { id } : {}).id,
@@ -225,6 +226,28 @@ async function main() {
   }
 
   let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
+
+  // Optionally start the trace web viewer in the background.
+  let traceProcess: import('node:child_process').ChildProcess | null = null;
+  if (trace) {
+    try {
+      const { spawn } = await import('node:child_process');
+      const fs = await import('node:fs');
+      const traceWebPath = path.resolve(new URL('../../trace-web/dist/index.js', import.meta.url).pathname);
+      if (fs.existsSync(traceWebPath)) {
+        traceProcess = spawn('node', [traceWebPath, '--port', '3001', '--host', '127.0.0.1'], {
+          stdio: 'ignore',
+          detached: false,
+        });
+        console.log(cyan('Trace viewer: http://127.0.0.1:3001'));
+      } else {
+        console.warn(dim('Trace viewer not found. Run "pnpm build" first.'));
+      }
+    } catch (err) {
+      console.warn(dim(`Trace viewer failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
   const rl = readline.createInterface({ input: stdin, output: stdout });
   const inputQueue: string[] = [];
   let pendingInput: ((input: string | null) => void) | null = null;
@@ -288,6 +311,7 @@ async function main() {
     if (trimmed === '/exit' || trimmed === '/quit') {
       console.log('Goodbye.');
       rl.close();
+      if (traceProcess) traceProcess.kill();
       break;
     }
 

@@ -13,6 +13,7 @@ ${bold('Options')}:
   --workspace <dir>   Use the given directory as the agent workspace
   --plan              Enable planning mode for multi-step tool tasks
   --verbose           Show internal thoughts, plans, and reflections
+  --trace             Start the trace web viewer at http://127.0.0.1:3001
 
 ${bold('REPL commands')}:
   /help               Show this command list
