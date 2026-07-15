@@ -20,9 +20,6 @@ importers:
       '@one-agent/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
-      '@one-agent/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -117,12 +114,6 @@ importers:
       vitest:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)
-
-  packages/shared:
-    devDependencies:
-      typescript:
-        specifier: ^5.4.5
-        version: 5.9.3
 
 packages:
 

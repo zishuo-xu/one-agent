@@ -108,16 +108,19 @@ describe('createChatEventHandler streaming', () => {
     expect(tl.deltas).toEqual([]);
   });
 
-  it('streams reasoning_delta live via onReasoning (not onDelta)', () => {
+  it('streams reasoning_delta live via onDelta (unified with answer)', () => {
     const tl = makeTimeline();
     const { handler, result } = createChatEventHandler(tl);
 
     handler({ type: 'reasoning_delta', content: 'The user said hello.' } as AgentLoopEvent);
     handler({ type: 'reasoning_delta', content: ' I should greet back.' } as AgentLoopEvent);
 
-    expect(tl.reasoning).toEqual(['The user said hello.', ' I should greet back.']);
-    expect(tl.deltas).toEqual([]);
-    expect(result.hasStreamedLive).toBe(false);
+    // Reasoning is streamed through onDelta as part of the same continuous
+    // output stream - no separate onReasoning channel, no dimming.
+    expect(tl.deltas).toEqual(['The user said hello.', ' I should greet back.']);
+    expect(tl.reasoning).toEqual([]);
+    expect(result.hasStreamedLive).toBe(true);
+    expect(result.streamedContent).toBe('The user said hello. I should greet back.');
   });
 
   it('sets firstDeltaTime on first reasoning_delta', () => {
@@ -128,15 +131,17 @@ describe('createChatEventHandler streaming', () => {
     expect(result.firstDeltaTime).toBeGreaterThanOrEqual(before);
   });
 
-  it('inserts a separator between reasoning and real answer', () => {
+  it('streams reasoning and answer as continuous output without separator', () => {
     const tl = makeTimeline();
-    const { handler } = createChatEventHandler(tl);
+    const { handler, result } = createChatEventHandler(tl);
 
     handler({ type: 'reasoning_delta', content: 'Let me think...' } as AgentLoopEvent);
     handler({ type: 'message_delta', content: 'Hello!' } as AgentLoopEvent);
 
-    // The separator (\n) should appear in infos, and the answer in deltas.
-    expect(tl.infos).toContain('\n');
-    expect(tl.deltas).toContain('Hello!');
+    // No separator inserted - reasoning and answer are unified into one
+    // continuous stream for a clean reading experience.
+    expect(tl.infos).not.toContain('\n');
+    expect(tl.deltas).toEqual(['Let me think...', 'Hello!']);
+    expect(result.streamedContent).toBe('Let me think...Hello!');
   });
 });
