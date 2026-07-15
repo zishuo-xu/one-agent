@@ -15,7 +15,17 @@ describe('createBuiltInTools', () => {
     const tools = createBuiltInTools(sandbox);
 
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['get_time', 'list_files', 'read_file', 'web_search', 'write_file']);
+    expect(names).toEqual([
+      'append_file',
+      'delete_file',
+      'get_time',
+      'list_files',
+      'read_file',
+      'run_command',
+      'search_files',
+      'web_search',
+      'write_file',
+    ]);
   });
 
   it('returns valid ToolDefinition objects', () => {
@@ -29,6 +39,19 @@ describe('createBuiltInTools', () => {
       expect(typeof tool.description).toBe('string');
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe('function');
+    }
+  });
+
+  it('omits tools listed in DISABLED_TOOLS', () => {
+    const sandbox = new Sandbox(buildWorkspaceRoot());
+    process.env.DISABLED_TOOLS = 'run_command, delete_file';
+    try {
+      const names = createBuiltInTools(sandbox).map((t) => t.name);
+      expect(names).not.toContain('run_command');
+      expect(names).not.toContain('delete_file');
+      expect(names).toContain('read_file');
+    } finally {
+      delete process.env.DISABLED_TOOLS;
     }
   });
 });

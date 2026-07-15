@@ -80,6 +80,16 @@ pnpm dev:api
 pnpm test
 ```
 
+## 内置工具
+
+- `read_file` / `write_file` / `append_file` / `delete_file`：workspace 内文件读写
+- `list_files` / `search_files`：目录列举、文件名通配 + 内容搜索
+- `run_command`：执行 shell 命令（cwd 限定 workspace，超时 + 输出截断 + 危险命令拦截）
+- `web_search`：网络搜索（DuckDuckGo 或 Tavily）
+- `get_time`：当前时间
+
+API 部署时可用 `DISABLED_TOOLS=run_command,delete_file` 禁用高风险工具。
+
 ## CLI 命令
 
 - 输入消息并按回车：与 Agent 对话（回复后显示输入/输出 token 用量）
@@ -120,3 +130,4 @@ pnpm dev:cli -- --trace               # 同时启动 trace-web 追踪可视化
 - [x] Phase 10：长期记忆检索（跨 thread 记忆共享）
 - [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
 - [x] Phase 12：多模型抽象层（ModelProvider 接口 + 主备 failover）
+- [x] Phase 13：工具生态扩展（run_command + 文件工具补齐）

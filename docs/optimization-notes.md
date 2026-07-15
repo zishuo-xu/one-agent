@@ -21,6 +21,7 @@
 | Phase 10：长期记忆检索 | ✅ | `MemoryStore`、`MemoryExtractor`、跨 thread 召回 |
 | Phase 11：规划能力深度增强 | ✅ | 计划绑定、层级计划、结构化反思、真实模型评估 |
 | Phase 12：多模型抽象层 | ✅ | `ModelProvider` 接口、`OpenAICompatibleProvider`、`FallbackProvider` 主备切换 |
+| Phase 13：工具生态扩展 | ✅ | `run_command` Shell 工具、`append_file`/`delete_file`/`search_files`、`DISABLED_TOOLS` |
 
 ---
 
@@ -52,13 +53,16 @@
 2. **工具注册自动扫描** ✅  
    已实现。`built-in/index.ts` 通过 `loadBuiltInFactories()` 动态扫描目录，自动加载所有 `default export` 的工具工厂，新增工具只需添加文件即可。
 
-3. **文件工具增强**（部分完成）  
+3. **文件工具增强** ✅  
    - ✅ `web_search`：调用 DuckDuckGo Instant Answer API 搜索网络，无需 API key，适合获取当前不在 workspace 中的信息
-   - ⬜ `append_file`：追加内容
-   - ⬜ `delete_file`：删除文件（需要用户确认）
-   - ⬜ `search_files`：按文件名或内容搜索 workspace
+   - ✅ `append_file`：追加内容
+   - ✅ `delete_file`：删除文件（workspace 限定，拒目录/路径穿越）
+   - ✅ `search_files`：按文件名通配 + 内容子串搜索 workspace（跳过 node_modules/.git/dist）
 
-4. **工具返回值规范化**  
+4. **Shell 执行工具** ✅  
+   已实现 `run_command`：cwd 限定 workspace、默认 30s 超时（上限 120s）、输出截断（每流 10000 字符）、危险命令 blocklist（sudo / rm -rf / / 磁盘操作 / 管道远程脚本等）；非零退出码作为正常结果返回供模型自纠。信任模型与护栏局限详见 `docs/phase13-tool-ecosystem.md`。API 部署可用 `DISABLED_TOOLS` 禁用。
+
+5. **工具返回值规范化**  
    当前工具返回任意对象，`ToolExecutor` 包装为 `{ success, data }`。可统一所有工具返回标准结构。
 
 ---
@@ -237,6 +241,7 @@
 - `docs/phase1-architecture.md`
 - `docs/phase11-planning-enhancements.md`
 - `docs/phase12-multi-model.md`
+- `docs/phase13-tool-ecosystem.md`
 - `docs/cli-interaction-improvements.md`
 - `docs/cli-ux-optimization.md`
 - `docs/correctness-fixes.md`
@@ -247,6 +252,6 @@
 ## 十二、待决策事项
 
 1. 是否引入 tokenizer 来精确控制上下文？
-2. 是否扩展更多文件工具？（`web_search` 已实现，`append_file` / `delete_file` / `search_files` 待定）
+2. ✅ 已决定：文件工具已扩展 `append_file` / `delete_file` / `search_files` / `run_command`（Phase 13）；删除确认机制、工具返回值规范化留作后续。
 3. ✅ 已决定：任务状态持久化到 SQLite（`tasks` 表），暂不使用 Redis；若未来量极大再评估。
 4. 是否把 Evaluation 数据集和失败案例集独立管理，并支持人工复核？
