@@ -1,7 +1,7 @@
 {
   "name": "one-agent",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "简化版多 Agent 协作平台",
   "scripts": {
     "build:core": "pnpm --filter agent-core build",
