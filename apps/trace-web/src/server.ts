@@ -237,6 +237,68 @@ function renderViewerPage(): string {
       color: var(--muted);
       font-weight: normal;
     }
+    /* Visual timeline bar */
+    .timeline-bar {
+      display: flex;
+      height: 32px;
+      background: var(--bg);
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      cursor: pointer;
+    }
+    .timeline-seg {
+      height: 100%;
+      min-width: 2px;
+      opacity: 0.85;
+      transition: opacity 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      color: transparent;
+      overflow: hidden;
+    }
+    .timeline-seg:hover { opacity: 1; color: #fff; }
+    .timeline-seg.plan { background: var(--plan); }
+    .timeline-seg.thought { background: var(--thought); }
+    .timeline-seg.tool_call { background: var(--tool_call); }
+    .timeline-seg.tool_result { background: var(--tool_result); }
+    .timeline-seg.message { background: var(--message); }
+    .timeline-seg.reflection { background: var(--reflection); }
+    .timeline-seg.message_delta { background: var(--message_delta); }
+    .timeline-seg.reasoning_delta { background: #475569; }
+    /* Filter buttons */
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px 0;
+    }
+    .filter-btn {
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      cursor: pointer;
+      opacity: 0.5;
+      transition: opacity 0.15s;
+    }
+    .filter-btn.active { opacity: 1; }
+    .filter-btn.plan { border-color: var(--plan); }
+    .filter-btn.thought { border-color: var(--thought); }
+    .filter-btn.tool_call { border-color: var(--tool_call); }
+    .filter-btn.tool_result { border-color: var(--tool_result); }
+    .filter-btn.message { border-color: var(--message); }
+    .filter-btn.reflection { border-color: var(--reflection); }
+    .filter-btn.message_delta { border-color: var(--message_delta); }
+    .filter-btn.reasoning_delta { border-color: #475569; }
+    /* Collapsible events */
+    .event { cursor: pointer; }
+    .event .event-full { display: none; margin-top: 8px; }
+    .event.expanded .event-full { display: block; }
+    .event.expanded .event-data { display: none; }
   </style>
 </head>
 <body>
@@ -268,6 +330,10 @@ function renderViewerPage(): string {
           <button onclick="refreshTraces()">Refresh</button>
           <button onclick="showAllThreadTraces()">All traces</button>
         </div>
+      </div>
+      <div id="filters" class="filters" style="padding: 8px 16px; display: none;"></div>
+      <div id="timeline-bar-container" style="padding: 0 16px; display: none;">
+        <div id="timeline-bar" class="timeline-bar"></div>
       </div>
       <div id="timeline" class="event-list">
         <div class="empty">Select a run to view traces</div>
@@ -381,15 +447,20 @@ function renderViewerPage(): string {
       }
     }
 
+    let activeFilters = new Set();
+
     function renderTraces(traces, context) {
       const container = document.getElementById('timeline');
+      const barContainer = document.getElementById('timeline-bar-container');
+      const filterContainer = document.getElementById('filters');
       if (traces.length === 0) {
         container.innerHTML = '<div class="empty">No traces found</div>';
+        barContainer.style.display = 'none';
+        filterContainer.style.display = 'none';
         return;
       }
 
-      // Group consecutive message_delta / reasoning_delta events into a
-      // single "stream" entry so the timeline isn't flooded with 100+ chunks.
+      // Group consecutive message_delta / reasoning_delta events.
       const grouped = [];
       let i = 0;
       while (i < traces.length) {
@@ -405,37 +476,83 @@ function renderViewerPage(): string {
             endTime = traces[i].createdAt;
             i++;
           }
-          grouped.push({
-            eventType: type,
-            createdAt: startTime,
-            endTime,
-            chunkCount: chunks.length,
-            fullText: chunks.join(''),
-          });
+          grouped.push({ eventType: type, createdAt: startTime, endTime, chunkCount: chunks.length, fullText: chunks.join(''), eventData: {} });
         } else {
           grouped.push(e);
           i++;
         }
       }
 
-      container.innerHTML = grouped.map(e => {
-        const isStream = e.chunkCount !== undefined;
+      // Collect unique event types for filter buttons.
+      const types = [...new Set(grouped.map(e => e.eventType))];
+      activeFilters = new Set(types); // all active by default
+      filterContainer.innerHTML = types.map(t =>
+        \`<span class="filter-btn \${t} active" onclick="toggleFilter('\${t}')">\${t}</span>\`
+      ).join('');
+      filterContainer.style.display = 'flex';
+
+      // Render visual timeline bar (proportional segments by count).
+      barContainer.style.display = 'block';
+      const bar = document.getElementById('timeline-bar');
+      bar.innerHTML = grouped.map((e, idx) =>
+        \`<div class="timeline-seg \${e.eventType}" style="flex: 1" title="\${e.eventType}" onclick="scrollToEvent(\${idx})"></div>\`
+      ).join('');
+
+      // Render event list with expandable details.
+      renderEventList(grouped);
+    }
+
+    function renderEventList(grouped) {
+      const container = document.getElementById('timeline');
+      container.innerHTML = grouped.map((e, idx) => {
         const summary = summarizeEvent(e);
         const typeLabel = e.eventType + (summary.label ? ' · ' + summary.label : '');
+        const isStream = e.chunkCount !== undefined;
         const timeLabel = isStream && e.endTime
           ? formatTime(e.createdAt) + ' - ' + formatTime(e.endTime)
           : formatTime(e.createdAt);
         const preview = summary.preview || '(empty)';
+        const fullData = JSON.stringify(e.eventData ?? e, null, 2);
         return \`
-          <div class="event \${e.eventType}">
+          <div class="event \${e.eventType}" id="event-\${idx}" onclick="toggleExpand(\${idx})" data-type="\${e.eventType}">
             <div class="event-header">
               <span class="event-type">\${escapeHtml(typeLabel)}</span>
               <span class="event-time">\${timeLabel}</span>
             </div>
             <div class="event-data">\${escapeHtml(preview)}</div>
+            <div class="event-full">\${escapeHtml(fullData)}</div>
           </div>
         \`;
       }).join('');
+      applyFilters();
+    }
+
+    function toggleExpand(idx) {
+      const el = document.getElementById('event-' + idx);
+      if (el) el.classList.toggle('expanded');
+    }
+
+    function scrollToEvent(idx) {
+      const el = document.getElementById('event-' + idx);
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.style.boxShadow = '0 0 0 2px var(--thought)'; setTimeout(() => el.style.boxShadow = '', 1000); }
+    }
+
+    function toggleFilter(type) {
+      if (activeFilters.has(type)) activeFilters.delete(type);
+      else activeFilters.add(type);
+      // Update button visual
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        const t = btn.className.split(' ').find(c => c !== 'filter-btn' && c !== 'active');
+        if (t) btn.classList.toggle('active', activeFilters.has(t));
+      });
+      applyFilters();
+    }
+
+    function applyFilters() {
+      document.querySelectorAll('.event').forEach(el => {
+        const type = el.dataset.type;
+        el.style.display = activeFilters.has(type) ? '' : 'none';
+      });
     }
 
     function escapeHtml(text) {
