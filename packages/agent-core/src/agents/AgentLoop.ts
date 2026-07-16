@@ -999,14 +999,15 @@ export class AgentLoop extends EventEmitter {
       .join('\n');
   }
 
-  private accumulateUsage(usage?: TokenUsage): void {
+  private accumulateUsage(usage?: TokenUsage, options?: { trackPromptSize?: boolean }): void {
     if (!usage) return;
     this.tokenUsage.promptTokens += usage.promptTokens;
     this.tokenUsage.completionTokens += usage.completionTokens;
     this.tokenUsage.totalTokens += usage.totalTokens;
     // Feed the real prompt_tokens back to the context manager so it can use
-    // "last real + delta estimate" for the next compression decision.
-    if (usage.promptTokens > 0) {
+    // "last real + delta estimate" for the next compression decision. Only
+    // this loop's own model calls may anchor that estimate — see runSubAgent.
+    if (usage.promptTokens > 0 && options?.trackPromptSize !== false) {
       this.contextManager.updateLastKnownTokens(usage.promptTokens);
     }
   }
@@ -1242,7 +1243,10 @@ export class AgentLoop extends EventEmitter {
     this.emitEvent({ type: 'sub_agent', task: task.task, status: 'started', stepId: task.stepId });
     const result = await this.subAgentRunner.run(task);
     if (result.tokenUsage) {
-      this.accumulateUsage(result.tokenUsage);
+      // Roll the cost into the run totals, but never let the sub-agent's
+      // (much smaller) prompt anchor this loop's context-size estimate —
+      // that would understate the parent's size and skip summarization.
+      this.accumulateUsage(result.tokenUsage, { trackPromptSize: false });
     }
     this.emitEvent({
       type: 'sub_agent',

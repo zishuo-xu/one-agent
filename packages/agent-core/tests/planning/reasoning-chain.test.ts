@@ -63,6 +63,33 @@ describe('ReasoningChain', () => {
     expect(steps[0].failureAnalysis?.recommendation).toBe('Retry');
   });
 
+  it('commits failure analysis immediately so the judge sees it, without leaking into the next step', () => {
+    const chain = new ReasoningChain();
+    chain.setCurrentPlanStepId('step-1');
+    chain.addThought('trying the step');
+    chain.addFailureAnalysis({
+      category: 'tool_failure',
+      affectedStepIds: ['step-1'],
+      rootCause: 'tool exploded',
+      recommendation: 'Retry',
+    });
+
+    // Visible to getSteps() without an explicit commitStep().
+    const steps = chain.getSteps();
+    expect(steps).toHaveLength(1);
+    expect(steps[0].failureAnalysis?.category).toBe('tool_failure');
+    expect(steps[0].planStepId).toBe('step-1');
+
+    // The next step starts clean: no stale failure state leaks into it.
+    chain.setCurrentPlanStepId('step-2');
+    chain.addThought('fresh step');
+    chain.addObservation({ success: true });
+    const all = chain.getSteps();
+    expect(all).toHaveLength(2);
+    expect(all[1].planStepId).toBe('step-2');
+    expect(all[1].failureAnalysis).toBeUndefined();
+  });
+
   it('converts steps to messages', () => {
     const chain = new ReasoningChain();
 

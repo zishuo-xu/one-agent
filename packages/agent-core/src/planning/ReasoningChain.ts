@@ -40,6 +40,10 @@ export class ReasoningChain {
   addFailureAnalysis(failureAnalysis: FailureAnalysis): void {
     this.currentStep.failureAnalysis = failureAnalysis;
     this.currentStep.planStepId = this.currentPlanStepId;
+    // Failure analysis is terminal evidence for a step: commit immediately so
+    // the judge (which reads getSteps()) actually sees what just failed, and
+    // so the stale state cannot leak into the next step's thought/action.
+    this.commitStep();
   }
 
   commitStep(): void {
