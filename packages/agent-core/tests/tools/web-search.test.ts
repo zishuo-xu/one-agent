@@ -84,6 +84,42 @@ describe('web_search tool', () => {
 
     expect(result.results).toHaveLength(0);
     expect(result.summary).toContain('No useful results');
+    // The empty-result guidance must steer the model away from retry loops.
+    expect(result.summary).toContain('Do NOT retry');
+  });
+
+  it('falls back to DuckDuckGo when a configured provider is unreachable', async () => {
+    process.env.SEARCH_API_URL = 'https://api.tavily.com/search';
+    process.env.SEARCH_API_KEY = 'test-key';
+    try {
+      const html = `
+        <div class="result">
+          <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F">Example</a>
+          <a class="result__snippet">Fallback result</a>
+        </div>
+      `;
+      const mockFetch = vi.fn()
+        // Tavily request rejects (DNS/unreachable)...
+        .mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND api.tavily.com'))
+        // ...then the DuckDuckGo HTML fallback answers.
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: async () => html,
+          json: async () => ({}),
+        });
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+      const tool = createWebSearchTool(new Sandbox('/tmp'));
+      const result = await tool.execute({ query: 'example', limit: 1 });
+
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].url).toBe('https://example.com/');
+    } finally {
+      delete process.env.SEARCH_API_URL;
+      delete process.env.SEARCH_API_KEY;
+    }
   });
 
   it('parses Brave Search API response', async () => {

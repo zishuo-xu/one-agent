@@ -29,7 +29,10 @@ export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
       if (!results || results.length === 0) {
         return {
           query,
-          summary: 'No useful results were found for this query.',
+          summary:
+            'No useful results were found for this query after trying all configured search providers. ' +
+            'Do NOT retry the same or a slightly reworded search over and over; ' +
+            'answer from your own knowledge instead and mention that the search came back empty.',
           sourceUrl: '',
           results: [],
         };
@@ -52,15 +55,21 @@ async function searchWithConfigApi(query: string, limit: number): Promise<Search
     return null;
   }
 
-  if (isTavilyUrl(apiUrl)) {
-    return searchTavily(apiUrl, apiKey, query, limit);
-  }
+  // A configured-but-unreachable provider must not kill the whole search:
+  // fall through to the DuckDuckGo providers on any error.
+  try {
+    if (isTavilyUrl(apiUrl)) {
+      return await searchTavily(apiUrl, apiKey, query, limit);
+    }
 
-  if (isBraveUrl(apiUrl)) {
-    return searchBrave(apiUrl, apiKey, query, limit);
-  }
+    if (isBraveUrl(apiUrl)) {
+      return await searchBrave(apiUrl, apiKey, query, limit);
+    }
 
-  return searchGenericApi(apiUrl, apiKey, query, limit);
+    return await searchGenericApi(apiUrl, apiKey, query, limit);
+  } catch {
+    return null;
+  }
 }
 
 function isTavilyUrl(url: string): boolean {
