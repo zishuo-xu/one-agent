@@ -77,7 +77,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_thread_id ON tasks(thread_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_idempotency_key ON tasks(idempotency_key);
 
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
@@ -145,9 +144,18 @@ export function migrate(instance: Database.Database): void {
     // Column already exists.
   }
   try {
-    instance.exec('ALTER TABLE tasks ADD COLUMN idempotency_key TEXT UNIQUE');
+    // SQLite cannot add a UNIQUE column via ALTER TABLE; add the column plain
+    // and enforce uniqueness with the partial unique index below.
+    instance.exec('ALTER TABLE tasks ADD COLUMN idempotency_key TEXT');
   } catch {
     // Column already exists.
+  }
+  try {
+    instance.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency_key_unique ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL'
+    );
+  } catch {
+    // Index already exists.
   }
   try {
     instance.exec('ALTER TABLE messages ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0');

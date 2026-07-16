@@ -21,6 +21,8 @@ import { MemoryExtractor } from '../memory/MemoryExtractor.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, ModelResponse, ModelToolCall, TokenUsage } from '../model/types.js';
+import { SubAgentRunner, SubAgentTask, SubAgentResult } from './SubAgentRunner.js';
+import { createSpawnAgentTool } from './spawnAgentTool.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -48,6 +50,12 @@ export interface AgentLoopOptions {
   maxContextTokens?: number;
   recentTokenBudget?: number;
   signal?: AbortSignal;
+  /** Offer the spawn_agent tool for delegating subtasks (default true). */
+  subAgents?: boolean;
+  /** Internal: current delegation depth. Sub-agents are constructed at depth 1. */
+  subAgentDepth?: number;
+  /** Maximum delegation depth before spawn_agent is withheld (default 1). */
+  maxSubAgentDepth?: number;
 }
 
 export type AgentLoopEvent =
@@ -58,7 +66,25 @@ export type AgentLoopEvent =
   | { type: 'tool_result'; toolResult: ToolResult }
   | { type: 'reasoning_delta'; content: string }
   | { type: 'message_delta'; content: string }
+  | {
+      type: 'sub_agent';
+      task: string;
+      status: 'started' | 'completed' | 'failed';
+      stepId?: string;
+      reply?: string;
+      error?: string;
+      toolCallCount?: number;
+      durationMs?: number;
+      tokenUsage?: TokenUsage;
+      /** Condensed internal event stream of the sub-agent (terminal events only). */
+      events?: AgentLoopEvent[];
+    }
   | { type: 'message'; content: string };
+
+/** Tools available to parallel sub-agents: read-only, so waves cannot conflict. */
+const READ_ONLY_DELEGATION_TOOLS = ['read_file', 'list_files', 'search_files', 'web_search', 'get_time'];
+
+type ExecutionUnit = { type: 'single'; step: PlanStep } | { type: 'wave'; steps: PlanStep[] };
 
 export class AgentLoop extends EventEmitter {
   private readonly systemPrompt: string;
@@ -69,8 +95,11 @@ export class AgentLoop extends EventEmitter {
   private readonly maxRetryAttempts: number;
   private readonly enablePlanning: boolean | 'auto';
   private readonly threadId?: string;
-  private readonly toolRegistry?: ToolRegistry;
-  private readonly toolExecutor?: ToolExecutor;
+  private toolRegistry?: ToolRegistry;
+  private toolExecutor?: ToolExecutor;
+  private readonly subAgentDepth: number;
+  private readonly maxSubAgentDepth: number;
+  private subAgentRunner?: SubAgentRunner;
   private readonly contextManager: ContextManager;
   private readonly planner: Planner;
   private readonly taskJudge: TaskJudge;
@@ -111,6 +140,31 @@ export class AgentLoop extends EventEmitter {
       options.modelProvider ??
       config.modelProvider ??
       new OpenAICompatibleProvider(config.openai, config.model);
+
+    // Sub-agent support: below the depth cap, offer the spawn_agent tool on a
+    // cloned registry (never mutate the shared one). Sub-agents are built at
+    // depth + 1, so at the cap they cannot spawn further agents — recursion
+    // is impossible by construction.
+    this.subAgentDepth = options.subAgentDepth ?? 0;
+    this.maxSubAgentDepth = options.maxSubAgentDepth ?? 1;
+    const subAgentsEnabled = options.subAgents ?? true;
+    if (subAgentsEnabled && this.toolRegistry && this.subAgentDepth < this.maxSubAgentDepth) {
+      // Sub-agents run on the utility model when configured (cheaper); an
+      // explicitly pinned provider (tests, eval) always wins.
+      const subAgentProvider =
+        options.modelProvider ?? config.utilityModelProvider ?? this.modelProvider;
+      this.subAgentRunner = new SubAgentRunner({
+        tools: this.toolRegistry,
+        modelProvider: subAgentProvider,
+        signal: () => this.signal,
+        maxToolIterations: this.maxToolIterations,
+      });
+      const augmented = new ToolRegistry();
+      augmented.registerMany(this.toolRegistry.list());
+      augmented.register(createSpawnAgentTool((task) => this.runSubAgent(task)));
+      this.toolRegistry = augmented;
+      this.toolExecutor = new ToolExecutor(augmented);
+    }
 
     if (options.contextManager) {
       this.contextManager = options.contextManager;
@@ -359,70 +413,102 @@ export class AgentLoop extends EventEmitter {
       return { reply: content, events: this.events };
     }
 
-    throw new Error(
-      `AgentLoop stopped after ${this.maxToolIterations + 1} tool iteration(s) without a final answer`
-    );
+    // Tool budget exhausted: rather than throwing away everything the loop
+    // has gathered, give the model one tool-free wrap-up call so partial
+    // findings still reach the caller — crucial for sub-agents, whose parent
+    // would otherwise receive only a bare error. A failing wrap-up call
+    // propagates as before.
+    this.contextManager.addMessage({
+      role: 'user',
+      content:
+        'The tool-call budget for this turn is exhausted. Based on the work done so far, ' +
+        'give your final answer or a summary of partial findings now. Do not call any more tools.',
+      internal: true,
+    });
+    const { content } = await this.callModelStreaming({ includeTools: false });
+    this.contextManager.addMessage({ role: 'assistant', content });
+    this.emitEvent({ type: 'message', content });
+    return { reply: content, events: this.events };
   }
 
   private async runPlanningLoop(userMessage: string, runId?: string, memories?: string): Promise<{ reply: string; events: AgentLoopEvent[] }> {
     let plan = await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memories);
     this.emitEvent({ type: 'plan', plan });
 
-    let executionOrder = this.flattenPlanPostOrder(plan);
-    let currentStepIndex = 0;
+    // Execution units: single steps run in the main agent; consecutive
+    // delegate+parallel steps are grouped into waves that run concurrently
+    // in isolated sub-agents.
+    let units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+    let currentUnitIndex = 0;
     let replanAttempts = 0;
     let retryAttempts = 0;
 
     while (true) {
       this.checkSignal();
-      const step = executionOrder[currentStepIndex];
+      const unit = units[currentUnitIndex];
 
-      if (!step) {
+      if (!unit) {
         const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
         if (judge.complete || judge.nextAction === 'finalize') {
           return this.finalizeAnswer();
         }
         if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
           plan = await this.replan(userMessage, plan, judge.failureAnalysis);
-          executionOrder = this.flattenPlanPostOrder(plan);
+          units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
           replanAttempts++;
-          currentStepIndex = 0;
+          currentUnitIndex = 0;
           retryAttempts = 0;
           continue;
         }
         return this.finalizeAnswer();
       }
 
-      if (step.children && step.children.length > 0) {
-        const anyChildFailed = step.children.some((child) => child.status === 'failed');
-        if (anyChildFailed) {
-          step.status = 'failed';
-          const failureAnalysis: FailureAnalysis = {
-            category: 'tool_failure',
-            affectedStepIds: [step.id, ...step.children.filter((c) => c.status === 'failed').map((c) => c.id)],
-            rootCause: 'One or more sub-steps failed.',
-            recommendation: 'Replan the affected sub-steps or provide a fallback.',
-          };
-          this.reasoningChain.addFailureAnalysis(failureAnalysis);
-          const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
-          if (judge.complete || judge.nextAction === 'finalize') {
+      let executionResult: { next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis };
+
+      if (unit.type === 'single') {
+        const step = unit.step;
+
+        if (step.children && step.children.length > 0) {
+          const anyChildFailed = step.children.some((child) => child.status === 'failed');
+          if (anyChildFailed) {
+            step.status = 'failed';
+            const failureAnalysis: FailureAnalysis = {
+              category: 'tool_failure',
+              affectedStepIds: [step.id, ...step.children.filter((c) => c.status === 'failed').map((c) => c.id)],
+              rootCause: 'One or more sub-steps failed.',
+              recommendation: 'Replan the affected sub-steps or provide a fallback.',
+            };
+            this.reasoningChain.addFailureAnalysis(failureAnalysis);
+            const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+            if (judge.complete || judge.nextAction === 'finalize') {
+              return this.finalizeAnswer();
+            }
+            if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
+              plan = await this.replan(userMessage, plan, judge.failureAnalysis ?? failureAnalysis);
+              units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+              replanAttempts++;
+              currentUnitIndex = 0;
+              retryAttempts = 0;
+              continue;
+            }
             return this.finalizeAnswer();
           }
-          if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
-            plan = await this.replan(userMessage, plan, judge.failureAnalysis ?? failureAnalysis);
-            executionOrder = this.flattenPlanPostOrder(plan);
-            replanAttempts++;
-            currentStepIndex = 0;
-            retryAttempts = 0;
-            continue;
-          }
-          return this.finalizeAnswer();
         }
+
+        step.status = 'running';
+        executionResult = step.delegate
+          ? await this.executeSingleDelegatedStep(step, plan)
+          : await this.executeStep(step, plan, runId);
+      } else {
+        // On wave retries, completed steps keep their status and are NOT
+        // re-executed — only failed/pending steps run again.
+        for (const step of unit.steps) {
+          if (step.status !== 'completed') {
+            step.status = 'running';
+          }
+        }
+        executionResult = await this.executeWave(unit.steps, plan);
       }
-
-      step.status = 'running';
-
-      const executionResult = await this.executeStep(step, plan, runId);
 
       if (executionResult.next === 'final') {
         return this.finalizeAnswer();
@@ -430,15 +516,21 @@ export class AgentLoop extends EventEmitter {
 
       if (executionResult.next === 'replan' && replanAttempts < this.maxReplanAttempts) {
         plan = await this.replan(userMessage, plan, executionResult.failureAnalysis);
-        executionOrder = this.flattenPlanPostOrder(plan);
+        units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
         replanAttempts++;
-        currentStepIndex = 0;
+        currentUnitIndex = 0;
         retryAttempts = 0;
         continue;
       }
 
       if (executionResult.next === 'retry' && retryAttempts < this.maxRetryAttempts) {
-        step.status = 'pending';
+        if (unit.type === 'single') {
+          unit.step.status = 'pending';
+        } else {
+          for (const step of unit.steps) {
+            if (step.status === 'failed') step.status = 'pending';
+          }
+        }
         retryAttempts++;
         continue;
       }
@@ -446,14 +538,21 @@ export class AgentLoop extends EventEmitter {
       // A failed step must never be silently promoted to 'completed'. If we
       // got here via a retry outcome that the retry budget couldn't absorb,
       // surface the failure to the user instead of lying about success.
-      // (executeStep sets step.status='failed' before returning 'retry'.)
       if (executionResult.next === 'retry') {
         return this.finalizeAnswer();
       }
 
-      step.status = 'completed';
+      // Same guard for the replan path: a replan outcome that the replan
+      // budget couldn't absorb must also surface as failure, not success.
+      if (executionResult.next === 'replan') {
+        return this.finalizeAnswer();
+      }
+
+      if (unit.type === 'single') {
+        unit.step.status = 'completed';
+      }
       retryAttempts = 0;
-      currentStepIndex++;
+      currentUnitIndex++;
     }
   }
 
@@ -471,6 +570,161 @@ export class AgentLoop extends EventEmitter {
       visit(step);
     }
     return order;
+  }
+
+  /**
+   * Group the flattened execution order into units: consecutive steps marked
+   * delegate+parallel form a concurrent wave; everything else stays a single
+   * step executed by the main agent (serially delegated when only `delegate`
+   * is set).
+   */
+  private buildExecutionUnits(order: PlanStep[]): ExecutionUnit[] {
+    const units: ExecutionUnit[] = [];
+    let i = 0;
+    while (i < order.length) {
+      const step = order[i];
+      if (step.delegate && step.parallel) {
+        const wave: PlanStep[] = [];
+        while (i < order.length && order[i].delegate && order[i].parallel) {
+          wave.push(order[i]);
+          i++;
+        }
+        units.push({ type: 'wave', steps: wave });
+      } else {
+        units.push({ type: 'single', step });
+        i++;
+      }
+    }
+    return units;
+  }
+
+  /**
+   * Run a single delegated step in a sub-agent with the full tool set, then
+   * map the outcome onto the same next-action vocabulary as executeStep.
+   */
+  private async executeSingleDelegatedStep(
+    step: PlanStep,
+    plan: Plan,
+  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+    const result = await this.executeDelegatedStep(step, plan);
+    if (result.success) {
+      return { next: 'continue' };
+    }
+
+    step.status = 'failed';
+    const failureAnalysis: FailureAnalysis = {
+      category: 'tool_failure',
+      affectedStepIds: [step.id],
+      rootCause: `Sub-agent failed: ${result.error ?? 'unknown'}`,
+      recommendation: 'Retry the delegated step or replan with a different decomposition.',
+    };
+    this.reasoningChain.addFailureAnalysis(failureAnalysis);
+    const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+    if (judge.complete || judge.nextAction === 'finalize') {
+      return { next: 'final' };
+    }
+    if (judge.nextAction === 'replan') {
+      return { next: 'replan', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
+    }
+    return { next: 'retry', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
+  }
+
+  /**
+   * Run a wave of delegate+parallel steps concurrently. Parallel steps are
+   * read-only by construction (executeDelegatedStep restricts their tools),
+   * so concurrent execution cannot produce write conflicts. Steps that fail
+   * are marked failed and the whole wave goes through one Judge decision.
+   * On retry, only non-completed steps re-execute.
+   */
+  private async executeWave(
+    steps: PlanStep[],
+    plan: Plan,
+  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+    // Completed steps from a previous pass are not re-executed (retry only
+    // re-runs what failed); their results are already in the reasoning chain.
+    const toRun = steps.filter((step) => step.status !== 'completed');
+    const results = await Promise.allSettled(
+      toRun.map((step) => this.executeDelegatedStep(step, plan)),
+    );
+
+    const failed: Array<{ step: PlanStep; reason: string }> = [];
+    for (let i = 0; i < toRun.length; i++) {
+      const outcome = results[i];
+      if (outcome.status === 'fulfilled' && outcome.value.success) {
+        toRun[i].status = 'completed';
+      } else {
+        toRun[i].status = 'failed';
+        const reason =
+          outcome.status === 'fulfilled'
+            ? outcome.value.error ?? 'unknown sub-agent failure'
+            : outcome.reason instanceof Error
+              ? outcome.reason.message
+              : String(outcome.reason);
+        failed.push({ step: toRun[i], reason });
+      }
+    }
+
+    if (failed.length === 0) {
+      return { next: 'continue' };
+    }
+
+    const failureAnalysis: FailureAnalysis = {
+      category: 'tool_failure',
+      affectedStepIds: failed.map((f) => f.step.id),
+      rootCause: failed
+        .map((f) => `Step ${f.step.id} (${f.step.description}): ${f.reason}`)
+        .join(' | '),
+      recommendation: 'Retry the failed sub-tasks or replan with a different decomposition.',
+    };
+    this.reasoningChain.addFailureAnalysis(failureAnalysis);
+
+    const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+    if (judge.complete || judge.nextAction === 'finalize') {
+      return { next: 'final' };
+    }
+    if (judge.nextAction === 'replan') {
+      return { next: 'replan', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
+    }
+    return { next: 'retry', failureAnalysis: judge.failureAnalysis ?? failureAnalysis };
+  }
+
+  /**
+   * Execute one plan step in an isolated sub-agent. Parallel steps get a
+   * read-only tool set (the safety invariant of wave execution); serial
+   * delegated steps inherit the full tool set. The sub-agent's result is
+   * recorded into the reasoning chain and surfaced into the parent's context
+   * so later steps and the final answer can build on it.
+   */
+  private async executeDelegatedStep(step: PlanStep, plan: Plan): Promise<SubAgentResult> {
+    this.reasoningChain.setCurrentPlanStepId(step.id);
+    const allowedTools = step.parallel ? READ_ONLY_DELEGATION_TOOLS : undefined;
+
+    const planSummary = plan.steps.map((s) => `${s.id}. ${s.description}`).join('; ');
+    const result = await this.runSubAgent({
+      task: step.description,
+      context: `Executing one step of a larger plan: ${planSummary}`,
+      expectedOutcome: step.expectedOutcome,
+      allowedTools,
+      stepId: step.id,
+      memoryText: this.currentMemoryText,
+    });
+
+    this.reasoningChain.addThought(
+      result.success
+        ? `Delegated step completed: ${result.reply.slice(0, 200)}`
+        : `Delegated step failed: ${result.error ?? 'unknown'}`,
+    );
+    this.reasoningChain.commitStep();
+
+    this.contextManager.addMessage({
+      role: 'user',
+      content:
+        `[Sub-agent result for step ${step.id}: ${step.description}]\n` +
+        (result.success ? result.reply : `FAILED: ${result.error ?? 'unknown error'}`),
+      internal: true,
+    });
+
+    return result;
   }
 
   private async executeStep(
@@ -526,6 +780,21 @@ export class AgentLoop extends EventEmitter {
 
       const deviation = this.detectToolDeviation(toolCalls, constraint);
       if (deviation) {
+        // The assistant tool_calls message is already in context (recorded
+        // above for trace completeness). Every tool_call needs a paired tool
+        // message or strict providers reject all subsequent requests. These
+        // calls were rejected before execution — the placeholder says so.
+        for (const call of toolCalls) {
+          this.contextManager.addMessage({
+            role: 'tool',
+            content: JSON.stringify({
+              success: false,
+              error: 'Tool call rejected: deviates from step tool constraint; not executed.',
+            }),
+            tool_call_id: call.id,
+            internal: true,
+          });
+        }
         const failureAnalysis: FailureAnalysis = {
           category: 'plan_mismatch',
           affectedStepIds: [step.id],
@@ -547,7 +816,8 @@ export class AgentLoop extends EventEmitter {
         return { next: 'retry', failureAnalysis };
       }
 
-      for (const call of toolCalls) {
+      for (let i = 0; i < toolCalls.length; i++) {
+        const call = toolCalls[i];
         let result: ToolResult;
         if (!this.toolExecutor) {
           result = { success: false, error: 'No tool executor available' };
@@ -567,6 +837,20 @@ export class AgentLoop extends EventEmitter {
 
         if (!result.success) {
           step.status = 'failed';
+          // Calls after the failed one never execute, but their tool_calls
+          // are already in context. Pair them with placeholder tool messages
+          // (same provider constraint as the deviation path above).
+          for (const skipped of toolCalls.slice(i + 1)) {
+            this.contextManager.addMessage({
+              role: 'tool',
+              content: JSON.stringify({
+                success: false,
+                error: 'Skipped: a preceding tool call failed.',
+              }),
+              tool_call_id: skipped.id,
+              internal: true,
+            });
+          }
           const failureAnalysis: FailureAnalysis = {
             category: 'tool_failure',
             affectedStepIds: [step.id],
@@ -768,11 +1052,11 @@ export class AgentLoop extends EventEmitter {
    * method only applies agent-level policy: reasoning-as-fallback and the
    * no-retry-after-emitted-delta guard.
    */
-  private async callModelStreaming(options: { allowedTools?: string[] } = {}): Promise<{
+  private async callModelStreaming(options: { allowedTools?: string[]; includeTools?: boolean } = {}): Promise<{
     content: string;
     toolCalls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   }> {
-    const { allowedTools } = options;
+    const { allowedTools, includeTools = true } = options;
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -784,7 +1068,9 @@ export class AgentLoop extends EventEmitter {
       let emittedDelta = false;
       try {
         const messages = await this.contextManager.buildContext();
-        const tools = this.toolRegistry?.getSchemas(allowedTools);
+        const tools = includeTools
+          ? this.toolRegistry?.getSchemas(allowedTools)
+          : undefined;
 
         let content = '';
         // Reasoning-as-fallback policy: stream content live; buffer reasoning
@@ -835,10 +1121,12 @@ export class AgentLoop extends EventEmitter {
 
         // If the model only produced reasoning_content (no real content),
         // use it as the answer so the user is not left with an empty reply.
+        // Do NOT re-emit it as a message_delta: the reasoning was already
+        // streamed live via reasoning_delta, and replaying the whole buffer
+        // would print the entire text a second time.
         if (!hasRealContent && reasoningBuffer) {
           content = reasoningBuffer;
           emittedDelta = true;
-          this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
         }
 
         const toolCalls =
@@ -905,9 +1193,10 @@ export class AgentLoop extends EventEmitter {
           }
         }
         if (!hasRealContent && reasoningBuffer) {
+          // Same no-replay policy as callModelStreaming: the reasoning was
+          // already streamed live; re-emitting it would double-print.
           content = reasoningBuffer;
           emittedDelta = true;
-          this.emitEvent({ type: 'message_delta', content: reasoningBuffer });
         }
         return content;
       } catch (error) {
@@ -931,6 +1220,43 @@ export class AgentLoop extends EventEmitter {
       type: 'function' as const,
       function: { name: tc.name, arguments: tc.arguments },
     }));
+  }
+
+  /**
+   * Execute a subtask in an isolated sub-agent. Emits sub_agent lifecycle
+   * events (which flow into the parent's run trace) and rolls the sub-agent's
+   * token usage up into this run's accounting.
+   */
+  private async runSubAgent(task: SubAgentTask): Promise<SubAgentResult> {
+    if (!this.subAgentRunner) {
+      return {
+        success: false,
+        reply: '',
+        error: 'Sub-agents are disabled or the delegation depth limit was reached',
+        toolCalls: [],
+        durationMs: 0,
+        events: [],
+      };
+    }
+
+    this.emitEvent({ type: 'sub_agent', task: task.task, status: 'started', stepId: task.stepId });
+    const result = await this.subAgentRunner.run(task);
+    if (result.tokenUsage) {
+      this.accumulateUsage(result.tokenUsage);
+    }
+    this.emitEvent({
+      type: 'sub_agent',
+      task: task.task,
+      status: result.success ? 'completed' : 'failed',
+      stepId: task.stepId,
+      reply: result.reply || undefined,
+      error: result.error,
+      toolCallCount: result.toolCalls.length,
+      durationMs: result.durationMs,
+      tokenUsage: result.tokenUsage,
+      events: result.events,
+    });
+    return result;
   }
 
   private emitEvent(event: AgentLoopEvent): void {

@@ -106,3 +106,83 @@
   - `api`：4 文件 / 27 测试
   - `cli`：8 文件 / 57 测试
   - `trace-web`：1 文件 / 7 测试
+---
+
+## 七、复杂任务真实验证暴露的三处问题（2026-07-17）
+
+**背景**：用「3 路并行只读委派 + 串行写 REPORT.md + 主 agent 汇总」的复杂输入做端到端验证时暴露的问题。四轮真实运行（deepseek-v4-flash）交叉确认。
+
+### 1. 非 TTY 模式 spinner 污染输出
+
+**问题**：管道/重定向下 spinner 的 `\r` 重绘帧覆盖进度行，日志中 `[sub-agent] started/done` 计数出现 4:5 假象（DB 记录是正确的）。
+
+**修复**：`createProgressIndicator` 增加 `process.stdout.isTTY` 守卫，非 TTY 时 start 直接 no-op（进度行本身走 console.log，不受影响）。
+
+**相关文件**：`apps/cli/src/index.ts`
+
+### 2. 模型滥用绝对路径
+
+**问题**：模型爱写 `/workspace/final-report.md` 这类路径。Sandbox 剥离前导斜杠安全收纳（无逃逸），但产物落进 `workspace/` 子目录，位置出人意料。
+
+**修复**：五个文件工具的 path 参数描述补示例 + 明确禁止：`(e.g. "REPORT.md" or "src/index.ts"); never an absolute path.`。修复后再未出现嵌套目录。
+
+**相关文件**：`packages/agent-core/src/tools/built-in/{readFile,writeFile,appendFile,deleteFile,listFiles}.ts`
+
+### 3. Planner/Judge 产物忠实度（含一次措辞反噬）
+
+**问题**：用户指定 `REPORT.md`，Planner 自造 `final-report.md`，靠两轮 replan 才纠正。
+
+**修复与反噬**：第一版约束「request explicitly names artifacts ... MUST use those exact names」导致模型把「A、B、C 三份结果」字面化为**文件 A/B/C** 并反复搜寻（两轮运行均复现）——忠实度规则误伤中间结果语义。收敛措辞为：只锚定**显式指定的输出文件名/位置**，并明确「中间结果在上下文中传递，不要当成文件去找」。TaskJudge 同步限定为「最终交付物」判据。
+
+**相关文件**：`packages/agent-core/src/planning/Planner.ts`、`TaskJudge.ts`
+
+### 遗留观察（未修，供后续参考）
+
+- **幻影首计划**：四轮运行中首个 plan 均是对长指令的误读（如「搜索多阶段复杂任务的含义」），通常被 Judge 立刻 replan 丢弃，但第三轮浪费了 3 次真实工具调用。根因是弱模型对长结构化中文指令的首遍理解，建议用 `PLANNING_MODEL` 配更强模型。
+- **Judge 无法识别内容编造**：第二轮运行中主 agent 未读任何源文件却写出形式完整的报告，Judge 判 complete。形式判据挡不住语义造假。
+- **聚合类子任务迭代偏紧**：combine 子 agent 需要 11 次工具调用但 `maxToolIterations=6`，两次因此失败（靠 replan 兜底收敛）。可考虑子 agent 默认迭代次数与主 agent 解耦。
+
+**验证**：`pnpm build` + 356 测试全绿；第四轮真实运行端到端成功（并行波次 1ms 内同时启动、REPORT.md 内容真实、位置正确）。
+
+---
+
+## 八、P0 止血：规划循环、上下文与迁移（2026-07-17）
+
+**背景**：全面代码审查（`docs/feature-review-2026-07.md`）发现 10 个 P0 正确性缺陷，本批修复其中改动小、收益最大的 4 个。
+
+### 1. replan 预算耗尽时失败步骤被静默标记 completed
+
+**问题**：`runPlanningLoop` 中 `executionResult.next === 'replan'` 且 replan 预算耗尽时，守卫条件不通过、retry 分支不匹配，控制流 fall-through 到 `unit.step.status = 'completed'`——失败步骤被当作成功推进，最终以"成功"收尾。原有注释声称防的就是这件事，但只挡住了 retry 路径。
+
+**修复**：与 retry 守卫对称补 replan 守卫（`if (executionResult.next === 'replan') return this.finalizeAnswer();`），失败步骤保持 `failed`，finalize 如实向用户说明。
+
+**相关文件**：`packages/agent-core/src/agents/AgentLoop.ts`
+
+### 2. 未配对的 tool_calls 污染对话历史
+
+**问题**：`executeStep` 在执行前把带 `tool_calls` 的 assistant 消息写入 context，之后两条提前 return 路径留下无 `tool` 响应的调用：①偏离路径（校验不通过，所有调用未执行）；②多调用时首个失败即 return（后续调用未执行）。严格 OpenAI 兼容端点会拒绝后续所有请求（"assistant message with tool_calls must be followed by tool messages"），一次工具偏离等价于整轮 fatal。
+
+**修复**：return 前为未执行的调用补占位 `tool` 消息（偏离路径补全部，失败路径补首个失败之后的全部，content 如实标注未执行原因）。占位消息只进 context 并随持久化保存（保证恢复后的历史同样配对），不 emit `tool_result` 事件、不写 `toolCallStore`，避免污染 trace 与 eval 断言。`runSimpleLoop` 无此问题（所有调用执行完才继续），未动。
+
+**相关文件**：`packages/agent-core/src/agents/AgentLoop.ts`
+
+### 3. 摘要失败永久销毁历史
+
+**问题**：`ContextManager.summarize` 吞掉所有错误返回 `"Summary unavailable: <err>"` 字符串，两条 build 路径把它当正式摘要存储并推进 `lastSummarizedIndex`——一次瞬时 API 错误就不可逆地把一段历史替换成错误串，且永不重试。
+
+**修复**：`summarize` 失败改为抛错；两条 build 路径的重复摘要块抽为共用的 `trySummarizeUpTo(index)`：失败时不推进 `lastSummarizedIndex`、不动现有摘要，本轮仅用 recent window 返回（损失一轮老上下文，历史保留），下一轮 build 自动重试。
+
+**相关文件**：`packages/agent-core/src/context/ContextManager.ts`
+
+### 4. tasks.idempotency_key 老库迁移失败
+
+**问题**：迁移用 `ALTER TABLE tasks ADD COLUMN idempotency_key TEXT UNIQUE`——SQLite 禁止 ALTER 加 UNIQUE 列，错误被裸 catch 吞掉，老库永远没有该列，`SqliteTaskStore.create` 的 INSERT 运行时抛 "no such column"。且 `INIT_SQL` 里 `CREATE INDEX idx_tasks_idempotency_key` 对无该列的旧表同样会抛错。
+
+**修复**：ALTER 去掉 UNIQUE 改为普通列，唯一性用部分唯一索引保证（`CREATE UNIQUE INDEX ... WHERE idempotency_key IS NOT NULL`）；`INIT_SQL` 删除与该约束冗余的 `idx_tasks_idempotency_key`（新库由表定义 UNIQUE 保证，索引后移到迁移段统一创建）。
+
+**相关文件**：`packages/agent-core/src/db/connection.ts`
+
+### 测试与验证
+
+- 新增/更新测试：`planning-agent-loop.test.ts` +3（replan 预算耗尽不伪装成功、偏离路径配对、跳过调用配对）、`ContextManager.test.ts` 改写 1 + 新增 1（失败不存错误串、下轮重试覆盖失败区间）、新增 `tests/db/migration.test.ts`（旧 schema 迁移 + 幂等去重 + 唯一约束生效）
+- `pnpm test` 全套 361 通过（agent-core 265 / cli 27 / api 60 / trace-web 9）；`pnpm eval` 30 通过；CLI eval 20/20（含 replan-scenario）

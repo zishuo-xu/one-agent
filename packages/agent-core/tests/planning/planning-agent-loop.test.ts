@@ -19,6 +19,7 @@ vi.mock('../../src/config.js', () => ({
 
 import { config } from '../../src/config.js';
 import { AgentLoop } from '../../src/agents/AgentLoop.js';
+import { Message } from '../../src/agents/types.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
 import { ToolDefinition } from '../../src/tools/types.js';
 
@@ -68,6 +69,20 @@ function createJudgeResult(complete: boolean, nextAction: string) {
       },
     ],
   };
+}
+
+/** Every assistant tool_calls message must be followed by a tool message per call id. */
+function expectToolCallsPaired(history: Message[]) {
+  const toolMessageIds = new Set(
+    history.filter((m) => m.role === 'tool').map((m) => m.tool_call_id)
+  );
+  for (const message of history) {
+    if (message.role === 'assistant' && message.tool_calls) {
+      for (const call of message.tool_calls) {
+        expect(toolMessageIds.has(call.id)).toBe(true);
+      }
+    }
+  }
 }
 
 describe('AgentLoop with planning', () => {
@@ -492,5 +507,178 @@ describe('AgentLoop with planning', () => {
 
     const planEvent = events.find((e) => e.type === 'plan');
     expect(planEvent?.plan.steps[0].children).toHaveLength(2);
+  });
+
+  it('does not mark a failed step as completed when the replan budget is exhausted', async () => {
+    const failTool: ToolDefinition = {
+      name: 'fail_tool',
+      description: 'Always fails',
+      parameters: z.object({}),
+      execute: () => {
+        throw new Error('Permanent failure');
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(failTool);
+
+    function failingStepResponse(callId: string) {
+      return {
+        choices: [
+          {
+            message: {
+              content: 'Calling fail_tool.',
+              tool_calls: [
+                {
+                  id: callId,
+                  type: 'function',
+                  function: { name: 'fail_tool', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      };
+    }
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Call fail_tool', toolName: 'fail_tool' }]) as never
+      )
+      .mockResolvedValueOnce(failingStepResponse('call_1') as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'replan') as never)
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Retry fail_tool', toolName: 'fail_tool' }]) as never
+      )
+      .mockResolvedValueOnce(failingStepResponse('call_2') as never)
+      .mockResolvedValueOnce(createJudgeResult(false, 'replan') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'The step could not be completed.' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, maxReplanAttempts: 1, enablePlanning: true });
+    const { reply, events } = await agent.chat('Exhaust replan budget');
+
+    expect(reply).toBe('The step could not be completed.');
+    // The failed step must keep its 'failed' status — never promoted to
+    // 'completed' just because the replan budget ran out.
+    const planEvents = events.filter((e) => e.type === 'plan');
+    const lastPlan = planEvents[planEvents.length - 1].plan;
+    expect(lastPlan.steps[0].status).toBe('failed');
+  });
+
+  it('pairs rejected tool calls with tool messages on the deviation path', async () => {
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    const otherExecute = vi.fn(() => ({ success: true }));
+    const otherTool: ToolDefinition = {
+      name: 'other',
+      description: 'Another tool',
+      parameters: z.object({}),
+      execute: otherExecute,
+    };
+    tools.register(otherTool);
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Echo hello', toolName: 'echo' }]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'I will call the other tool.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'other', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Deviation handled' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, enablePlanning: true });
+    const { reply } = await agent.chat('Deviation pairing test');
+
+    expect(reply).toBe('Deviation handled');
+    expect(otherExecute).not.toHaveBeenCalled();
+    // The rejected call must have a paired tool message, or strict providers
+    // reject every subsequent request with an unpaired tool_calls error.
+    expectToolCallsPaired(agent.getHistory());
+    const placeholder = agent
+      .getHistory()
+      .find((m) => m.role === 'tool' && m.tool_call_id === 'call_1');
+    expect(placeholder?.content).toContain('not executed');
+  });
+
+  it('pairs skipped tool calls with tool messages when a preceding call fails', async () => {
+    const failTool: ToolDefinition = {
+      name: 'fail_tool',
+      description: 'Always fails',
+      parameters: z.object({}),
+      execute: () => {
+        throw new Error('Failure');
+      },
+    };
+    const neverExecute = vi.fn(() => ({ success: true }));
+    const neverTool: ToolDefinition = {
+      name: 'never_tool',
+      description: 'Should not execute',
+      parameters: z.object({}),
+      execute: neverExecute,
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(failTool);
+    tools.register(neverTool);
+
+    mockCreate
+      .mockResolvedValueOnce(
+        createPlanResponse([{ id: '1', description: 'Call two tools' }]) as never
+      )
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: 'Calling both tools.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'fail_tool', arguments: '{}' },
+                },
+                {
+                  id: 'call_2',
+                  type: 'function',
+                  function: { name: 'never_tool', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      } as never)
+      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Failure handled' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, enablePlanning: true });
+    const { reply } = await agent.chat('Skipped pairing test');
+
+    expect(reply).toBe('Failure handled');
+    expect(neverExecute).not.toHaveBeenCalled();
+    expectToolCallsPaired(agent.getHistory());
+    const skipped = agent
+      .getHistory()
+      .find((m) => m.role === 'tool' && m.tool_call_id === 'call_2');
+    expect(skipped?.content).toContain('Skipped: a preceding tool call failed.');
   });
 });

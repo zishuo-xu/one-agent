@@ -127,12 +127,7 @@ export class ContextManager {
     }
 
     // Summarize messages that have aged out of the window.
-    if (this.lastSummarizedIndex < absRecentStart) {
-      const messagesToSummarize = this.messages.slice(this.lastSummarizedIndex, absRecentStart);
-      const newSummary = await this.summarize(messagesToSummarize);
-      this.summaryMessage = await this.mergeSummary(newSummary);
-      this.lastSummarizedIndex = absRecentStart;
-    }
+    await this.trySummarizeUpTo(absRecentStart);
 
     return this.buildOutput(this.messages.slice(absRecentStart));
   }
@@ -149,12 +144,7 @@ export class ContextManager {
       recentStart--;
     }
 
-    if (this.lastSummarizedIndex < recentStart) {
-      const messagesToSummarize = this.messages.slice(this.lastSummarizedIndex, recentStart);
-      const newSummary = await this.summarize(messagesToSummarize);
-      this.summaryMessage = await this.mergeSummary(newSummary);
-      this.lastSummarizedIndex = recentStart;
-    }
+    await this.trySummarizeUpTo(recentStart);
 
     return this.buildOutput(this.messages.slice(recentStart));
   }
@@ -214,6 +204,28 @@ export class ContextManager {
     return context;
   }
 
+  /**
+   * Summarize messages up to `endIndex` and fold them into the running
+   * summary. On failure the previous summary and lastSummarizedIndex are left
+   * untouched: this turn proceeds with just the recent window and the next
+   * build retries, instead of permanently replacing history with an error
+   * string.
+   */
+  private async trySummarizeUpTo(endIndex: number): Promise<void> {
+    if (this.lastSummarizedIndex >= endIndex) {
+      return;
+    }
+    const messagesToSummarize = this.messages.slice(this.lastSummarizedIndex, endIndex);
+    try {
+      const newSummary = await this.summarize(messagesToSummarize);
+      this.summaryMessage = await this.mergeSummary(newSummary);
+      this.lastSummarizedIndex = endIndex;
+    } catch {
+      // Transient summarization failure — history is preserved and the next
+      // buildContext() retries from the same lastSummarizedIndex.
+    }
+  }
+
   private async mergeSummary(newSummary: string): Promise<Message> {
     if (this.summaryMessage) {
       const previousSummary = this.summaryMessage.content.replace('Earlier conversation summary: ', '').trim();
@@ -251,19 +263,14 @@ export class ContextManager {
       'Preserve key facts, decisions, and tool results.\n\n' +
       conversationText;
 
-    try {
-      const response = await this.resolveModelProvider().complete({
-        messages: [
-          { role: 'system', content: 'You are a helpful summarizer.' },
-          { role: 'user', content: prompt },
-        ],
-        timeoutMs: config.timeoutMs,
-      });
-      return response.content.trim() || 'No summary available.';
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return `Summary unavailable: ${message}`;
-    }
+    const response = await this.resolveModelProvider().complete({
+      messages: [
+        { role: 'system', content: 'You are a helpful summarizer.' },
+        { role: 'user', content: prompt },
+      ],
+      timeoutMs: config.timeoutMs,
+    });
+    return response.content.trim() || 'No summary available.';
   }
 
   private formatMessageForSummary(message: Message): string {

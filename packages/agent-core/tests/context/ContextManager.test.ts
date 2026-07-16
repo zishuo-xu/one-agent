@@ -126,7 +126,7 @@ describe('ContextManager', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it('handles summary failure gracefully', async () => {
+  it('does not store an error string as summary when summarization fails', async () => {
     const manager = new ContextManager({
       systemPrompt: 'You are a test assistant.',
       maxRecentMessages: 4,
@@ -141,8 +141,43 @@ describe('ContextManager', () => {
 
     const context = await manager.buildContext();
 
-    expect(context).toHaveLength(6);
-    expect(context[1].content).toContain('Summary unavailable');
+    // The failed build returns just the recent window — no error string is
+    // stored as a fake summary, and no history is thrown away permanently.
+    expect(context).toHaveLength(5);
+    expect(context.some((m) => m.content.includes('Summary unavailable'))).toBe(false);
+    expect(manager.getContextInfo().hasSummary).toBe(false);
+  });
+
+  it('retries summarization over the failed range on the next build', async () => {
+    const manager = new ContextManager({
+      systemPrompt: 'You are a test assistant.',
+      maxRecentMessages: 4,
+      summaryTrigger: 6,
+    });
+
+    mockCreate.mockRejectedValueOnce(new Error('Network error') as never);
+
+    for (let i = 1; i <= 10; i++) {
+      manager.addMessage({ role: 'user', content: `msg ${i}` });
+    }
+
+    await manager.buildContext();
+
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'Recovered summary.' } }],
+    } as never);
+
+    manager.addMessage({ role: 'assistant', content: 'reply' });
+    const context = await manager.buildContext();
+
+    // The retry must cover the messages the failed attempt never summarized
+    // (lastSummarizedIndex was not advanced), not just the newly aged-out ones.
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    const retryPrompt = (mockCreate.mock.calls[1][0] as {
+      messages: Array<{ role: string; content: string }>;
+    }).messages[1].content;
+    expect(retryPrompt).toContain('msg 1');
+    expect(context.some((m) => m.content.includes('Recovered summary.'))).toBe(true);
   });
 
   it('keeps tool messages paired with their tool calls in summary', async () => {
