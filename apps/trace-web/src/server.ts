@@ -110,6 +110,7 @@ function renderViewerPage(): string {
       --reflection: #6366f1;
       --message_delta: #64748b;
       --failed: #ef4444;
+      --sub_agent: #14b8a6;
     }
     * { box-sizing: border-box; }
     body {
@@ -201,6 +202,7 @@ function renderViewerPage(): string {
     .event.message { border-left-color: var(--message); }
     .event.reflection { border-left-color: var(--reflection); }
     .event.message_delta { border-left-color: var(--message_delta); }
+    .event.sub_agent { border-left-color: var(--sub_agent); }
     .event-header {
       display: flex;
       align-items: center;
@@ -280,6 +282,7 @@ function renderViewerPage(): string {
     .timeline-seg.reflection { background: var(--reflection); }
     .timeline-seg.message_delta { background: var(--message_delta); }
     .timeline-seg.reasoning_delta { background: #475569; }
+    .timeline-seg.sub_agent { background: var(--sub_agent); }
     /* Filter buttons */
     .filters {
       display: flex;
@@ -306,11 +309,43 @@ function renderViewerPage(): string {
     .filter-btn.reflection { border-color: var(--reflection); }
     .filter-btn.message_delta { border-color: var(--message_delta); }
     .filter-btn.reasoning_delta { border-color: #475569; }
+    .filter-btn.sub_agent { border-color: var(--sub_agent); }
     /* Collapsible events */
     .event { cursor: pointer; }
     .event .event-full { display: none; margin-top: 8px; }
     .event.expanded .event-full { display: block; }
     .event.expanded .event-data { display: none; }
+    /* Nested sub-agent events (shown alongside the raw JSON when expanded) */
+    .event .event-children { display: none; margin-top: 8px; }
+    .event.expanded .event-children { display: block; }
+    .event-children .children-title {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .event-children .child-event {
+      border-left: 3px solid var(--muted);
+      background: var(--bg);
+      border-radius: 0 6px 6px 0;
+      padding: 6px 10px;
+      margin-bottom: 4px;
+      cursor: default;
+    }
+    .event-children .child-event.plan { border-left-color: var(--plan); }
+    .event-children .child-event.thought { border-left-color: var(--thought); }
+    .event-children .child-event.tool_call { border-left-color: var(--tool_call); }
+    .event-children .child-event.tool_result { border-left-color: var(--tool_result); }
+    .event-children .child-event.message { border-left-color: var(--message); }
+    .event-children .child-event.reflection { border-left-color: var(--reflection); }
+    .event-children .child-header { margin-bottom: 2px; }
+    .event-children .child-preview {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -371,9 +406,9 @@ function renderViewerPage(): string {
         return;
       }
       container.innerHTML = threads.map(t => \`
-        <div class="item \${selectedThreadId === t.id ? 'active' : ''}" onclick="selectThread('\${t.id}')">
+        <div class="item \${selectedThreadId === t.id ? 'active' : ''}" onclick="selectThread(\${escapeHtml(JSON.stringify(t.id))})">
           <div class="item-title">\${escapeHtml(t.title || '(no title)')}</div>
-          <div class="item-meta">\${t.id} · \${formatTime(t.updatedAt)}</div>
+          <div class="item-meta">\${escapeHtml(t.id)} · \${formatTime(t.updatedAt)}</div>
         </div>
       \`).join('');
     }
@@ -389,9 +424,9 @@ function renderViewerPage(): string {
         container.innerHTML = '<div class="empty">No runs for this thread</div>';
       } else {
         container.innerHTML = runs.map(r => \`
-          <div class="item \${selectedRunId === r.id ? 'active' : ''} \${r.status === 'failed' ? 'failed' : ''}" onclick="selectRun('\${r.id}')">
+          <div class="item \${selectedRunId === r.id ? 'active' : ''} \${r.status === 'failed' ? 'failed' : ''}" onclick="selectRun(\${escapeHtml(JSON.stringify(r.id))})">
             <div class="item-title">\${escapeHtml(r.preview || r.status)}</div>
-            <div class="item-meta">\${r.status} · \${formatTime(r.startTime)}</div>
+            <div class="item-meta">\${escapeHtml(r.status)} · \${formatTime(r.startTime)}</div>
             \${r.status === 'failed' && r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
           </div>
         \`).join('');
@@ -452,6 +487,15 @@ function renderViewerPage(): string {
         }
         case 'message':
           return { label: '', preview: (d.content ?? '').slice(0, 300) };
+        case 'sub_agent': {
+          const status = d.status ?? '?';
+          const task = (d.task ?? '').slice(0, 120);
+          const detail = d.status === 'completed' ? (d.reply ?? '').slice(0, 200) : (d.error ?? '');
+          const meta = d.durationMs !== undefined ? ' (' + (d.durationMs / 1000).toFixed(1) + 's)' : '';
+          const childCount = Array.isArray(d.events) ? d.events.length : 0;
+          const children = childCount > 0 ? ' · ' + childCount + ' events' : '';
+          return { label: status + meta + children, preview: task + (detail ? ' — ' + detail : '') };
+        }
         case 'message_delta':
         case 'reasoning_delta':
           return { label: e.chunkCount + ' chunks', preview: (e.fullText ?? d.content ?? '').slice(0, 300) };
@@ -462,18 +506,8 @@ function renderViewerPage(): string {
 
     let activeFilters = new Set();
 
-    function renderTraces(traces, context) {
-      const container = document.getElementById('timeline');
-      const barContainer = document.getElementById('timeline-bar-container');
-      const filterContainer = document.getElementById('filters');
-      if (traces.length === 0) {
-        container.innerHTML = '<div class="empty">No traces found</div>';
-        barContainer.style.display = 'none';
-        filterContainer.style.display = 'none';
-        return;
-      }
-
-      // Group consecutive message_delta / reasoning_delta events.
+    // Group consecutive message_delta / reasoning_delta events.
+    function groupDeltas(traces) {
       const grouped = [];
       let i = 0;
       while (i < traces.length) {
@@ -495,6 +529,21 @@ function renderViewerPage(): string {
           i++;
         }
       }
+      return grouped;
+    }
+
+    function renderTraces(traces, context) {
+      const container = document.getElementById('timeline');
+      const barContainer = document.getElementById('timeline-bar-container');
+      const filterContainer = document.getElementById('filters');
+      if (traces.length === 0) {
+        container.innerHTML = '<div class="empty">No traces found</div>';
+        barContainer.style.display = 'none';
+        filterContainer.style.display = 'none';
+        return;
+      }
+
+      const grouped = groupDeltas(traces);
 
       // Collect unique event types for filter buttons.
       const types = [...new Set(grouped.map(e => e.eventType))];
@@ -508,7 +557,7 @@ function renderViewerPage(): string {
       barContainer.style.display = 'block';
       const bar = document.getElementById('timeline-bar');
       bar.innerHTML = grouped.map((e, idx) =>
-        \`<div class="timeline-seg \${e.eventType}" style="flex: 1" title="\${e.eventType}" onclick="scrollToEvent(\${idx})"></div>\`
+        \`<div class="timeline-seg \${e.eventType}" style="flex: 1" title="\${escapeHtml(e.eventType)}" onclick="scrollToEvent(\${idx})"></div>\`
       ).join('');
 
       // Render event list with expandable details.
@@ -533,11 +582,38 @@ function renderViewerPage(): string {
               <span class="event-time">\${timeLabel}</span>
             </div>
             <div class="event-data">\${escapeHtml(preview)}</div>
+            \${renderSubAgentChildren(e)}
             <div class="event-full">\${escapeHtml(fullData)}</div>
           </div>
         \`;
       }).join('');
       applyFilters();
+    }
+
+    // Render the embedded internal event stream of a sub_agent event as nested
+    // cards (raw AgentLoopEvent objects, wrapped for summarizeEvent reuse).
+    function renderSubAgentChildren(e) {
+      if (e.eventType !== 'sub_agent') return '';
+      const children = e.eventData?.events;
+      if (!Array.isArray(children) || children.length === 0) return '';
+      const wrapped = children.map(c => ({ eventType: c.type, eventData: c, createdAt: '' }));
+      const groupedChildren = groupDeltas(wrapped);
+      const cards = groupedChildren.map(c => {
+        const summary = summarizeEvent(c);
+        const typeLabel = c.eventType + (summary.label ? ' · ' + summary.label : '');
+        return \`
+          <div class="child-event \${c.eventType}">
+            <div class="child-header"><span class="event-type">\${escapeHtml(typeLabel)}</span></div>
+            <div class="child-preview">\${escapeHtml(summary.preview || '(empty)')}</div>
+          </div>
+        \`;
+      }).join('');
+      return \`
+        <div class="event-children">
+          <div class="children-title">Sub-agent events (\${groupedChildren.length})</div>
+          \${cards}
+        </div>
+      \`;
     }
 
     function toggleExpand(idx) {
@@ -571,7 +647,9 @@ function renderViewerPage(): string {
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
-      return div.innerHTML;
+      // textContent→innerHTML escapes & < > but not quotes — those are needed
+      // when the result is interpolated into a quoted HTML attribute.
+      return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function formatTime(iso) {

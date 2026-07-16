@@ -28,6 +28,24 @@ describe('trace web server', () => {
     expect(response.body).toContain('/api/threads');
   });
 
+  it('GET / escapes stored ids/errors for HTML, attribute, and JS-string contexts', async () => {
+    const server = buildTraceWebServer();
+    const response = await server.inject({ method: 'GET', url: '/' });
+    const html = response.body;
+
+    // escapeHtml must also neutralize quotes (attribute breakouts).
+    expect(html).toContain(`return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');`);
+    // DB ids must not be interpolated raw into onclick JS strings nor innerHTML:
+    // JSON.stringify protects the JS-string context, escapeHtml the attribute
+    // context. The old raw-interpolation forms must be gone.
+    expect(html).toContain('selectThread(${escapeHtml(JSON.stringify(t.id))})');
+    expect(html).toContain('selectRun(${escapeHtml(JSON.stringify(r.id))})');
+    expect(html).not.toContain("selectThread('${t.id}')");
+    expect(html).not.toContain("selectRun('${r.id}')");
+    expect(html).not.toContain('<div class="item-meta">${t.id}');
+    expect(html).not.toContain('<div class="item-meta">${r.status}');
+  });
+
   it('GET /api/threads lists all threads', async () => {
     const db = getSharedConnection();
     const threadStore = new ThreadStore(db);
@@ -138,5 +156,58 @@ describe('trace web server', () => {
     expect(body).toHaveLength(1);
     expect(body[0].threadId).toBe(thread.id);
     expect(body[0].eventType).toBe('plan');
+  });
+
+  it('GET /api/runs/:id/traces round-trips the embedded sub-agent event stream', async () => {
+    const db = getSharedConnection();
+    const threadStore = new ThreadStore(db);
+    const runStore = new RunStore(db);
+    const traceEventStore = new TraceEventStore(db);
+    const thread = threadStore.create({});
+    const run = runStore.create({ threadId: thread.id, model: 'test', status: 'completed' });
+    traceEventStore.create({
+      runId: run.id,
+      threadId: thread.id,
+      eventType: 'sub_agent',
+      eventData: {
+        type: 'sub_agent',
+        task: 'read a file',
+        status: 'completed',
+        reply: 'done',
+        durationMs: 1200,
+        events: [
+          { type: 'tool_call', toolCall: { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } } },
+          { type: 'tool_result', toolResult: { success: true, data: { content: 'file-data' } } },
+          { type: 'message', content: 'done' },
+        ],
+      },
+      model: 'test',
+    });
+
+    const server = buildTraceWebServer();
+    const response = await server.inject({
+      method: 'GET',
+      url: `/api/runs/${run.id}/traces`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body).toHaveLength(1);
+    expect(body[0].eventType).toBe('sub_agent');
+    const childEvents = body[0].eventData.events;
+    expect(childEvents).toHaveLength(3);
+    expect(childEvents[0].type).toBe('tool_call');
+    expect(childEvents[0].toolCall.name).toBe('read_file');
+  });
+
+  it('GET / includes the nested sub-agent rendering hooks', async () => {
+    const server = buildTraceWebServer();
+    const response = await server.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('renderSubAgentChildren');
+    expect(response.body).toContain('event-children');
+    expect(response.body).toContain('.timeline-seg.sub_agent');
+    expect(response.body).toContain('.filter-btn.sub_agent');
   });
 });
