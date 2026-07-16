@@ -37,6 +37,14 @@ export class TaskQueue extends EventEmitter {
 
   enqueue(input: CreateTaskInput): Task {
     const task = this.store.create(input);
+    // Duplicate idempotency key: the store returned the pre-existing task
+    // instead of creating a fresh one (fresh tasks are always 'pending').
+    // Do not re-queue it — that would re-execute the work and clobber the
+    // live AbortController, leaving cancel() aborting a controller that
+    // nothing is listening to.
+    if (this.tasks.has(task.id) || task.status !== 'pending') {
+      return { ...task };
+    }
     const abortController = new AbortController();
     this.tasks.set(task.id, { task, abortController });
     this.pending.push(task.id);
