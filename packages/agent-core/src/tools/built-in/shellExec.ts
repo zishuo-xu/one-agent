@@ -11,6 +11,32 @@ const MAX_OUTPUT_CHARS = 10_000;
 const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 /**
+ * Minimal environment for child processes. The agent's own environment
+ * carries API keys (OPENAI_API_KEY, SEARCH_API_KEY, …); forwarding it would
+ * make `run_command: env` a credential exfiltration channel. Only innocuous
+ * vars commands genuinely need are passed through — secrets are excluded by
+ * construction.
+ */
+const CHILD_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TZ', 'PWD', 'OLDPWD',
+  'TMPDIR', 'TEMP', 'TMP',
+  'NODE_ENV', 'CI',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+];
+
+function buildChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of CHILD_ENV_KEYS) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
+}
+
+/**
  * Dangerous-command guardrail plus workspace containment. This is still NOT
  * a hard security boundary — shell expansion ($(), backticks, variables)
  * can smuggle paths past static inspection — but simple path references
@@ -92,7 +118,7 @@ function runShell(command: string, cwd: string, timeoutMs: number): Promise<Shel
   return new Promise((resolve, reject) => {
     exec(
       command,
-      { cwd, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES, shell: '/bin/sh' },
+      { cwd, timeout: timeoutMs, maxBuffer: MAX_BUFFER_BYTES, shell: '/bin/sh', env: buildChildEnv() },
       (error, stdout, stderr) => {
         if (error) {
           // Timeout kills the child; surface that as a tool failure.

@@ -33,6 +33,24 @@ describe('run_command tool', () => {
     expect(result.truncated).toBe(false);
   });
 
+  it('does not forward API keys or secrets to the child environment', async () => {
+    process.env.OPENAI_API_KEY = 'sk-test-secret-12345';
+    process.env.MY_CUSTOM_SECRET = 'super-secret-value';
+    try {
+      const result = (await tool.execute({ command: 'env' })) as { stdout: string };
+      expect(result.stdout).not.toContain('sk-test-secret-12345');
+      expect(result.stdout).not.toContain('super-secret-value');
+      expect(result.stdout).not.toContain('OPENAI_API_KEY');
+      expect(result.stdout).not.toContain('MY_CUSTOM_SECRET');
+      // ...while innocuous vars commands need are still present.
+      expect(result.stdout).toContain('PATH=');
+      expect(result.stdout).toContain('HOME=');
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.MY_CUSTOM_SECRET;
+    }
+  });
+
   it('runs commands from the workspace root', async () => {
     const result = (await tool.execute({ command: 'pwd' })) as { stdout: string };
     // Sandbox root is realpath'd (macOS /var -> /private/var), so compare
