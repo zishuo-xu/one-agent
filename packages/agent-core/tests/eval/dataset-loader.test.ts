@@ -15,14 +15,31 @@ describe('loadEvalDataset', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('loads the bundled dataset (19 mock + 2 real tasks)', () => {
+  it('loads the bundled dataset (19 mock + 2 real + 2 capability tasks)', () => {
     const tasks = loadEvalDataset(resolveBundledDatasetDir());
-    expect(tasks).toHaveLength(21);
+    expect(tasks).toHaveLength(23);
     const ids = tasks.map((t) => t.id);
-    expect(new Set(ids).size).toBe(21);
+    expect(new Set(ids).size).toBe(23);
     expect(ids).toContain('tool-chain');
     expect(ids).toContain('real-model-planning');
     expect(ids).toContain('real-model-benchmark');
+    expect(ids).toContain('l2-timeout-double');
+    expect(ids).toContain('l6-weekly-report-sample');
+  });
+
+  it('preserves capability-schema fields (tags, checkpoints) after parsing', () => {
+    // Regression: zod strips unknown keys, so new EvalTask fields must be
+    // declared in the loader schema or dataset JSONs silently lose them.
+    const tasks = loadEvalDataset(resolveBundledDatasetDir());
+    const l2 = tasks.find((t) => t.id === 'l2-timeout-double');
+    expect(l2?.capabilities).toEqual(['tool-chain', 'file-ops']);
+    expect(l2?.difficulty).toBe('easy');
+    expect(l2?.finalAnswerContainsAll).toEqual(['3000']);
+
+    const l6 = tasks.find((t) => t.id === 'l6-weekly-report-sample');
+    expect(l6?.checkpoints).toHaveLength(3);
+    expect(l6?.checkpoints?.[0].points).toBe(2);
+    expect(l6?.checkpoints?.[0].expectedFiles?.[0].containsAll).toContain('登录页');
   });
 
   it('loads tasks from subdirectories and validates required fields', () => {

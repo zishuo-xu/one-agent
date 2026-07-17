@@ -30,24 +30,49 @@ const mockResponseSchema = z.object({
     .optional(),
 });
 
+const toolExpectationSchema = z.object({
+  name: z.string(),
+  arguments: z.record(z.unknown()).optional(),
+});
+
+const fileExpectationSchema = z.object({
+  path: z.string(),
+  contains: z.string().optional(),
+  containsAll: z.array(z.string()).optional(),
+  notContains: z.array(z.string()).optional(),
+});
+
+const checkpointSchema = z.object({
+  id: z.string().min(1),
+  description: z.string(),
+  points: z.number().positive(),
+  finalAnswerContains: z.array(z.string()).optional(),
+  finalAnswerContainsAll: z.array(z.string()).optional(),
+  finalAnswerNotContains: z.array(z.string()).optional(),
+  expectedFiles: z.array(fileExpectationSchema).optional(),
+  forbiddenFiles: z.array(z.string()).optional(),
+  requiredTools: z.array(toolExpectationSchema).optional(),
+  forbiddenTools: z.array(z.string()).optional(),
+});
+
 const evalTaskSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string(),
   prompt: z.string().min(1),
   initialWorkspace: z.record(z.string()).optional(),
-  expectedTools: z
-    .array(z.object({ name: z.string(), arguments: z.record(z.unknown()).optional() }))
-    .optional(),
-  requiredTools: z
-    .array(z.object({ name: z.string(), arguments: z.record(z.unknown()).optional() }))
-    .optional(),
+  expectedTools: z.array(toolExpectationSchema).optional(),
+  requiredTools: z.array(toolExpectationSchema).optional(),
   forbiddenTools: z.array(z.string()).optional(),
   expectedOutcome: z.enum(['success', 'failure']).optional(),
   finalAnswerContains: z.array(z.string()).optional(),
-  expectedFiles: z
-    .array(z.object({ path: z.string(), contains: z.string().optional() }))
-    .optional(),
+  finalAnswerContainsAll: z.array(z.string()).optional(),
+  finalAnswerNotContains: z.array(z.string()).optional(),
+  expectedFiles: z.array(fileExpectationSchema).optional(),
+  forbiddenFiles: z.array(z.string()).optional(),
+  capabilities: z.array(z.string()).optional(),
+  difficulty: z.enum(['easy', 'medium', 'hard']).optional(),
+  checkpoints: z.array(checkpointSchema).optional(),
   mockResponses: z.array(mockResponseSchema).optional(),
   enablePlanning: z.boolean().optional(),
   timeoutMs: z.number().optional(),

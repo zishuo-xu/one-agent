@@ -58,6 +58,26 @@ export function assertFinalAnswer(reply: string, contains: string[]): string | u
   return undefined;
 }
 
+export function assertFinalAnswerContainsAll(reply: string, phrases: string[]): string | undefined {
+  if (phrases.length === 0) return undefined;
+  const normalized = reply.toLowerCase();
+  const missing = phrases.filter((phrase) => !normalized.includes(phrase.toLowerCase()));
+  if (missing.length > 0) {
+    return `Final answer missing required phrases: ${missing.join(', ')}`;
+  }
+  return undefined;
+}
+
+export function assertFinalAnswerNotContains(reply: string, phrases: string[]): string | undefined {
+  if (phrases.length === 0) return undefined;
+  const normalized = reply.toLowerCase();
+  const found = phrases.filter((phrase) => normalized.includes(phrase.toLowerCase()));
+  if (found.length > 0) {
+    return `Final answer should not contain phrases: ${found.join(', ')}`;
+  }
+  return undefined;
+}
+
 export function assertToolEventuallyCalled(
   toolCalls: ToolCall[],
   name: string,

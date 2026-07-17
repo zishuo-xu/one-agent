@@ -362,9 +362,10 @@ describe('EvalRunner built-in scenarios', () => {
 
     expect(summary.total).toBe(1);
     expect(summary.passed).toBe(1);
-    // Verify copy.txt was created with correct content
+    // Verify copy.txt was created with correct content (each task runs in its
+    // own workspace subdirectory named after the task id)
     const fs = await import('node:fs');
-    const copyPath = join(workspaceRoot, 'copy.txt');
+    const copyPath = join(workspaceRoot, 'tool-chain', 'copy.txt');
     expect(fs.existsSync(copyPath)).toBe(true);
     expect(fs.readFileSync(copyPath, 'utf-8')).toContain('Hello from source file.');
   });

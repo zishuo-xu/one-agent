@@ -56,11 +56,21 @@ async function main() {
       metrics.push(`steps=${result.planningMetrics.planStepCount}`);
       metrics.push(`reflections=${result.reflectionCount ?? 0}`);
     }
+    if (result.maxScore !== undefined) {
+      metrics.push(`score=${result.score}/${result.maxScore}`);
+    }
     totalDuration += result.durationMs;
     console.log(`[${status}] ${result.taskId} - ${metrics.join(' | ')}`);
     if (!result.passed) {
       for (const error of result.errors) {
         console.log(`  - ${error}`);
+      }
+      for (const checkpoint of result.checkpointResults ?? []) {
+        if (checkpoint.earned < checkpoint.points) {
+          console.log(
+            `  - checkpoint ${checkpoint.id} (${checkpoint.earned}/${checkpoint.points}): ${checkpoint.errors.join('; ')}`,
+          );
+        }
       }
       if (result.threadId) {
         console.log(`  - trace: thread ${result.threadId}`);
@@ -71,6 +81,9 @@ async function main() {
   const passRate = summary.total > 0 ? ((summary.passed / summary.total) * 100).toFixed(0) : '0';
   console.log('');
   console.log(`Summary: ${summary.passed}/${summary.total} passed (${passRate}%) | ${totalDuration}ms total | ${totalTokens} tokens`);
+  if (summary.totalMaxScore !== undefined) {
+    console.log(`Score: ${summary.totalScore}/${summary.totalMaxScore} checkpoint points`);
+  }
 
   if (traceDbPath) {
     console.log('');

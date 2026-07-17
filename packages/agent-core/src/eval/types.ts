@@ -27,6 +27,28 @@ export interface EvalToolExpectation {
 export interface EvalFileExpectation {
   path: string;
   contains?: string;
+  /** All substrings must appear in the file (AND semantics, case-insensitive). */
+  containsAll?: string[];
+  /** No substring may appear in the file (case-insensitive). */
+  notContains?: string[];
+}
+
+/**
+ * A weighted checkpoint for partial credit on long-horizon tasks (L6-style).
+ * Each checkpoint is evaluated independently and earns its points only when
+ * every one of its assertions passes (binary per checkpoint).
+ */
+export interface EvalCheckpoint {
+  id: string;
+  description: string;
+  points: number;
+  finalAnswerContains?: string[];
+  finalAnswerContainsAll?: string[];
+  finalAnswerNotContains?: string[];
+  expectedFiles?: EvalFileExpectation[];
+  forbiddenFiles?: string[];
+  requiredTools?: EvalToolExpectation[];
+  forbiddenTools?: string[];
 }
 
 export interface EvalTask {
@@ -41,13 +63,36 @@ export interface EvalTask {
   requiredTools?: EvalToolExpectation[];
   forbiddenTools?: string[];
   expectedOutcome?: 'success' | 'failure';
+  /** Any phrase suffices (OR semantics, case-insensitive). */
   finalAnswerContains?: string[];
-  /** Files that must exist after the task runs, optionally checked for content substring. */
+  /** Every phrase must appear (AND semantics, case-insensitive). */
+  finalAnswerContainsAll?: string[];
+  /** No phrase may appear (case-insensitive). */
+  finalAnswerNotContains?: string[];
+  /** Files that must exist after the task runs, optionally checked for content. */
   expectedFiles?: EvalFileExpectation[];
+  /** Files that must NOT exist after the run (deleted files, forbidden writes). */
+  forbiddenFiles?: string[];
+  /** Capability tags for per-dimension score aggregation (e.g. "tool-chain"). */
+  capabilities?: string[];
+  difficulty?: 'easy' | 'medium' | 'hard';
+  /**
+   * Weighted checkpoints for partial credit. When present, the task passes
+   * only if every checkpoint earns full points (and task-level assertions pass).
+   */
+  checkpoints?: EvalCheckpoint[];
   /** Pre-defined model responses for mock evaluation mode. Required when mode is 'mock'. */
   mockResponses?: MockChatCompletionResponse[];
   enablePlanning?: boolean;
   timeoutMs?: number;
+}
+
+export interface EvalCheckpointResult {
+  id: string;
+  description: string;
+  earned: number;
+  points: number;
+  errors: string[];
 }
 
 export interface EvalResult {
@@ -70,6 +115,10 @@ export interface EvalResult {
     planStepCount: number;
   };
   reflectionCount?: number;
+  /** Checkpoint scoring, present when the task defines checkpoints. */
+  score?: number;
+  maxScore?: number;
+  checkpointResults?: EvalCheckpointResult[];
   /** Persisted run/thread ids when the runner was given a traceDbPath. */
   runId?: string;
   threadId?: string;
@@ -96,4 +145,7 @@ export interface EvalRunSummary {
   passed: number;
   failed: number;
   results: EvalResult[];
+  /** Score sums across tasks that define checkpoints. */
+  totalScore?: number;
+  totalMaxScore?: number;
 }
