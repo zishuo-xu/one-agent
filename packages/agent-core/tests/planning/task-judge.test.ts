@@ -57,22 +57,6 @@ describe('TaskJudge', () => {
     expect(result.nextAction).toBe('finalize');
   });
 
-  it('limits replan attempts', async () => {
-    const judge = new TaskJudge();
-    expect(judge.canReplan()).toBe(true);
-    judge.recordReplan();
-    judge.recordReplan();
-    judge.recordReplan();
-    expect(judge.canReplan()).toBe(false);
-  });
-
-  it('limits retry attempts', async () => {
-    const judge = new TaskJudge({ maxRetryAttempts: 1 });
-    expect(judge.canRetry()).toBe(true);
-    judge.recordRetry();
-    expect(judge.canRetry()).toBe(false);
-  });
-
   it('falls back on model error', async () => {
     mockCreate.mockRejectedValue(new Error('Network error') as never);
 

@@ -1,4 +1,3 @@
-import { Message } from '../agents/types.js';
 import { ToolCall, ToolResult } from '../tools/types.js';
 import { ReasoningStep, FailureAnalysis } from './types.js';
 
@@ -60,50 +59,6 @@ export class ReasoningChain {
 
   getStepsByPlanStep(planStepId: string): ReasoningStep[] {
     return this.steps.filter((s) => s.planStepId === planStepId);
-  }
-
-  toMessages(): Message[] {
-    const messages: Message[] = [];
-
-    for (const step of this.steps) {
-      if (step.thought) {
-        messages.push({
-          role: 'assistant',
-          content: `Thought: ${step.thought}`,
-        });
-      }
-      if (step.action) {
-        messages.push({
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              id: step.action.id,
-              type: 'function',
-              function: {
-                name: step.action.name,
-                arguments: JSON.stringify(step.action.arguments),
-              },
-            },
-          ],
-        });
-      }
-      if (step.observation) {
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify(step.observation),
-          tool_call_id: step.action?.id ?? 'unknown',
-        });
-      }
-      if (step.reflection) {
-        messages.push({
-          role: 'assistant',
-          content: `Reflection: ${step.reflection}`,
-        });
-      }
-    }
-
-    return messages;
   }
 
   private hasCurrentStep(): boolean {

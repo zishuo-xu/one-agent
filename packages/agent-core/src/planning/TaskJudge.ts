@@ -32,10 +32,6 @@ export class TaskJudge {
   private readonly systemPrompt: string;
   private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
-  private readonly maxReplanAttempts: number;
-  private readonly maxRetryAttempts: number;
-  private replanAttempts = 0;
-  private retryAttempts = 0;
   /** Same usage-sink contract as Planner.onUsage (wired by AgentLoop). */
   onUsage?: (usage: TokenUsage) => void;
 
@@ -52,8 +48,6 @@ export class TaskJudge {
           config.modelProvider ??
           new OpenAICompatibleProvider(config.openai, config.model));
     this.timeoutMs = options.timeoutMs ?? 30000;
-    this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
-    this.maxRetryAttempts = options.maxRetryAttempts ?? 2;
   }
 
   async judge(plan: Plan, steps: ReasoningStep[]): Promise<JudgeResult> {
@@ -81,27 +75,6 @@ export class TaskJudge {
         nextAction: 'continue',
       };
     }
-  }
-
-  reset(): void {
-    this.replanAttempts = 0;
-    this.retryAttempts = 0;
-  }
-
-  canReplan(): boolean {
-    return this.replanAttempts < this.maxReplanAttempts;
-  }
-
-  canRetry(): boolean {
-    return this.retryAttempts < this.maxRetryAttempts;
-  }
-
-  recordReplan(): void {
-    this.replanAttempts++;
-  }
-
-  recordRetry(): void {
-    this.retryAttempts++;
   }
 
   private buildPrompt(plan: Plan, steps: ReasoningStep[]): string {

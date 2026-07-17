@@ -90,19 +90,4 @@ describe('ReasoningChain', () => {
     expect(all[1].failureAnalysis).toBeUndefined();
   });
 
-  it('converts steps to messages', () => {
-    const chain = new ReasoningChain();
-
-    chain.addThought('I need to read the file');
-    chain.addAction({ id: 'call_1', name: 'read_file', arguments: { path: 'a.txt' } });
-    chain.addObservation({ success: true, data: { content: 'hello' } });
-
-    const messages = chain.toMessages();
-    expect(messages).toHaveLength(3);
-    expect(messages[0].role).toBe('assistant');
-    expect(messages[0].content).toContain('Thought:');
-    expect(messages[1].role).toBe('assistant');
-    expect(messages[1].tool_calls).toBeDefined();
-    expect(messages[2].role).toBe('tool');
-  });
 });

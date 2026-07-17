@@ -23,6 +23,7 @@ import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, ModelResponse, ModelToolCall, TokenUsage } from '../model/types.js';
 import { SubAgentRunner, SubAgentTask, SubAgentResult } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
+import { ModelCaller } from './ModelCaller.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -104,6 +105,7 @@ export class AgentLoop extends EventEmitter {
   private readonly planner: Planner;
   private readonly taskJudge: TaskJudge;
   private readonly modelProvider: ModelProvider;
+  private readonly modelCaller: ModelCaller;
   private readonly runStore?: RunStore;
   private readonly toolCallStore?: ToolCallStore;
   private readonly threadStore?: ThreadStore;
@@ -206,6 +208,19 @@ export class AgentLoop extends EventEmitter {
     this.taskJudge.onUsage = trackAuxUsage;
     this.reasoningChain = new ReasoningChain();
 
+    // The single entry point for this loop's own model calls: streaming and
+    // non-streaming completions, retry policy, usage feedback, live deltas.
+    this.modelCaller = new ModelCaller({
+      modelProvider: this.modelProvider,
+      contextManager: this.contextManager,
+      toolRegistry: this.toolRegistry,
+      timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries,
+      signal: () => this.signal,
+      onUsage: (usage) => this.accumulateUsage(usage),
+      onDelta: (type, content) => this.emitEvent({ type, content }),
+    });
+
     this.memoryStore = options.memoryStore;
     this.memoryExtractor = options.memoryExtractor;
     this.awaitMemoryExtraction = options.awaitMemoryExtraction ?? true;
@@ -226,7 +241,6 @@ export class AgentLoop extends EventEmitter {
     this.events = [];
     this.tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     this.reasoningChain = new ReasoningChain();
-    this.taskJudge.reset();
 
     // Recall relevant long-term memories and inject them into the context.
     this.currentMemoryText = undefined;
@@ -372,7 +386,7 @@ export class AgentLoop extends EventEmitter {
       // and accumulates any tool-call deltas. If tool calls arrive we execute
       // them and loop; otherwise the text already reached the user live and we
       // just record the final message. No separate "probe" round-trip.
-      const { content, toolCalls } = await this.callModelStreaming();
+      const { content, toolCalls } = await this.modelCaller.completeStreaming();
 
       if (toolCalls && toolCalls.length > 0) {
         const calls = toolCalls.map((tc) => ({
@@ -440,7 +454,7 @@ export class AgentLoop extends EventEmitter {
         'give your final answer or a summary of partial findings now. Do not call any more tools.',
       internal: true,
     });
-    const { content } = await this.callModelStreaming({ includeTools: false });
+    const { content } = await this.modelCaller.completeStreaming({ includeTools: false });
     this.contextManager.addMessage({ role: 'assistant', content });
     this.emitEvent({ type: 'message', content });
     return { reply: content, events: this.events };
@@ -777,7 +791,7 @@ export class AgentLoop extends EventEmitter {
     });
 
     this.checkSignal();
-    const response = await this.callModel({ allowedTools: allowedToolNames });
+    const response = await this.modelCaller.complete({ allowedTools: allowedToolNames });
 
     // Prefer real content; fall back to reasoning_content for endpoints that
     // return generated text there (provider surfaces both separately).
@@ -981,7 +995,7 @@ export class AgentLoop extends EventEmitter {
     });
 
     this.checkSignal();
-    const content = await this.streamModel({ includeTools: false });
+    const { content } = await this.modelCaller.completeStreaming({ includeTools: false });
 
     this.contextManager.addMessage({ role: 'assistant', content });
     this.emitEvent({ type: 'message', content });
@@ -1056,207 +1070,6 @@ export class AgentLoop extends EventEmitter {
     if (usage.promptTokens > 0 && options?.trackPromptSize !== false) {
       this.contextManager.updateLastKnownTokens(usage.promptTokens);
     }
-  }
-
-  private async callModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}): Promise<ModelResponse> {
-    const { includeTools = true, allowedTools } = options;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      this.checkSignal();
-      try {
-        const messages = await this.contextManager.buildContext();
-        const tools = includeTools
-          ? this.toolRegistry?.getSchemas(allowedTools)
-          : undefined;
-        const response = await this.modelProvider.complete({
-          messages,
-          tools,
-          timeoutMs: this.timeoutMs,
-          signal: this.signal,
-        });
-        this.accumulateUsage(response.usage);
-        return response;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-      }
-    }
-
-    throw new Error(
-      `Model call failed after ${this.maxRetries + 1} attempt(s): ${lastError?.message}`
-    );
-  }
-
-  /**
-   * Open a single streaming completion that simultaneously streams the answer
-   * text to the user (via message_delta events) and accumulates tool-call
-   * deltas by their `index`. There is exactly one request per turn, and for
-   * tool-less answers the text already reached the client token-by-token by
-   * the time the stream ends.
-   *
-   * Wire-format concerns (reasoning_content probing, non-streaming fallback
-   * for endpoints that ignore `stream: true`) live in the provider; this
-   * method only applies agent-level policy: reasoning-as-fallback and the
-   * no-retry-after-emitted-delta guard.
-   */
-  private async callModelStreaming(options: { allowedTools?: string[]; includeTools?: boolean } = {}): Promise<{
-    content: string;
-    toolCalls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-  }> {
-    const { allowedTools, includeTools = true } = options;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      this.checkSignal();
-      // Track whether we have already streamed partial content to the client
-      // during this attempt. Once any message_delta has been emitted we cannot
-      // safely retry: a retry would replay the same tokens and the user would
-      // see duplicated/garbled output. Only retry while no delta has shipped.
-      let emittedDelta = false;
-      try {
-        const messages = await this.contextManager.buildContext();
-        const tools = includeTools
-          ? this.toolRegistry?.getSchemas(allowedTools)
-          : undefined;
-
-        let content = '';
-        // Reasoning-as-fallback policy: stream content live; buffer reasoning
-        // and use it as the answer only if the stream ends with no real content.
-        let reasoningBuffer = '';
-        let hasRealContent = false;
-        // Tool-call deltas arrive fragmented across chunks, indexed by position.
-        const toolCallMap = new Map<
-          number,
-          { id?: string; name?: string; arguments: string }
-        >();
-
-        for await (const chunk of this.modelProvider.stream({
-          messages,
-          tools,
-          timeoutMs: this.timeoutMs,
-          signal: this.signal,
-        })) {
-          this.checkSignal();
-          this.accumulateUsage(chunk.usage);
-
-          if (chunk.content) {
-            content += chunk.content;
-            if (chunk.content.trim()) hasRealContent = true;
-            emittedDelta = true;
-            this.emitEvent({ type: 'message_delta', content: chunk.content });
-          }
-          if (chunk.reasoning && !hasRealContent) {
-            reasoningBuffer += chunk.reasoning;
-            // Emit reasoning live so the user sees activity instead of
-            // staring at a blank spinner for seconds on end.
-            this.emitEvent({ type: 'reasoning_delta', content: chunk.reasoning });
-          }
-          if (chunk.toolCallDeltas) {
-            for (const tc of chunk.toolCallDeltas) {
-              const existing = toolCallMap.get(tc.index) ?? {
-                id: undefined,
-                name: undefined,
-                arguments: '',
-              };
-              if (tc.id) existing.id = tc.id;
-              if (tc.name) existing.name = tc.name;
-              if (tc.argumentsDelta) existing.arguments += tc.argumentsDelta;
-              toolCallMap.set(tc.index, existing);
-            }
-          }
-        }
-
-        // If the model only produced reasoning_content (no real content),
-        // use it as the answer so the user is not left with an empty reply.
-        // Do NOT re-emit it as a message_delta: the reasoning was already
-        // streamed live via reasoning_delta, and replaying the whole buffer
-        // would print the entire text a second time.
-        if (!hasRealContent && reasoningBuffer) {
-          content = reasoningBuffer;
-          emittedDelta = true;
-        }
-
-        const toolCalls =
-          toolCallMap.size > 0
-            ? [...toolCallMap.entries()]
-                .sort((a, b) => a[0] - b[0])
-                .map(([, tc]) => ({
-                  id: tc.id ?? '',
-                  type: 'function' as const,
-                  function: { name: tc.name ?? '', arguments: tc.arguments },
-                }))
-            : undefined;
-
-        return { content, toolCalls };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        if (emittedDelta) {
-          // Partial content already reached the client; retrying would
-          // duplicate it. Surface the error to the caller instead.
-          throw lastError;
-        }
-      }
-    }
-
-    throw new Error(
-      `Model call failed after ${this.maxRetries + 1} attempt(s): ${lastError?.message}`
-    );
-  }
-
-  private async streamModel(options: { includeTools?: boolean; allowedTools?: string[] } = {}): Promise<string> {
-    const { includeTools = false, allowedTools } = options;
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      this.checkSignal();
-      let emittedDelta = false;
-      try {
-        const messages = await this.contextManager.buildContext();
-        const tools = includeTools
-          ? this.toolRegistry?.getSchemas(allowedTools)
-          : undefined;
-
-        let content = '';
-        // Same reasoning/content separation policy as callModelStreaming.
-        let reasoningBuffer = '';
-        let hasRealContent = false;
-        for await (const chunk of this.modelProvider.stream({
-          messages,
-          tools,
-          timeoutMs: this.timeoutMs,
-          signal: this.signal,
-        })) {
-          this.checkSignal();
-          this.accumulateUsage(chunk.usage);
-          if (chunk.content) {
-            content += chunk.content;
-            if (chunk.content.trim()) hasRealContent = true;
-            emittedDelta = true;
-            this.emitEvent({ type: 'message_delta', content: chunk.content });
-          }
-          if (chunk.reasoning && !hasRealContent) {
-            reasoningBuffer += chunk.reasoning;
-            this.emitEvent({ type: 'reasoning_delta', content: chunk.reasoning });
-          }
-        }
-        if (!hasRealContent && reasoningBuffer) {
-          // Same no-replay policy as callModelStreaming: the reasoning was
-          // already streamed live; re-emitting it would double-print.
-          content = reasoningBuffer;
-          emittedDelta = true;
-        }
-        return content;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        if (emittedDelta) {
-          throw lastError;
-        }
-      }
-    }
-
-    throw new Error(
-      `Model call failed after ${this.maxRetries + 1} attempt(s): ${lastError?.message}`
-    );
   }
 
   private toWireToolCalls(
