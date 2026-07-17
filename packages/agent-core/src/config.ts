@@ -13,6 +13,24 @@ function getEnv(key: string, defaultValue?: string): string {
   return value;
 }
 
+/**
+ * Parse a numeric env var, failing loudly on garbage. `Number(env)` yields
+ * NaN silently, and NaN poisons downstream comparisons (e.g.
+ * `totalTokens <= NaN` is always false, which would summarize the whole
+ * history away on every single turn).
+ */
+function getNumericEnv(key: string, defaultValue: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') {
+    return defaultValue;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid numeric value for ${key}: ${JSON.stringify(raw)}`);
+  }
+  return value;
+}
+
 const openai = new OpenAI({
   baseURL: process.env.OPENAI_BASE_URL,
   apiKey: getEnv('OPENAI_API_KEY', ''),
@@ -20,7 +38,7 @@ const openai = new OpenAI({
 const model = process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo';
 
 export const config = {
-  port: Number(process.env.PORT ?? '3000'),
+  port: getNumericEnv('PORT', 3000),
   host: process.env.HOST ?? '127.0.0.1',
   openai,
   model,
@@ -45,11 +63,11 @@ export const config = {
     ? new OpenAICompatibleProvider(openai, process.env.UTILITY_MODEL)
     : undefined,
   /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
-  timeoutMs: Number(process.env.OPENAI_TIMEOUT_MS ?? '30000'),
+  timeoutMs: getNumericEnv('OPENAI_TIMEOUT_MS', 30000),
   /** Maximum estimated tokens in the context window before summarization triggers. */
-  maxContextTokens: Number(process.env.MAX_CONTEXT_TOKENS ?? '4096'),
+  maxContextTokens: getNumericEnv('MAX_CONTEXT_TOKENS', 4096),
   /** Token budget for the recent (non-summarized) message window. */
-  recentTokenBudget: Number(process.env.RECENT_TOKEN_BUDGET ?? '2048'),
+  recentTokenBudget: getNumericEnv('RECENT_TOKEN_BUDGET', 2048),
   systemPrompt:
     process.env.SYSTEM_PROMPT ??
     'You are a helpful assistant. Answer concisely and in Chinese by default. ' +
