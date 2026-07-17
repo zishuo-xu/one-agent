@@ -1,0 +1,17 @@
+{
+  "id": "l4-missing-pdf",
+  "name": "L4：文件不存在要恢复",
+  "description": "没有 report.pdf 只有 report.txt。只答'找不到'不算过，必须自己找到 txt 并总结出 9200 万。",
+  "prompt": "总结 report.pdf 的主要内容。",
+  "initialWorkspace": {
+    "report.txt": "# 2025 Q3 经营报告\n\nQ3 营收 9200 万元，同比增长 18%。\n毛利率 42%，环比持平。\n"
+  },
+  "finalAnswerContainsAll": [
+    "9200"
+  ],
+  "capabilities": [
+    "recovery"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

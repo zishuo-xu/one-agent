@@ -81,6 +81,10 @@ describe('task routes', () => {
     const { taskId } = JSON.parse(created.body);
 
     await waitForStatus(server, taskId, 'completed');
+    const response = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
+    const body = JSON.parse(response.body);
+    expect(body.status).toBe('completed');
+    expect(body.completionOutcome).toBeUndefined();
   });
 
   it('GET /api/tasks/:id/events streams agent events and a terminal frame', async () => {
@@ -107,6 +111,37 @@ describe('task routes', () => {
     expect(response.body).toContain('"type":"task"');
     expect(response.body).toContain('"status":"completed"');
     expect(response.body).toContain('Hello from SSE');
+    expect(response.body).not.toContain('"outcome"');
+  });
+
+  it('correlates persisted task traces with the task id', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'Done' } }],
+    } as never);
+
+    const server = await buildServer();
+    const chat = await server.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { message: 'Create a thread' },
+    });
+    const { threadId } = JSON.parse(chat.body);
+
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { message: 'Run in the thread', threadId },
+    });
+    const { taskId } = JSON.parse(created.body);
+    await waitForStatus(server, taskId, 'completed');
+
+    const response = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}/traces` });
+    const traces = JSON.parse(response.body);
+    expect(traces.length).toBeGreaterThan(0);
+    expect(traces.every((trace: { taskId: string }) => trace.taskId === taskId)).toBe(true);
+    expect(traces.some((trace: { eventType: string }) => trace.eventType === 'run')).toBe(true);
+    expect(traces.some((trace: { eventType: string }) => trace.eventType === 'model_call')).toBe(true);
+    expect(traces.some((trace: { eventType: string }) => trace.eventType === 'verification')).toBe(false);
   });
 
   it('GET /api/tasks/:id/events returns 404 for unknown tasks', async () => {

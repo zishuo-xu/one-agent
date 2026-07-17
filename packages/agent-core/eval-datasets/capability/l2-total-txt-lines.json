@@ -1,0 +1,21 @@
+{
+  "id": "l2-total-txt-lines",
+  "name": "L2：多文件计数聚合",
+  "description": "4 个 .txt 共 55 行；notes.md 是干扰项不能算进去。",
+  "prompt": "workspace 里所有 .txt 文件加起来一共有多少行？",
+  "initialWorkspace": {
+    "t1.txt": "line\nline\nline\nline\nline\nline\nline\nline\nline\nline\n",
+    "t2.txt": "line\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n",
+    "t3.txt": "line\nline\nline\nline\nline\nline\nline\n",
+    "t4.txt": "line\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n",
+    "notes.md": "notes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\nnotes\n"
+  },
+  "finalAnswerContainsAll": [
+    "55"
+  ],
+  "capabilities": [
+    "tool-chain"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 120000
+}

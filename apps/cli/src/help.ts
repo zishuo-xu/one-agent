@@ -27,6 +27,7 @@ ${bold('REPL commands')}:
   /traces             Show traces for the most recent run
   /traces <run-id>    Show traces for a specific run
   /traces <run-id> --verbose  Show full trace JSON
+  /resume <run-id>    Resume an interrupted PlanningLoop run
   /thread <id>        Switch to another thread
   /exit, /quit        Exit the CLI
 

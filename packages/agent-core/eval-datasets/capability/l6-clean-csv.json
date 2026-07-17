@@ -1,0 +1,65 @@
+{
+  "id": "l6-clean-csv",
+  "name": "L6 场景：数据清洗",
+  "description": "60 行脏 csv：5 重复 + 4 空邮箱（不重叠）+ 3 种日期格式。清洗后 51 行，扔 9 行。",
+  "prompt": "raw.csv 这个表有点脏，帮我清成干净版 clean.csv：完全重复的行去重、邮箱为空的行剔掉、日期统一成 YYYY-MM-DD。完事告诉我扔了多少行。",
+  "initialWorkspace": {
+    "raw.csv": "id,name,email,date\nr01,user01,u01@example.com,05-03-2026\nr02,user02,u02@example.com,Mar 5, 2026\nr03,user03,u03@example.com,2026/3/5\nr04,user04,u04@example.com,05-03-2026\nr05,user05,u05@example.com,Mar 5, 2026\nr06,user06,u06@example.com,2026/3/5\nr07,user07,u07@example.com,05-03-2026\nr08,user08,u08@example.com,Mar 5, 2026\nr09,user09,u09@example.com,2026/3/5\nr10,user10,u10@example.com,05-03-2026\nr11,NOMAIL1,,Mar 5, 2026\nr12,NOMAIL2,,2026/3/5\nr13,NOMAIL3,,05-03-2026\nr14,NOMAIL4,,Mar 5, 2026\nr15,user15,u15@example.com,2026/3/5\nr16,user16,u16@example.com,05-03-2026\nr17,user17,u17@example.com,Mar 5, 2026\nr18,user18,u18@example.com,2026/3/5\nr19,user19,u19@example.com,05-03-2026\nr20,user20,u20@example.com,Mar 5, 2026\nr21,user21,u21@example.com,2026/3/5\nr22,user22,u22@example.com,05-03-2026\nr23,user23,u23@example.com,Mar 5, 2026\nr24,user24,u24@example.com,2026/3/5\nr25,user25,u25@example.com,05-03-2026\nr26,user26,u26@example.com,Mar 5, 2026\nr27,user27,u27@example.com,2026/3/5\nr28,user28,u28@example.com,05-03-2026\nr29,user29,u29@example.com,Mar 5, 2026\nr30,user30,u30@example.com,2026/3/5\nr31,user31,u31@example.com,05-03-2026\nr32,user32,u32@example.com,Mar 5, 2026\nr33,user33,u33@example.com,2026/3/5\nr34,user34,u34@example.com,05-03-2026\nr35,user35,u35@example.com,Mar 5, 2026\nr36,user36,u36@example.com,2026/3/5\nr37,user37,u37@example.com,05-03-2026\nr38,user38,u38@example.com,Mar 5, 2026\nr39,user39,u39@example.com,2026/3/5\nr40,user40,u40@example.com,05-03-2026\nr41,user41,u41@example.com,Mar 5, 2026\nr42,user42,u42@example.com,2026/3/5\nr43,user43,u43@example.com,05-03-2026\nr44,user44,u44@example.com,Mar 5, 2026\nr45,user45,u45@example.com,2026/3/5\nr46,user46,u46@example.com,05-03-2026\nr47,user47,u47@example.com,Mar 5, 2026\nr48,user48,u48@example.com,2026/3/5\nr49,user49,u49@example.com,05-03-2026\nr50,user50,u50@example.com,Mar 5, 2026\nr51,user51,u51@example.com,2026/3/5\nr52,user52,u52@example.com,05-03-2026\nr53,user53,u53@example.com,Mar 5, 2026\nr54,user54,u54@example.com,2026/3/5\nr55,user55,u55@example.com,05-03-2026\nr01,user01,u01@example.com,05-03-2026\nr02,user02,u02@example.com,Mar 5, 2026\nr03,user03,u03@example.com,2026/3/5\nr04,user04,u04@example.com,05-03-2026\nr05,user05,u05@example.com,Mar 5, 2026\n"
+  },
+  "checkpoints": [
+    {
+      "id": "exists",
+      "description": "clean.csv 存在",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "clean.csv"
+        }
+      ]
+    },
+    {
+      "id": "removed",
+      "description": "空邮箱行（NOMAIL）已剔除",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "clean.csv",
+          "notContains": [
+            "NOMAIL1",
+            "NOMAIL2",
+            "NOMAIL3",
+            "NOMAIL4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dates",
+      "description": "日期已归一化",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "clean.csv",
+          "contains": "2026-03-05",
+          "notContains": [
+            "05-03-2026"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "count-answer",
+      "description": "汇报扔了 9 行",
+      "points": 1,
+      "finalAnswerContainsAll": [
+        "9"
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "tool-chain"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 300000
+}

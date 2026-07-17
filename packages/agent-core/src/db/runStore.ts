@@ -12,6 +12,10 @@ interface RunRow {
   status: AgentRun['status'];
   error: string | null;
   reasoning_chain: string | null;
+  trace_status: AgentRun['traceStatus'];
+  dropped_trace_events: number;
+  trace_error: string | null;
+  checkpoint: string | null;
 }
 
 function rowToAgentRun(row: RunRow): AgentRun {
@@ -25,6 +29,10 @@ function rowToAgentRun(row: RunRow): AgentRun {
     status: row.status,
     error: row.error,
     reasoningChain: row.reasoning_chain ? JSON.parse(row.reasoning_chain) : undefined,
+    traceStatus: row.trace_status,
+    droppedTraceEvents: row.dropped_trace_events,
+    traceError: row.trace_error ?? undefined,
+    checkpoint: row.checkpoint ? JSON.parse(row.checkpoint) : undefined,
   };
 }
 
@@ -38,8 +46,8 @@ export class RunStore {
 
     this.db
       .prepare(
-        `INSERT INTO agent_runs (id, thread_id, task_id, model, start_time, end_time, status, error, reasoning_chain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO agent_runs (id, thread_id, task_id, model, start_time, end_time, status, error, reasoning_chain, trace_status, dropped_trace_events, trace_error, checkpoint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -50,7 +58,11 @@ export class RunStore {
         null,
         status,
         input.error ?? null,
-        input.reasoningChain ? JSON.stringify(input.reasoningChain) : null
+        input.reasoningChain ? JSON.stringify(input.reasoningChain) : null,
+        input.traceStatus ?? 'recording',
+        input.droppedTraceEvents ?? 0,
+        input.traceError ?? null,
+        input.checkpoint ? JSON.stringify(input.checkpoint) : null
       );
 
     return this.getById(id)!;
@@ -98,6 +110,23 @@ export class RunStore {
       values.push(JSON.stringify(updates.reasoningChain));
     }
 
+    if (updates.traceStatus !== undefined) {
+      sets.push('trace_status = ?');
+      values.push(updates.traceStatus);
+    }
+    if (updates.droppedTraceEvents !== undefined) {
+      sets.push('dropped_trace_events = ?');
+      values.push(updates.droppedTraceEvents);
+    }
+    if (updates.traceError !== undefined) {
+      sets.push('trace_error = ?');
+      values.push(updates.traceError);
+    }
+    if (updates.checkpoint !== undefined) {
+      sets.push('checkpoint = ?');
+      values.push(JSON.stringify(updates.checkpoint));
+    }
+
     if (sets.length === 0) return;
 
     values.push(id);
@@ -114,6 +143,17 @@ export class RunStore {
 
   fail(id: string, error: string): void {
     this.update(id, { status: 'failed', endTime: new Date().toISOString(), error });
+  }
+
+  getRecoverableByThread(threadId: string): AgentRun[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM agent_runs
+         WHERE thread_id = ? AND status = 'running' AND checkpoint IS NOT NULL
+         ORDER BY start_time DESC`
+      )
+      .all(threadId) as RunRow[];
+    return rows.map(rowToAgentRun);
   }
 
   deleteByThread(threadId: string): void {

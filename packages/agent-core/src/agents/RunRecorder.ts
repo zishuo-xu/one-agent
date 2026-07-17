@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import type { TokenUsage } from '../model/types.js';
 import type { TraceEventStore } from '../db/traceEventStore.js';
 import type { AgentLoopEvent } from './AgentLoop.js';
+import { sanitizeTraceEvent } from './traceSanitizer.js';
 
 export interface TokenUsageTotals {
   promptTokens: number;
@@ -35,10 +36,14 @@ export class RunRecorder {
   private events: AgentLoopEvent[] = [];
   private tokenUsage: TokenUsageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   /** Buffered streaming deltas awaiting one aggregated trace row per stream. */
-  private readonly deltaTraceBuffers = new Map<string, string[]>();
+  private readonly deltaTraceBuffers = new Map<string, { chunks: string[]; occurredAt: string }>();
   private runId?: string;
   private taskId?: string;
   private threadId?: string;
+  private sequence = 0;
+  private persistedTraceEvents = 0;
+  private droppedTraceEvents = 0;
+  private traceError?: string;
 
   constructor(options: RunRecorderOptions = {}) {
     this.traceEventStore = options.traceEventStore;
@@ -50,6 +55,11 @@ export class RunRecorder {
   reset(): void {
     this.events = [];
     this.tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    this.deltaTraceBuffers.clear();
+    this.sequence = 0;
+    this.persistedTraceEvents = 0;
+    this.droppedTraceEvents = 0;
+    this.traceError = undefined;
   }
 
   setRun(correlation: { runId?: string; taskId?: string; threadId?: string }): void {
@@ -75,8 +85,11 @@ export class RunRecorder {
       // Per-token deltas get one aggregated trace row per stream instead of
       // one row per token — a long answer would otherwise write thousands of
       // rows (write amplification) and slow every trace query.
-      const buffer = this.deltaTraceBuffers.get(event.type) ?? [];
-      buffer.push(event.content);
+      const buffer = this.deltaTraceBuffers.get(event.type) ?? {
+        chunks: [],
+        occurredAt: new Date().toISOString(),
+      };
+      buffer.chunks.push(event.content);
       this.deltaTraceBuffers.set(event.type, buffer);
       return;
     }
@@ -104,31 +117,57 @@ export class RunRecorder {
     return this.tokenUsage.totalTokens > 0 ? { ...this.tokenUsage } : undefined;
   }
 
+  getTraceHealth(): {
+    status: 'complete' | 'partial' | 'failed';
+    droppedEventCount: number;
+    error?: string;
+  } {
+    return {
+      status:
+        this.droppedTraceEvents === 0
+          ? 'complete'
+          : this.persistedTraceEvents === 0
+            ? 'failed'
+            : 'partial',
+      droppedEventCount: this.droppedTraceEvents,
+      error: this.traceError,
+    };
+  }
+
   /** Write buffered delta streams as one aggregated trace row each. */
   private flushDeltaTraceBuffers(): void {
     if (!this.traceEventStore || this.deltaTraceBuffers.size === 0) {
       return;
     }
-    for (const [type, chunks] of this.deltaTraceBuffers) {
-      if (chunks.length > 0) {
-        this.persistTraceEvent({ type, content: chunks.join('') } as AgentLoopEvent);
+    for (const [type, buffer] of this.deltaTraceBuffers) {
+      if (buffer.chunks.length > 0) {
+        this.persistTraceEvent(
+          { type, content: buffer.chunks.join('') } as AgentLoopEvent,
+          buffer.occurredAt,
+        );
       }
     }
     this.deltaTraceBuffers.clear();
   }
 
-  private persistTraceEvent(event: AgentLoopEvent): void {
+  private persistTraceEvent(event: AgentLoopEvent, occurredAt = new Date().toISOString()): void {
+    const sequence = this.sequence++;
     try {
       this.traceEventStore!.create({
         runId: this.runId,
         taskId: this.taskId,
         threadId: this.threadId,
         eventType: event.type,
-        eventData: event,
+        eventData: sanitizeTraceEvent(event),
         model: config.model,
+        sequence,
+        createdAt: occurredAt,
       });
-    } catch {
+      this.persistedTraceEvents++;
+    } catch (error) {
       // Trace persistence should not break the main loop.
+      this.droppedTraceEvents++;
+      this.traceError = error instanceof Error ? error.message : String(error);
     }
   }
 }

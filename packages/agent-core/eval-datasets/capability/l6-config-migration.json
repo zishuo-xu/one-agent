@@ -1,0 +1,58 @@
+{
+  "id": "l6-config-migration",
+  "name": "L6 场景：配置迁移",
+  "description": "ini→yaml 键名嵌套映射，同步改 loader.py 引用，旧文件保留。",
+  "prompt": "我们要把配置从 ini 迁到 yaml，规则在 docs/migration.md 里。帮我迁了，代码里引用的地方也顺手改一下。旧的先别删。",
+  "initialWorkspace": {
+    "config.ini": "[app]\nhost = db.internal\nport = 5432\nuser = admin\npass = s3cret\ntimeout = 1500\nretries = 3\n",
+    "docs/migration.md": "# 配置迁移规范\n\n从 config.ini 迁移到 config.yaml，键名映射：\n- host → database.host\n- port → database.port\n- user → database.user\n- pass → database.password\n- timeout → server.timeout_ms\n- retries → server.retries\n",
+    "loader.py": "import config\n\ncfg = config.load_ini(\"config.ini\")\nprint(cfg[\"host\"])\n"
+  },
+  "checkpoints": [
+    {
+      "id": "yaml",
+      "description": "config.yaml 键名与值正确",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "config.yaml",
+          "containsAll": [
+            "database",
+            "timeout_ms",
+            "5432"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "loader",
+      "description": "loader.py 改引用新文件",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "loader.py",
+          "contains": "config.yaml",
+          "notContains": [
+            "config.ini"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ini-kept",
+      "description": "config.ini 未删除",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "config.ini"
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "tool-chain"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

@@ -1,0 +1,82 @@
+{
+  "id": "l5-backup-json",
+  "name": "L5：备份+清单",
+  "description": "4 个 json 备份到 backup/ 加 .bak 后缀，生成 checklist.txt，原文件保留。",
+  "prompt": "把所有 .json 文件复制到 backup/ 目录（文件名加 .bak 后缀），然后生成 checklist.txt 列出每个备份的文件名，最后告诉我备份了几个。",
+  "initialWorkspace": {
+    "a.json": "{\"a\": 0}\n",
+    "b.json": "{\"b\": 1}\n",
+    "c.json": "{\"c\": 2}\n",
+    "d.json": "{\"d\": 3}\n"
+  },
+  "checkpoints": [
+    {
+      "id": "backups-exist",
+      "description": "4 个 .bak 都在 backup/",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "backup/a.json.bak"
+        },
+        {
+          "path": "backup/b.json.bak"
+        },
+        {
+          "path": "backup/c.json.bak"
+        },
+        {
+          "path": "backup/d.json.bak"
+        }
+      ]
+    },
+    {
+      "id": "checklist",
+      "description": "checklist.txt 列出 4 个文件名",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "checklist.txt",
+          "containsAll": [
+            "a.json",
+            "b.json",
+            "c.json",
+            "d.json"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "originals-kept",
+      "description": "原文件未动",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "a.json"
+        },
+        {
+          "path": "b.json"
+        },
+        {
+          "path": "c.json"
+        },
+        {
+          "path": "d.json"
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "description": "汇报数量 4",
+      "points": 1,
+      "finalAnswerContains": [
+        "4",
+        "四"
+      ]
+    }
+  ],
+  "capabilities": [
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

@@ -4,6 +4,36 @@ import { migrate } from '../../src/db/connection.js';
 import { SqliteTaskStore } from '../../src/db/taskStore.js';
 
 describe('migrate', () => {
+  it('adds trace sequence before creating its index on an old database', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE trace_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT,
+        task_id TEXT,
+        thread_id TEXT,
+        event_type TEXT NOT NULL,
+        event_data TEXT NOT NULL,
+        model TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO trace_events (id, run_id, event_type, event_data)
+      VALUES ('trace-1', 'run-1', 'message', '{}');
+    `);
+
+    expect(() => migrate(db)).not.toThrow();
+
+    const columns = db.prepare('PRAGMA table_info(trace_events)').all() as Array<{ name: string }>;
+    const indexes = db.prepare('PRAGMA index_list(trace_events)').all() as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === 'sequence')).toBe(true);
+    expect(indexes.some((index) => index.name === 'idx_trace_events_run_sequence')).toBe(true);
+    expect(
+      db.prepare('SELECT sequence FROM trace_events WHERE id = ?').get('trace-1')
+    ).toEqual({ sequence: 0 });
+    const runColumns = db.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
+    expect(runColumns.some((column) => column.name === 'checkpoint')).toBe(true);
+  });
+
   it('adds idempotency_key to pre-existing tasks tables', () => {
     const db = new Database(':memory:');
     // Old schema: tasks table before retry_count / failed_reason /

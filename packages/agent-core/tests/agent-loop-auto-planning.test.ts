@@ -60,6 +60,8 @@ describe('AgentLoop auto planning', () => {
 
     expect(reply).toBe('Just a chat answer.');
     expect(events.some((e) => e.type === 'plan')).toBe(false);
+    expect(events.some((e) => e.type === 'model_call' && e.purpose === 'classifier' && e.phase === 'started')).toBe(true);
+    expect(events.some((e) => e.type === 'model_call' && e.purpose === 'classifier' && e.phase === 'completed')).toBe(true);
     expect(mockCreate).toHaveBeenCalledTimes(2);
     // The first call is the classifier with the plan/direct prompt.
     const classifierParams = mockCreate.mock.calls[0][0] as { messages: Array<{ content: string }> };
@@ -115,10 +117,11 @@ describe('AgentLoop auto planning', () => {
 
     const agent = new AgentLoop({ tools: makeTools(), enablePlanning: 'auto', planner, taskJudge });
 
-    const { reply } = await agent.chat('anything');
+    const { reply, events } = await agent.chat('anything');
 
     expect(reply).toBe('Fallback planned answer.');
     expect(createPlan).toHaveBeenCalledTimes(1);
+    expect(events.some((e) => e.type === 'model_call' && e.purpose === 'classifier' && e.phase === 'failed')).toBe(true);
   });
 
   it('enablePlanning=true never calls the classifier', async () => {

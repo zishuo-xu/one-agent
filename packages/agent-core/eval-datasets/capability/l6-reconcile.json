@@ -1,0 +1,53 @@
+{
+  "id": "l6-reconcile",
+  "name": "L6 场景：月底对账",
+  "description": "10 张发票 vs 8 笔到账：2 张未付（800+300=1100），1 张少付（500 实付 450）。",
+  "prompt": "月底了，帮我对一下账：invoices/ 里的发票哪些还没收到钱？payments.csv 是实际到账记录，金额对不上的也标出来。给我清单和未收总金额。",
+  "initialWorkspace": {
+    "invoices/INV-001.txt": "发票号：INV-001\n客户：示例客户\n金额：200 元\n日期：2026-06-30\n",
+    "invoices/INV-002.txt": "发票号：INV-002\n客户：示例客户\n金额：350 元\n日期：2026-06-30\n",
+    "invoices/INV-003.txt": "发票号：INV-003\n客户：示例客户\n金额：500 元\n日期：2026-06-30\n",
+    "invoices/INV-004.txt": "发票号：INV-004\n客户：示例客户\n金额：800 元\n日期：2026-06-30\n",
+    "invoices/INV-005.txt": "发票号：INV-005\n客户：示例客户\n金额：150 元\n日期：2026-06-30\n",
+    "invoices/INV-006.txt": "发票号：INV-006\n客户：示例客户\n金额：420 元\n日期：2026-06-30\n",
+    "invoices/INV-007.txt": "发票号：INV-007\n客户：示例客户\n金额：300 元\n日期：2026-06-30\n",
+    "invoices/INV-008.txt": "发票号：INV-008\n客户：示例客户\n金额：260 元\n日期：2026-06-30\n",
+    "invoices/INV-009.txt": "发票号：INV-009\n客户：示例客户\n金额：190 元\n日期：2026-06-30\n",
+    "invoices/INV-010.txt": "发票号：INV-010\n客户：示例客户\n金额：530 元\n日期：2026-06-30\n",
+    "payments.csv": "invoice,amount\nINV-001,200\nINV-002,350\nINV-003,450\nINV-005,150\nINV-006,420\nINV-008,260\nINV-009,190\nINV-010,530\n"
+  },
+  "checkpoints": [
+    {
+      "id": "unpaid",
+      "description": "未付清单 INV-004、INV-007",
+      "points": 2,
+      "finalAnswerContainsAll": [
+        "INV-004",
+        "INV-007"
+      ]
+    },
+    {
+      "id": "underpaid",
+      "description": "标出 INV-003 金额对不上",
+      "points": 2,
+      "finalAnswerContainsAll": [
+        "INV-003"
+      ]
+    },
+    {
+      "id": "total",
+      "description": "未付发票合计 1100；若计入少付差额则未收总额为 1150",
+      "points": 2,
+      "finalAnswerContains": [
+        "1100",
+        "1150"
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "tool-chain"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

@@ -1,5 +1,11 @@
 import type { ContextManager } from '../context/ContextManager.js';
-import type { ModelProvider, ModelResponse, TokenUsage } from '../model/types.js';
+import crypto from 'node:crypto';
+import type {
+  ModelCallTraceEvent,
+  ModelProvider,
+  ModelResponse,
+  TokenUsage,
+} from '../model/types.js';
 import type { ToolRegistry } from '../tools/registry.js';
 
 export interface ModelCallerOptions {
@@ -14,6 +20,7 @@ export interface ModelCallerOptions {
   onUsage?: (usage: TokenUsage) => void;
   /** Live deltas for the client (message_delta / reasoning_delta events). */
   onDelta?: (type: 'message_delta' | 'reasoning_delta', content: string) => void;
+  onTrace?: (event: ModelCallTraceEvent) => void;
 }
 
 export interface StreamedCompletion {
@@ -42,6 +49,7 @@ export class ModelCaller {
   private readonly signal?: () => AbortSignal | undefined;
   private readonly onUsage?: (usage: TokenUsage) => void;
   private readonly onDelta?: (type: 'message_delta' | 'reasoning_delta', content: string) => void;
+  private readonly onTrace?: (event: ModelCallTraceEvent) => void;
 
   constructor(options: ModelCallerOptions) {
     this.modelProvider = options.modelProvider;
@@ -52,6 +60,7 @@ export class ModelCaller {
     this.signal = options.signal;
     this.onUsage = options.onUsage;
     this.onDelta = options.onDelta;
+    this.onTrace = options.onTrace;
   }
 
   /** Non-streaming completion with retries (used for tool-loop turns). */
@@ -61,11 +70,23 @@ export class ModelCaller {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      const modelCallId = crypto.randomUUID();
+      const startedAt = new Date().toISOString();
+      const startedMs = Date.now();
       try {
         const messages = await this.contextManager.buildContext();
         const tools = includeTools
           ? this.toolRegistry?.getSchemas(allowedTools)
           : undefined;
+        this.emitTrace({
+          phase: 'started',
+          modelCallId,
+          attempt,
+          streaming: false,
+          startedAt,
+          messageCount: messages.length,
+          toolCount: tools?.length ?? 0,
+        });
         const response = await this.modelProvider.complete({
           messages,
           tools,
@@ -73,9 +94,27 @@ export class ModelCaller {
           signal: this.signal?.(),
         });
         this.reportUsage(response.usage);
+        this.emitTrace({
+          phase: 'completed',
+          modelCallId,
+          attempt,
+          streaming: false,
+          startedAt,
+          durationMs: Date.now() - startedMs,
+          usage: response.usage,
+        });
         return response;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        this.emitTrace({
+          phase: 'failed',
+          modelCallId,
+          attempt,
+          streaming: false,
+          startedAt,
+          durationMs: Date.now() - startedMs,
+          error: lastError.message,
+        });
       }
     }
 
@@ -98,16 +137,29 @@ export class ModelCaller {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      const modelCallId = crypto.randomUUID();
+      const startedAt = new Date().toISOString();
+      const startedMs = Date.now();
       // Track whether we have already streamed partial content to the client
       // during this attempt. Once any message_delta has been emitted we cannot
       // safely retry: a retry would replay the same tokens and the user would
       // see duplicated/garbled output. Only retry while no delta has shipped.
       let emittedDelta = false;
+      let usage: TokenUsage | undefined;
       try {
         const messages = await this.contextManager.buildContext();
         const tools = includeTools
           ? this.toolRegistry?.getSchemas(allowedTools)
           : undefined;
+        this.emitTrace({
+          phase: 'started',
+          modelCallId,
+          attempt,
+          streaming: true,
+          startedAt,
+          messageCount: messages.length,
+          toolCount: tools?.length ?? 0,
+        });
 
         let content = '';
         // Reasoning-as-fallback policy: stream content live; buffer reasoning
@@ -128,6 +180,7 @@ export class ModelCaller {
         })) {
           this.checkSignal();
           this.reportUsage(chunk.usage);
+          if (chunk.usage) usage = chunk.usage;
 
           if (chunk.content) {
             content += chunk.content;
@@ -177,9 +230,28 @@ export class ModelCaller {
                 }))
             : undefined;
 
+        this.emitTrace({
+          phase: 'completed',
+          modelCallId,
+          attempt,
+          streaming: true,
+          startedAt,
+          durationMs: Date.now() - startedMs,
+          usage,
+        });
         return { content, toolCalls };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        this.emitTrace({
+          phase: 'failed',
+          modelCallId,
+          attempt,
+          streaming: true,
+          startedAt,
+          durationMs: Date.now() - startedMs,
+          usage,
+          error: lastError.message,
+        });
         if (emittedDelta) {
           // Partial content already reached the client; retrying would
           // duplicate it. Surface the error to the caller instead.
@@ -197,6 +269,18 @@ export class ModelCaller {
     if (usage) {
       this.onUsage?.(usage);
     }
+  }
+
+  private emitTrace(
+    event: Omit<ModelCallTraceEvent, 'type' | 'purpose' | 'provider' | 'model'>,
+  ): void {
+    this.onTrace?.({
+      type: 'model_call',
+      purpose: 'main',
+      provider: this.modelProvider.name,
+      model: this.modelProvider.model,
+      ...event,
+    });
   }
 
   private checkSignal(): void {

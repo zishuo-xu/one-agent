@@ -1,0 +1,88 @@
+{
+  "id": "l6-organize-incoming",
+  "name": "L6 场景：整理乱目录（带约束）",
+  "description": "12 个文件在 incoming/ 内部按类型归目录；2 组重复 + 1 个 0 字节'先别动'，列 incoming/review.txt。考指令遵守。",
+  "prompt": "incoming/ 太乱了，帮我在 incoming/ 内部建立分类子目录并整理：.jpg 进 incoming/images/，.pdf 和 .txt 进 incoming/docs/，.zip 进 incoming/archives/。注意：内容重复的文件和 0 字节的文件先别动，把它们列进 incoming/review.txt 给我确认。",
+  "initialWorkspace": {
+    "incoming/p1.jpg": "JPEGDATA-PHOTO-001",
+    "incoming/p2.jpg": "JPEGDATA-PHOTO-001",
+    "incoming/sunset.jpg": "JPEGDATA-SUNSET-9",
+    "incoming/a.pdf": "PDF-REPORT-A",
+    "incoming/b.pdf": "PDF-REPORT-A",
+    "incoming/report.pdf": "PDF-ANNUAL-2025",
+    "incoming/notes.txt": "购物清单：牛奶、鸡蛋\n",
+    "incoming/readme.txt": "说明：下载目录\n",
+    "incoming/pack1.zip": "ZIPBYTES-1",
+    "incoming/pack2.zip": "ZIPBYTES-2",
+    "incoming/empty.log": ""
+  },
+  "checkpoints": [
+    {
+      "id": "moved",
+      "description": "6 个正常文件归位",
+      "points": 3,
+      "expectedFiles": [
+        {
+          "path": "incoming/images/sunset.jpg"
+        },
+        {
+          "path": "incoming/docs/report.pdf"
+        },
+        {
+          "path": "incoming/docs/notes.txt"
+        },
+        {
+          "path": "incoming/docs/readme.txt"
+        },
+        {
+          "path": "incoming/archives/pack1.zip"
+        },
+        {
+          "path": "incoming/archives/pack2.zip"
+        }
+      ]
+    },
+    {
+      "id": "untouched",
+      "description": "重复对和 0 字节文件仍在原位",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "incoming/p1.jpg"
+        },
+        {
+          "path": "incoming/p2.jpg"
+        },
+        {
+          "path": "incoming/a.pdf"
+        },
+        {
+          "path": "incoming/b.pdf"
+        },
+        {
+          "path": "incoming/empty.log"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "description": "review.txt 列出待确认文件",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "incoming/review.txt",
+          "containsAll": [
+            "p1.jpg",
+            "empty.log"
+          ]
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 300000
+}

@@ -55,6 +55,7 @@ describe('AgentLoop memory integration', () => {
       db,
       memoryStore,
       memoryExtractor,
+      awaitMemoryExtraction: true,
     });
 
     const { reply: firstReply } = await firstAgent.chat('I prefer Chinese.');

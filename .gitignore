@@ -16,3 +16,10 @@ workspace/
 data.db
 *.db-shm
 *.db-wal
+eval-results/*.db
+eval-results/*.db-shm
+eval-results/*.db-wal
+eval-results/*.log
+user_info/
+weekend_plan.md
+framework_comparison_report.md

@@ -3,6 +3,7 @@ import { Message } from '../agents/types.js';
 import { ReasoningStep } from '../planning/types.js';
 import { TaskStatus } from '../tasks/types.js';
 import { ToolCall, ToolResult } from '../tools/types.js';
+import type { RunCheckpoint } from '../agents/checkpoint.js';
 
 export interface Thread {
   id: string;
@@ -33,9 +34,13 @@ export interface AgentRun {
   model: string;
   startTime: string;
   endTime: string | null;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'recovery_required';
   error: string | null;
   reasoningChain?: ReasoningStep[];
+  traceStatus?: 'recording' | 'complete' | 'partial' | 'failed';
+  droppedTraceEvents: number;
+  traceError?: string;
+  checkpoint?: RunCheckpoint;
 }
 
 export interface CreateRunInput {
@@ -46,6 +51,10 @@ export interface CreateRunInput {
   status?: AgentRun['status'];
   error?: string;
   reasoningChain?: ReasoningStep[];
+  traceStatus?: 'recording' | 'complete' | 'partial' | 'failed';
+  droppedTraceEvents?: number;
+  traceError?: string;
+  checkpoint?: RunCheckpoint;
 }
 
 export interface TraceEvent {
@@ -56,6 +65,7 @@ export interface TraceEvent {
   eventType: string;
   eventData: AgentLoopEvent;
   model: string | null;
+  sequence: number;
   createdAt: string;
 }
 
@@ -67,6 +77,8 @@ export interface CreateTraceEventInput {
   eventType: string;
   eventData: AgentLoopEvent;
   model?: string;
+  sequence?: number;
+  createdAt?: string;
 }
 
 export interface PersistedToolCall {

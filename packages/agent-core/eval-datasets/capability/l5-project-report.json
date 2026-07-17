@@ -1,0 +1,53 @@
+{
+  "id": "l5-project-report",
+  "name": "L5：统计+结构化输出",
+  "description": "src/ 下代码文件 3 个共 60 行，a.py 最大；data.txt 是干扰项。混合 list+read/shell+写报告。",
+  "prompt": "统计 src/ 目录下的代码文件（.py 和 .js）：一共有几个文件、总共多少行、哪个文件最大，写入 report.md，并向我汇报。",
+  "initialWorkspace": {
+    "src/a.py": "print('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\nprint('a')\n",
+    "src/b.py": "print('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\nprint('b')\n",
+    "src/c.js": "console.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\nconsole.log('c')\n",
+    "data.txt": "junk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\njunk\n"
+  },
+  "checkpoints": [
+    {
+      "id": "numbers",
+      "description": "report.md 里数量 3 和总行数 60",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "report.md",
+          "containsAll": [
+            "3",
+            "60"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "largest",
+      "description": "report.md 指出最大文件 a.py",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "report.md",
+          "contains": "a.py"
+        }
+      ]
+    },
+    {
+      "id": "report-answer",
+      "description": "口头汇报数字正确",
+      "points": 1,
+      "finalAnswerContainsAll": [
+        "3",
+        "60"
+      ]
+    }
+  ],
+  "capabilities": [
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

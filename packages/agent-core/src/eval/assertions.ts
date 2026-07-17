@@ -48,10 +48,18 @@ export function assertNoToolCalled(toolCalls: ToolCall[], name: string): string 
   return undefined;
 }
 
+/**
+ * Normalize for answer comparison: lowercase plus strip thousands separators
+ * so "9,200 万元" matches the expected phrase "9200" (real models love commas).
+ */
+function normalizeAnswer(text: string): string {
+  return text.toLowerCase().replace(/(\d),(\d)/g, '$1$2');
+}
+
 export function assertFinalAnswer(reply: string, contains: string[]): string | undefined {
   if (contains.length === 0) return undefined;
-  const normalized = reply.toLowerCase();
-  const found = contains.some((phrase) => normalized.includes(phrase.toLowerCase()));
+  const normalized = normalizeAnswer(reply);
+  const found = contains.some((phrase) => normalized.includes(normalizeAnswer(phrase)));
   if (!found) {
     return `Final answer missing any of the phrases: ${contains.join(', ')}`;
   }
@@ -60,8 +68,8 @@ export function assertFinalAnswer(reply: string, contains: string[]): string | u
 
 export function assertFinalAnswerContainsAll(reply: string, phrases: string[]): string | undefined {
   if (phrases.length === 0) return undefined;
-  const normalized = reply.toLowerCase();
-  const missing = phrases.filter((phrase) => !normalized.includes(phrase.toLowerCase()));
+  const normalized = normalizeAnswer(reply);
+  const missing = phrases.filter((phrase) => !normalized.includes(normalizeAnswer(phrase)));
   if (missing.length > 0) {
     return `Final answer missing required phrases: ${missing.join(', ')}`;
   }
@@ -70,8 +78,8 @@ export function assertFinalAnswerContainsAll(reply: string, phrases: string[]): 
 
 export function assertFinalAnswerNotContains(reply: string, phrases: string[]): string | undefined {
   if (phrases.length === 0) return undefined;
-  const normalized = reply.toLowerCase();
-  const found = phrases.filter((phrase) => normalized.includes(phrase.toLowerCase()));
+  const normalized = normalizeAnswer(reply);
+  const found = phrases.filter((phrase) => normalized.includes(normalizeAnswer(phrase)));
   if (found.length > 0) {
     return `Final answer should not contain phrases: ${found.join(', ')}`;
   }

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 import Database from 'better-sqlite3';
 import { ToolExecutor } from '../tools/executor.js';
@@ -20,7 +21,7 @@ import { MemoryStore } from '../db/memoryStore.js';
 import { MemoryExtractor } from '../memory/MemoryExtractor.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider, TokenUsage } from '../model/types.js';
+import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
 import { SubAgentRunner } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
 import { ModelCaller } from './ModelCaller.js';
@@ -28,6 +29,10 @@ import { RunRecorder } from './RunRecorder.js';
 import { SimpleLoop } from './loops/SimpleLoop.js';
 import { PlanningLoop } from './loops/PlanningLoop.js';
 import type { LoopInfrastructure, LoopStrategy } from './loops/types.js';
+import {
+  assessCheckpointRecovery,
+  type RunCheckpoint,
+} from './checkpoint.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -64,11 +69,39 @@ export interface AgentLoopOptions {
 }
 
 export type AgentLoopEvent =
+  | {
+      type: 'run';
+      phase: 'started' | 'completed' | 'failed' | 'cancelled';
+      loopMode?: 'simple' | 'planning' | 'auto';
+      model?: string;
+      provider?: string;
+      enabledTools?: string[];
+      resumedFromRunId?: string;
+      durationMs?: number;
+      error?: string;
+    }
+  | ModelCallTraceEvent
   | { type: 'plan'; plan: Plan }
+  | {
+      type: 'plan_step';
+      stepId: string;
+      parentStepId?: string;
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
+      attempt?: number;
+      failureAnalysis?: import('../planning/types.js').FailureAnalysis;
+    }
   | { type: 'thought'; content: string }
   | { type: 'reflection'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall }
-  | { type: 'tool_result'; toolResult: ToolResult }
+  | { type: 'tool_call'; toolCall: ToolCall; stepId?: string; attempt?: number }
+  | {
+      type: 'tool_result';
+      toolResult: ToolResult;
+      toolCallId?: string;
+      stepId?: string;
+      attempt?: number;
+      status?: 'succeeded' | 'failed' | 'rejected' | 'skipped';
+      durationMs?: number;
+    }
   | { type: 'reasoning_delta'; content: string }
   | { type: 'message_delta'; content: string }
   | {
@@ -228,11 +261,12 @@ export class AgentLoop extends EventEmitter {
       signal: () => this.signal,
       onUsage: (usage) => this.recorder.accumulateUsage(usage),
       onDelta: (type, content) => this.recorder.record({ type, content }),
+      onTrace: (event) => this.recorder.record(event),
     });
 
     this.memoryStore = options.memoryStore;
     this.memoryExtractor = options.memoryExtractor;
-    this.awaitMemoryExtraction = options.awaitMemoryExtraction ?? true;
+    this.awaitMemoryExtraction = options.awaitMemoryExtraction ?? false;
 
     if (options.threadId) {
       const db = options.db ?? getSharedConnection();
@@ -248,6 +282,10 @@ export class AgentLoop extends EventEmitter {
       onEvent: (event) => this.emit('event', event),
       onContextTokens: (promptTokens) => this.contextManager.updateLastKnownTokens(promptTokens),
     });
+    this.planner.onTrace = (event) => this.recorder.record(event);
+    this.taskJudge.onTrace = (event) => this.recorder.record(event);
+    this.contextManager.onUsage = trackAuxUsage;
+    this.contextManager.onTrace = (event) => this.recorder.record(event);
 
     // Execution strategies share one infrastructure bundle; adding a new
     // loop mode means a new LoopStrategy implementation, not surgery here.
@@ -265,15 +303,74 @@ export class AgentLoop extends EventEmitter {
       maxRetryAttempts: this.maxRetryAttempts,
       checkSignal: () => this.checkSignal(),
       persistToolCall: (runId, toolCall, result) => this.persistToolCall(runId, toolCall, result),
+      saveCheckpoint: (runId, checkpoint) => this.saveCheckpoint(runId, checkpoint),
     };
     this.simpleLoop = new SimpleLoop(infra);
     this.planningLoop = new PlanningLoop(infra);
   }
 
   async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+    return this.execute(message, signal);
+  }
+
+  async resumeRun(runId: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+    if (!this.runStore || !this.threadId) {
+      throw new Error('Run recovery requires a persisted thread and RunStore.');
+    }
+    const interruptedRun = this.runStore.getById(runId);
+    if (!interruptedRun || interruptedRun.threadId !== this.threadId) {
+      throw new Error(`Recoverable run not found in this thread: ${runId}`);
+    }
+    if (interruptedRun.status !== 'running') {
+      throw new Error(`Run ${runId} is ${interruptedRun.status}, not an interrupted running run.`);
+    }
+    const checkpoint = interruptedRun.checkpoint;
+    if (!checkpoint) {
+      throw new Error(`Run ${runId} has no checkpoint and cannot be resumed.`);
+    }
+    if (checkpoint.recoveryCount >= 3) {
+      const reason = 'Maximum recovery count (3) reached.';
+      this.runStore.update(runId, {
+        status: 'recovery_required',
+        endTime: new Date().toISOString(),
+        error: reason,
+      });
+      throw new Error(reason);
+    }
+    const assessment = assessCheckpointRecovery(checkpoint);
+    if (!assessment.resumable) {
+      this.runStore.update(runId, {
+        status: 'recovery_required',
+        endTime: new Date().toISOString(),
+        error: assessment.reason,
+      });
+      throw new Error(assessment.reason);
+    }
+
+    this.runStore.update(runId, {
+      status: 'interrupted',
+      endTime: new Date().toISOString(),
+      traceStatus: interruptedRun.traceStatus === 'recording' ? 'partial' : interruptedRun.traceStatus,
+      error: 'Execution was interrupted and resumed by a new run.',
+    });
+    return this.execute(checkpoint.originalMessage, signal, {
+      checkpoint,
+      resumedFromRunId: runId,
+      addUserMessage: false,
+    });
+  }
+
+  private async execute(
+    message: string,
+    signal?: AbortSignal,
+    recovery?: { checkpoint: RunCheckpoint; resumedFromRunId: string; addUserMessage: false },
+  ): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+    const startedMs = Date.now();
     this.signal = signal ?? this.signal;
     this.checkSignal();
-    this.contextManager.addMessage({ role: 'user', content: message });
+    if (recovery?.addUserMessage !== false) {
+      this.contextManager.addMessage({ role: 'user', content: message });
+    }
     this.recorder.reset();
     this.reasoningChain = new ReasoningChain();
 
@@ -292,19 +389,29 @@ export class AgentLoop extends EventEmitter {
       const run = this.runStore.create({
         threadId: this.threadId,
         taskId: this.taskId,
-        model: config.model,
+        model: this.modelProvider.model,
         status: 'running',
+        traceStatus: 'recording',
       });
       runId = run.id;
       this.recorder.setRun({ runId, taskId: this.taskId, threadId: this.threadId });
     }
+    this.recorder.record({
+      type: 'run',
+      phase: 'started',
+      loopMode: this.enablePlanning === 'auto' ? 'auto' : this.enablePlanning ? 'planning' : 'simple',
+      model: this.modelProvider.model,
+      provider: this.modelProvider.name,
+      enabledTools: this.toolRegistry?.list().map((tool) => tool.name) ?? [],
+      resumedFromRunId: recovery?.resumedFromRunId,
+    });
 
     try {
       // Planning requires both the opt-in and a tool registry; in 'auto' mode
       // a cheap classifier decides per message whether planning is worth it.
-      const planningEnabled = this.enablePlanning !== false && this.toolRegistry;
+      const planningEnabled = (recovery || this.enablePlanning !== false) && this.toolRegistry;
       const loop: LoopStrategy =
-        planningEnabled && (await this.resolvePlanningMode(message))
+        planningEnabled && (recovery || await this.resolvePlanningMode(message))
           ? this.planningLoop
           : this.simpleLoop;
       const result = await loop.run({
@@ -312,15 +419,31 @@ export class AgentLoop extends EventEmitter {
         runId,
         memories: this.currentMemoryText,
         reasoningChain: this.reasoningChain,
+        resumeCheckpoint: recovery?.checkpoint,
+        resumedFromRunId: recovery?.resumedFromRunId,
       });
-      this.completeRun(runId);
-      await this.persistMemories(message, result.reply);
       const usage = this.recorder.getUsage();
+      this.recorder.record({
+        type: 'run',
+        phase: 'completed',
+        durationMs: Date.now() - startedMs,
+      });
+      this.recorder.endRun();
+      this.completeRun(runId);
+      const memoryPersistence = this.persistMemories(message, result.reply);
+      if (this.awaitMemoryExtraction) await memoryPersistence;
+      else void memoryPersistence;
       return { reply: result.reply, events: this.recorder.getEvents(), runId, tokenUsage: usage };
     } catch (error) {
-      if (runId && this.runStore) {
-        this.runStore.fail(runId, error instanceof Error ? error.message : String(error));
-      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.recorder.record({
+        type: 'run',
+        phase: this.signal?.aborted ? 'cancelled' : 'failed',
+        durationMs: Date.now() - startedMs,
+        error: message,
+      });
+      this.recorder.endRun();
+      this.failRun(runId, message);
       throw error;
     } finally {
       // Flush any buffered streaming deltas as one aggregated trace row per
@@ -378,17 +501,26 @@ export class AgentLoop extends EventEmitter {
     if (this.enablePlanning !== 'auto') {
       return this.enablePlanning === true;
     }
+    const modelCallId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    const messages: Message[] = [
+      {
+        role: 'system',
+        content:
+          'You decide whether a user request needs multi-step planning with tools, ' +
+          'or can be answered directly. Reply with exactly one word: "plan" or "direct".',
+      },
+      { role: 'user', content: message },
+    ];
+    this.recorder.record({
+      type: 'model_call', phase: 'started', modelCallId, purpose: 'classifier',
+      provider: this.modelProvider.name, model: this.modelProvider.model,
+      attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
+    });
     try {
       const response = await this.modelProvider.complete({
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You decide whether a user request needs multi-step planning with tools, ' +
-              'or can be answered directly. Reply with exactly one word: "plan" or "direct".',
-          },
-          { role: 'user', content: message },
-        ],
+        messages,
         timeoutMs: this.timeoutMs,
         signal: this.signal,
       });
@@ -398,11 +530,23 @@ export class AgentLoop extends EventEmitter {
       const verdict = response.content.trim().toLowerCase();
       const plan = verdict.startsWith('plan');
       this.recorder.record({
+        type: 'model_call', phase: 'completed', modelCallId, purpose: 'classifier',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        usage: response.usage,
+      });
+      this.recorder.record({
         type: 'thought',
         content: `Auto planning decision: ${plan ? 'plan' : 'direct'}`,
       });
       return plan;
-    } catch {
+    } catch (error) {
+      this.recorder.record({
+        type: 'model_call', phase: 'failed', modelCallId, purpose: 'classifier',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.recorder.record({
         type: 'thought',
         content: 'Auto planning classifier failed; defaulting to plan',
@@ -417,14 +561,32 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
-  private completeRun(runId?: string): void {
+  private completeRun(runId: string | undefined): void {
     if (!runId || !this.runStore) {
       return;
     }
+    const trace = this.recorder.getTraceHealth();
     this.runStore.update(runId, {
       status: 'completed',
       endTime: new Date().toISOString(),
       reasoningChain: this.reasoningChain.getSteps(),
+      traceStatus: trace.status,
+      droppedTraceEvents: trace.droppedEventCount,
+      traceError: trace.error,
+    });
+  }
+
+  private failRun(runId: string | undefined, error: string): void {
+    if (!runId || !this.runStore) return;
+    const trace = this.recorder.getTraceHealth();
+    this.runStore.update(runId, {
+      status: this.signal?.aborted ? 'cancelled' : 'failed',
+      endTime: new Date().toISOString(),
+      error,
+      reasoningChain: this.reasoningChain.getSteps(),
+      traceStatus: trace.status,
+      droppedTraceEvents: trace.droppedEventCount,
+      traceError: trace.error,
     });
   }
 
@@ -438,6 +600,11 @@ export class AgentLoop extends EventEmitter {
       result,
     };
     this.toolCallStore.create(input);
+  }
+
+  private saveCheckpoint(runId: string | undefined, checkpoint: RunCheckpoint): void {
+    if (!runId || !this.runStore) return;
+    this.runStore.update(runId, { checkpoint });
   }
 
   private formatMemories(memories: Memory[]): string {

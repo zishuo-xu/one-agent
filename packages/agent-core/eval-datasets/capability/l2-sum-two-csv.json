@@ -1,0 +1,32 @@
+{
+  "id": "l2-sum-two-csv",
+  "name": "L2：跨文件聚合",
+  "description": "两个 csv 的 amount 求和写入 summary.txt。考 read×2→算→write 接力。",
+  "prompt": "把 q1.csv 和 q2.csv 里的 amount 全部加起来，结果写入 summary.txt，并告诉我总额。",
+  "initialWorkspace": {
+    "q1.csv": "item,amount\na,500\nb,400\nc,350\n",
+    "q2.csv": "item,amount\nd,700\ne,600\nf,450\n"
+  },
+  "requiredTools": [
+    {
+      "name": "read_file"
+    },
+    {
+      "name": "write_file"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "3000"
+  ],
+  "expectedFiles": [
+    {
+      "path": "summary.txt",
+      "contains": "3000"
+    }
+  ],
+  "capabilities": [
+    "tool-chain"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 120000
+}

@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { Message } from '../agents/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider } from '../model/types.js';
+import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
 import { estimateMessageTokens, estimateMessagesTokens, estimateTokens } from './tokenEstimate.js';
 
 export interface ContextManagerOptions {
@@ -17,6 +18,9 @@ export interface ContextManagerOptions {
 }
 
 export class ContextManager {
+  /** Optional run-level observability sinks, wired by AgentLoop. */
+  onUsage?: (usage: TokenUsage) => void;
+  onTrace?: (event: ModelCallTraceEvent) => void;
   private messages: Message[] = [];
   private summaryMessage: Message | null = null;
   private lastSummarizedIndex = 0;
@@ -263,14 +267,40 @@ export class ContextManager {
       'Preserve key facts, decisions, and tool results.\n\n' +
       conversationText;
 
-    const response = await this.resolveModelProvider().complete({
-      messages: [
+    const provider = this.resolveModelProvider();
+    const modelCallId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    const requestMessages: Message[] = [
         { role: 'system', content: 'You are a helpful summarizer.' },
         { role: 'user', content: prompt },
-      ],
-      timeoutMs: config.timeoutMs,
+    ];
+    this.onTrace?.({
+      type: 'model_call', phase: 'started', modelCallId, purpose: 'summary',
+      provider: provider.name, model: provider.model, attempt: 0, streaming: false,
+      startedAt, messageCount: requestMessages.length, toolCount: 0,
     });
-    return response.content.trim() || 'No summary available.';
+    try {
+      const response = await provider.complete({
+        messages: requestMessages,
+        timeoutMs: config.timeoutMs,
+      });
+      if (response.usage) this.onUsage?.(response.usage);
+      this.onTrace?.({
+        type: 'model_call', phase: 'completed', modelCallId, purpose: 'summary',
+        provider: provider.name, model: provider.model, attempt: 0, streaming: false,
+        startedAt, durationMs: Date.now() - startedMs, usage: response.usage,
+      });
+      return response.content.trim() || 'No summary available.';
+    } catch (error) {
+      this.onTrace?.({
+        type: 'model_call', phase: 'failed', modelCallId, purpose: 'summary',
+        provider: provider.name, model: provider.model, attempt: 0, streaming: false,
+        startedAt, durationMs: Date.now() - startedMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   private formatMessageForSummary(message: Message): string {

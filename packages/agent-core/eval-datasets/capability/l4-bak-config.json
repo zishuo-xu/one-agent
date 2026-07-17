@@ -1,0 +1,21 @@
+{
+  "id": "l4-bak-config",
+  "name": "L4：相似文件选对",
+  "description": "config.json 和 .bak 并存，当前配置是 db.internal，备份是 old.internal。",
+  "prompt": "读取配置，告诉我当前数据库的连接地址。",
+  "initialWorkspace": {
+    "config.json": "{\n  \"db\": \"postgres://db.internal:5432/app\",\n  \"version\": 2\n}\n",
+    "config.json.bak": "{\n  \"db\": \"postgres://old.internal:5432/app\",\n  \"version\": 1\n}\n"
+  },
+  "finalAnswerContainsAll": [
+    "db.internal"
+  ],
+  "finalAnswerNotContains": [
+    "old.internal"
+  ],
+  "capabilities": [
+    "recovery"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 90000
+}

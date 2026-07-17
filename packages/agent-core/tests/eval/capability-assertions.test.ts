@@ -26,6 +26,12 @@ describe('answer assertion helpers', () => {
       assertFinalAnswerNotContains('npm exited with code 1: missing package.json', ['tests passed']),
     ).toBeUndefined();
   });
+
+  it('matches numbers regardless of thousands separators (9,200 ≈ 9200)', () => {
+    // Real models love writing "9,200 万元"; the expected phrase is "9200".
+    expect(assertFinalAnswerContainsAll('Q3 营收 9,200 万元', ['9200'])).toBeUndefined();
+    expect(assertFinalAnswerNotContains('未收总额 1,100 元', ['1100'])).toContain('1100');
+  });
 });
 
 describe('EvalRunner capability assertions', () => {
@@ -185,6 +191,8 @@ describe('EvalRunner capability assertions', () => {
     expect(result.checkpointResults).toHaveLength(3);
     expect(result.checkpointResults?.find((c) => c.id === 'missing')?.earned).toBe(0);
     expect(result.checkpointResults?.find((c) => c.id === 'report-file')?.earned).toBe(2);
+    expect(result.completionOutcome?.status).toBe('partial');
+    expect(result.completionOutcome?.reason).toContain('Completion contract');
     expect(summary.totalScore).toBe(3);
     expect(summary.totalMaxScore).toBe(4);
   });

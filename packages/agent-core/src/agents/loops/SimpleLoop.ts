@@ -55,14 +55,18 @@ export class SimpleLoop implements LoopStrategy {
         });
 
         for (const call of calls) {
-          this.recorder.record({ type: 'tool_call', toolCall: call });
+          this.recorder.record({ type: 'tool_call', toolCall: call, attempt: toolIterations });
+          const toolStartedAt = Date.now();
 
           if (!this.toolExecutor) {
             const result: ToolResult = {
               success: false,
               error: 'No tool executor available',
             };
-            this.recorder.record({ type: 'tool_result', toolResult: result });
+            this.recorder.record({
+              type: 'tool_result', toolResult: result, toolCallId: call.id,
+              attempt: toolIterations, status: 'failed', durationMs: Date.now() - toolStartedAt,
+            });
             this.contextManager.addMessage({
               role: 'tool',
               content: JSON.stringify(result),
@@ -74,7 +78,11 @@ export class SimpleLoop implements LoopStrategy {
           }
 
           const result = await this.toolExecutor.execute(call);
-          this.recorder.record({ type: 'tool_result', toolResult: result });
+          this.recorder.record({
+            type: 'tool_result', toolResult: result, toolCallId: call.id,
+            attempt: toolIterations, status: result.success ? 'succeeded' : 'failed',
+            durationMs: Date.now() - toolStartedAt,
+          });
           this.contextManager.addMessage({
             role: 'tool',
             content: JSON.stringify(result),

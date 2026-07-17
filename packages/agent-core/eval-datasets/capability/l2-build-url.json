@@ -1,0 +1,20 @@
+{
+  "id": "l2-build-url",
+  "name": "L2：多字段拼装",
+  "description": "从 config.json 取 host/port 拼 http://api.internal:8080 写入 url.txt。",
+  "prompt": "读取 config.json，把 host 和 port 拼成 http://host:port 的形式，写入 url.txt。",
+  "initialWorkspace": {
+    "config.json": "{\n  \"host\": \"api.internal\",\n  \"port\": 8080,\n  \"debug\": false\n}\n"
+  },
+  "expectedFiles": [
+    {
+      "path": "url.txt",
+      "contains": "http://api.internal:8080"
+    }
+  ],
+  "capabilities": [
+    "tool-chain"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 90000
+}

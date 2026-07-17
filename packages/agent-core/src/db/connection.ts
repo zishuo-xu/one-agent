@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   status TEXT,
   error TEXT,
   reasoning_chain TEXT,
+  trace_status TEXT NOT NULL DEFAULT 'recording',
+  dropped_trace_events INTEGER NOT NULL DEFAULT 0,
+  trace_error TEXT,
+  checkpoint TEXT,
   FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
 );
 
@@ -53,6 +57,7 @@ CREATE TABLE IF NOT EXISTS trace_events (
   event_type TEXT NOT NULL,
   event_data TEXT NOT NULL,
   model TEXT,
+  sequence INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -166,6 +171,36 @@ export function migrate(instance: Database.Database): void {
     instance.exec('CREATE INDEX IF NOT EXISTS idx_messages_thread_sequence ON messages(thread_id, sequence)');
   } catch {
     // Index already exists or pending creation.
+  }
+  try {
+    instance.exec("ALTER TABLE agent_runs ADD COLUMN trace_status TEXT NOT NULL DEFAULT 'complete'");
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE agent_runs ADD COLUMN dropped_trace_events INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE agent_runs ADD COLUMN trace_error TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE agent_runs ADD COLUMN checkpoint TEXT');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE trace_events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('CREATE INDEX IF NOT EXISTS idx_trace_events_run_sequence ON trace_events(run_id, sequence)');
+  } catch {
+    // Index already exists.
   }
 }
 

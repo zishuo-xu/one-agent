@@ -1,0 +1,24 @@
+{
+  "id": "l4-stale-note",
+  "name": "L4：过期信息干扰",
+  "description": "note.txt 里是过期密码 hunter2 并注明已过期，password.txt 才是当前密码 sunny-2084。",
+  "prompt": "服务器密码是什么？",
+  "initialWorkspace": {
+    "note.txt": "备忘：服务器密码是 hunter2。（2025-01 记，已过期，最新见 password.txt）\n",
+    "password.txt": "当前服务器密码：sunny-2084（2026-06 更新）\n"
+  },
+  "finalAnswerContainsAll": [
+    "sunny-2084"
+  ],
+  "finalAnswerNotContains": [
+    "密码是 hunter2",
+    "密码为 hunter2",
+    "password is hunter2",
+    "password: hunter2"
+  ],
+  "capabilities": [
+    "recovery"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 90000
+}

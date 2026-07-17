@@ -1,6 +1,7 @@
 import './load-env.js';
 import fs from 'node:fs';
 import readline from 'node:readline';
+import { createServer as createNetServer } from 'node:net';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import {
@@ -48,6 +49,7 @@ const COMMANDS = [
   '/traces',
   '/traces <run-id>',
   '/traces <run-id> --verbose',
+  '/resume <run-id>',
   '/thread <id>',
   '/exit',
   '/quit',
@@ -130,6 +132,29 @@ function getFirstUserMessageSummary(messageStore: MessageStore, threadId: string
 
 function printSeparator() {
   console.log('─'.repeat(60));
+}
+
+function printRecoveryHint(runStore: RunStore, threadId: string): void {
+  const recoverable = runStore.getRecoverableByThread(threadId);
+  if (recoverable.length === 0) return;
+  console.log(cyan(`Detected ${recoverable.length} interrupted planning run(s).`));
+  for (const run of recoverable) {
+    console.log(dim(`  /resume ${shortId(run.id)}  (${run.checkpoint?.plan.steps.length ?? 0} plan steps)`));
+  }
+}
+
+async function findAvailablePort(startPort = 3001, attempts = 20): Promise<number> {
+  for (let port = startPort; port < startPort + attempts; port++) {
+    const available = await new Promise<boolean>((resolve) => {
+      const server = createNetServer();
+      server.once('error', () => resolve(false));
+      server.listen(port, '127.0.0.1', () => {
+        server.close(() => resolve(true));
+      });
+    });
+    if (available) return port;
+  }
+  throw new Error(`No available trace viewer port in ${startPort}-${startPort + attempts - 1}`);
 }
 
 function createProgressIndicator(label = 'Thinking'): {
@@ -229,6 +254,7 @@ async function main() {
   }
 
   let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
+  printRecoveryHint(runStore, threadId);
 
   // Optionally start the trace web viewer in the background.
   let traceProcess: import('node:child_process').ChildProcess | null = null;
@@ -238,11 +264,22 @@ async function main() {
       const fs = await import('node:fs');
       const traceWebPath = path.resolve(new URL('../../trace-web/dist/index.js', import.meta.url).pathname);
       if (fs.existsSync(traceWebPath)) {
-        traceProcess = spawn('node', [traceWebPath, '--port', '3001', '--host', '127.0.0.1'], {
+        const tracePort = await findAvailablePort();
+        traceProcess = spawn('node', [
+          traceWebPath,
+          '--port', String(tracePort),
+          '--host', '127.0.0.1',
+          '--workspace', WORKSPACE_ROOT,
+        ], {
           stdio: 'ignore',
           detached: false,
+          env: {
+            ...process.env,
+            DATABASE_PATH: process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db'),
+          },
         });
-        console.log(cyan('Trace viewer: http://127.0.0.1:3001'));
+        console.log(cyan(`Trace viewer: http://127.0.0.1:${tracePort}`));
+        console.log(dim(`Trace database: ${process.env.DATABASE_PATH}`));
       } else {
         console.warn(dim('Trace viewer not found. Run "pnpm build" first.'));
       }
@@ -494,6 +531,55 @@ async function main() {
       title = existing.title;
       agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
+      printRecoveryHint(runStore, threadId);
+      continue;
+    }
+
+    if (trimmed === '/resume') {
+      console.log('Usage: /resume <run-id>');
+      printRecoveryHint(runStore, threadId);
+      continue;
+    }
+
+    if (trimmed.startsWith('/resume ')) {
+      const id = trimmed.slice('/resume '.length).trim();
+      const run = runStore.getById(id) ?? runStore
+        .getRecoverableByThread(threadId)
+        .find((candidate) => candidate.id.startsWith(id));
+      if (!run || run.threadId !== threadId) {
+        console.log(`Recoverable run not found: ${id}`);
+        continue;
+      }
+
+      printSeparator();
+      sigintCount = 0;
+      abortController = new AbortController();
+      const progress = createProgressIndicator(`正在恢复 ${shortId(run.id)}…`);
+      progress.start();
+      const { handler: onEvent, result: timeline } = createChatEventHandler({
+        onDelta: (text) => process.stdout.write(text),
+        onReasoning: (text) => process.stdout.write(dim(text)),
+        onInfo: (text) => process.stdout.write(text),
+        progress,
+        verbose,
+      });
+      agent.on('event', onEvent);
+      try {
+        const result = await agent.resumeRun(run.id, abortController.signal);
+        const renderable = sanitizeTerminalText(result.reply).trim();
+        process.stdout.write('\n');
+        if (!timeline.hasStreamedLive && renderable) {
+          console.log(`\n${renderMarkdown(renderable)}`);
+        }
+        console.log(dim(`Recovered as run ${shortId(result.runId ?? '')}.`));
+      } catch (error) {
+        printError(categorizeError(error, run.id, verbose), verbose);
+      } finally {
+        agent.off('event', onEvent);
+        progress.stop();
+        abortController = null;
+      }
+      printSeparator();
       continue;
     }
 

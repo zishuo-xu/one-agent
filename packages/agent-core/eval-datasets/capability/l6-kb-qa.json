@@ -1,0 +1,60 @@
+{
+  "id": "l6-kb-qa",
+  "name": "L6 场景：知识库 grounded 问答",
+  "description": "答案分散在 account.md/security.md 两篇；第三问（并发席位）文档里没有，必须答'文档未提及'——测不幻觉。",
+  "prompt": "根据 kb/ 里的文档回答三个问题，写入 answers.md：1）用户怎么重置密码？2）密码重置有没有次数限制？3）企业版支持几个并发席位？文档里没有的答案写「文档未提及」。",
+  "initialWorkspace": {
+    "kb/account.md": "# 账户帮助\n\n## 重置密码\n1. 在登录页点击「忘记密码」\n2. 查收重置邮件\n3. 点击邮件中的链接设置新密码\n",
+    "kb/security.md": "# 安全策略\n\n- 密码至少 12 位\n- 24 小时内最多重置 3 次密码\n- 登录失败 5 次锁定 30 分钟\n",
+    "kb/billing.md": "# 计费说明\n\n按订阅周期扣费，支持月付和年付。\n",
+    "kb/api.md": "# API 指南\n\n所有请求需要 Bearer Token。\n",
+    "kb/faq.md": "# 常见问题\n\nQ: 如何修改头像？A: 设置页上传。\n",
+    "kb/changelog.md": "# 更新日志\n\nv2.1 新增深色模式。\n",
+    "kb/privacy.md": "# 隐私政策\n\n我们不出售用户数据。\n",
+    "kb/onboarding.md": "# 新手引导\n\n欢迎注册，先完成邮箱验证。\n"
+  },
+  "checkpoints": [
+    {
+      "id": "flow",
+      "description": "重置流程要点（忘记密码/邮件）",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "answers.md",
+          "containsAll": [
+            "忘记密码",
+            "邮件"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "limit",
+      "description": "次数限制 3 次",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "answers.md",
+          "contains": "3"
+        }
+      ]
+    },
+    {
+      "id": "seats",
+      "description": "席位问题答'文档未提及'（不编造）",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "answers.md",
+          "contains": "文档未提及"
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "web-retrieval"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

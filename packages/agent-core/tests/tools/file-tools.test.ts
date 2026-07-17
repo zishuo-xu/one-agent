@@ -38,6 +38,29 @@ describe('built-in file tools', () => {
     expect(() => tool.execute({ path: 'data.bin' })).toThrow('Only text files are allowed');
   });
 
+  it('read_file supports common text configuration, data, and log formats', () => {
+    const fixtures: Record<string, string> = {
+      'data.csv': 'name,value\nalpha,1\n',
+      'config.ini': '[app]\nenabled=true\n',
+      'app.log': 'service started\n',
+      'settings.conf': 'port=3000\n',
+      'config.xml': '<config />\n',
+      'project.toml': '[project]\nname = "demo"\n',
+      '.env': 'APP_ENV=test\n',
+      '.env.local': 'DEBUG=true\n',
+      'Dockerfile': 'FROM scratch\n',
+      'logs/error.log.1': 'previous error\n',
+    };
+    const tool = createReadFileTool(sandbox);
+
+    for (const [relativePath, content] of Object.entries(fixtures)) {
+      const absolutePath = path.join(root, relativePath);
+      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+      fs.writeFileSync(absolutePath, content, 'utf-8');
+      expect(tool.execute({ path: relativePath })).toEqual({ content });
+    }
+  });
+
   it('read_file throws when file missing', () => {
     const tool = createReadFileTool(sandbox);
     expect(() => tool.execute({ path: 'missing.txt' })).toThrow('File not found: missing.txt');

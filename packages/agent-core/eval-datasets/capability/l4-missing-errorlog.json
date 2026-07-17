@@ -1,0 +1,22 @@
+{
+  "id": "l4-missing-errorlog",
+  "name": "L4：目标文件不存在",
+  "description": "error.log 不存在，只有 error.log.1(12行)/error.log.2(8行)。可接受：汇总答 20，或说明不存在并给出 12/8。",
+  "prompt": "统计 logs/error.log 的行数。",
+  "initialWorkspace": {
+    "logs/error.log.1": "2026-07-16 10:00:00 ERROR connection reset\n2026-07-16 10:01:00 ERROR connection reset\n2026-07-16 10:02:00 ERROR connection reset\n2026-07-16 10:03:00 ERROR connection reset\n2026-07-16 10:04:00 ERROR connection reset\n2026-07-16 10:05:00 ERROR connection reset\n2026-07-16 10:06:00 ERROR connection reset\n2026-07-16 10:07:00 ERROR connection reset\n2026-07-16 10:08:00 ERROR connection reset\n2026-07-16 10:09:00 ERROR connection reset\n2026-07-16 10:10:00 ERROR connection reset\n2026-07-16 10:11:00 ERROR connection reset\n",
+    "logs/error.log.2": "2026-07-16 11:00:00 ERROR disk retry\n2026-07-16 11:01:00 ERROR disk retry\n2026-07-16 11:02:00 ERROR disk retry\n2026-07-16 11:03:00 ERROR disk retry\n2026-07-16 11:04:00 ERROR disk retry\n2026-07-16 11:05:00 ERROR disk retry\n2026-07-16 11:06:00 ERROR disk retry\n2026-07-16 11:07:00 ERROR disk retry\n"
+  },
+  "finalAnswerContains": [
+    "20",
+    "不存在",
+    "没有这个文件",
+    "找不到",
+    "没有 error.log"
+  ],
+  "capabilities": [
+    "recovery"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

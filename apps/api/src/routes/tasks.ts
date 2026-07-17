@@ -43,13 +43,14 @@ export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
   const memoryStore = new MemoryStore(db);
   const memoryExtractor = new MemoryExtractor();
 
-  function createAgent(options: { threadId?: string; signal?: AbortSignal }) {
+  function createAgent(options: { threadId?: string; taskId?: string; signal?: AbortSignal }) {
     const sandbox = new Sandbox(WORKSPACE_ROOT);
     const tools = new ToolRegistry();
     tools.registerMany(createBuiltInTools(sandbox));
     return new AgentLoop({
       tools,
       threadId: options.threadId,
+      taskId: options.taskId,
       signal: options.signal,
       memoryStore,
       memoryExtractor,

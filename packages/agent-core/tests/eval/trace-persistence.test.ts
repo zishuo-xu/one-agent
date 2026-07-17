@@ -71,6 +71,7 @@ describe('EvalRunner trace persistence', () => {
     const result = summary.results[0];
     expect(result.threadId).toBeDefined();
     expect(result.runId).toBeDefined();
+    expect(result.completionOutcome?.status).toBe('unverified');
 
     const db = createConnection({ path: traceDbPath });
     try {
@@ -87,7 +88,7 @@ describe('EvalRunner trace persistence', () => {
     }
   });
 
-  it('marks failed tasks as failed runs with assertion errors', async () => {
+  it('keeps runtime status separate from a failed offline eval', async () => {
     const runner = new EvalRunner();
     const summary = await runner.run({
       tasks: [failingTask],
@@ -106,8 +107,34 @@ describe('EvalRunner trace persistence', () => {
       expect(thread?.title).toBe('[FAIL] eval: Trace fail task');
 
       const run = new RunStore(db).getById(result.runId!);
-      expect(run?.status).toBe('failed');
-      expect(run?.error).toContain('write_file');
+      expect(run?.status).toBe('completed');
+      expect(run?.error).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('persists concurrent runs independently and keeps dataset order', async () => {
+    const runner = new EvalRunner();
+    const summary = await runner.run({
+      tasks: [failingTask, passingTask],
+      workspaceRoot,
+      mode: 'mock',
+      traceDbPath,
+      concurrency: 2,
+    });
+
+    expect(summary.results.map((result) => result.taskId)).toEqual(['trace-fail', 'trace-pass']);
+    expect(summary.results.every((result) => result.threadId && result.runId)).toBe(true);
+
+    const db = createConnection({ path: traceDbPath });
+    try {
+      expect(new ThreadStore(db).list()).toHaveLength(2);
+      const runStore = new RunStore(db);
+      for (const result of summary.results) {
+        expect(runStore.getById(result.runId!)).toBeDefined();
+        expect(runStore.getByThread(result.threadId!)).toHaveLength(1);
+      }
     } finally {
       db.close();
     }

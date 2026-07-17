@@ -1,5 +1,6 @@
 import { AgentLoopEvent } from '../agents/AgentLoop.js';
 import { ToolCall } from '../tools/types.js';
+import type { CompletionOutcome } from '../verification/types.js';
 
 export interface MockChatCompletionResponse {
   choices: Array<{
@@ -115,6 +116,8 @@ export interface EvalResult {
     planStepCount: number;
   };
   reflectionCount?: number;
+  /** Runtime's evidence-based completion verdict, independent of eval assertions. */
+  completionOutcome?: CompletionOutcome;
   /** Checkpoint scoring, present when the task defines checkpoints. */
   score?: number;
   maxScore?: number;
@@ -127,6 +130,8 @@ export interface EvalResult {
 export interface EvalRunnerOptions {
   tasks: EvalTask[];
   workspaceRoot: string;
+  /** Maximum number of tasks evaluated concurrently. Defaults to 1. */
+  concurrency?: number;
   enablePlanning?: boolean;
   defaultTimeoutMs?: number;
   /** When 'real', the runner does not mock the OpenAI client and lets AgentLoop call the real model. */

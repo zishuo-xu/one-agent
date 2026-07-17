@@ -5,6 +5,8 @@ export type { AgentLoopOptions, AgentLoopEvent } from './agents/AgentLoop.js';
 export { SubAgentRunner } from './agents/SubAgentRunner.js';
 export type { SubAgentTask, SubAgentResult, SubAgentRunnerOptions } from './agents/SubAgentRunner.js';
 export { createSpawnAgentTool } from './agents/spawnAgentTool.js';
+export { assessCheckpointRecovery, recoveryPolicyForTool } from './agents/checkpoint.js';
+export type { RunCheckpoint, ActiveToolCheckpoint, ToolRecoveryPolicy } from './agents/checkpoint.js';
 export type { Message, MessageRole } from './agents/types.js';
 
 export { OpenAICompatibleProvider, FallbackProvider, defaultShouldFallback, createProviderFromEnv } from './model/index.js';
@@ -93,6 +95,16 @@ export { builtInEvalTasks, realModelPlanningTask, realModelBenchmarkTasks } from
 export { loadEvalDataset, resolveBundledDatasetDir } from './eval/datasetLoader.js';
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
 export type { ExtractedFact } from './memory/MemoryExtractor.js';
+export { EvidenceCompletionVerifier } from './verification/EvidenceCompletionVerifier.js';
+export type { EvidenceCompletionVerifierOptions } from './verification/EvidenceCompletionVerifier.js';
+export type {
+  CompletionStatus,
+  CompletionEvidence,
+  CompletionOutcome,
+  CompletionRequirement,
+  CompletionVerificationInput,
+  CompletionVerifier,
+} from './verification/types.js';
 export type {
   EvalTask,
   EvalResult,

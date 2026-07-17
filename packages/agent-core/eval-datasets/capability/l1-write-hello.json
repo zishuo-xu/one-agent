@@ -1,0 +1,22 @@
+{
+  "id": "l1-write-hello",
+  "name": "L1：写文件",
+  "description": "按指令创建指定内容的文件，判终态文件。",
+  "prompt": "在 workspace 创建一个 hello.txt，内容为 deploy ok。",
+  "requiredTools": [
+    {
+      "name": "write_file"
+    }
+  ],
+  "expectedFiles": [
+    {
+      "path": "hello.txt",
+      "contains": "deploy ok"
+    }
+  ],
+  "capabilities": [
+    "tool-basic"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 90000
+}

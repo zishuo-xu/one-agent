@@ -1,0 +1,26 @@
+{
+  "id": "l2-sort-csv",
+  "name": "L2：排序处理",
+  "description": "按 score 升序写 sorted.csv；回答第一名（leo,45）。文件判首尾两人在场。",
+  "prompt": "把 data.csv 按 score 升序排序，结果写入 sorted.csv，并告诉我第一名（分数最低）是谁。",
+  "initialWorkspace": {
+    "data.csv": "name,score\nnora,82\nleo,45\nmia,91\nken,67\nava,73\n"
+  },
+  "finalAnswerContainsAll": [
+    "leo"
+  ],
+  "expectedFiles": [
+    {
+      "path": "sorted.csv",
+      "containsAll": [
+        "leo",
+        "mia"
+      ]
+    }
+  ],
+  "capabilities": [
+    "tool-chain"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 120000
+}

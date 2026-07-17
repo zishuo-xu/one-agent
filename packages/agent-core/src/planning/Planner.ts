@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider, TokenUsage } from '../model/types.js';
+import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
 import { ToolDefinition } from '../tools/types.js';
 import { Plan, PlanStep, PlannerOptions, FailureAnalysis } from './types.js';
 import { extractJsonObject } from './extractJson.js';
@@ -43,6 +44,7 @@ export class Planner {
    * context, so it never anchors the context-size estimate).
    */
   onUsage?: (usage: TokenUsage) => void;
+  onTrace?: (event: ModelCallTraceEvent) => void;
 
   constructor(options: PlannerOptions = {}) {
     this.systemPrompt =
@@ -158,18 +160,43 @@ export class Planner {
   private async callModelWithJsonFormat(prompt: string): Promise<string> {
     // jsonMode fallback (retrying without response_format when the endpoint
     // does not support it) is handled inside the provider.
-    const response = await this.modelProvider.complete({
-      messages: [
-        { role: 'system', content: this.systemPrompt },
-        { role: 'user', content: prompt },
-      ],
-      jsonMode: true,
-      timeoutMs: this.timeoutMs,
+    const modelCallId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    const messages = [
+      { role: 'system' as const, content: this.systemPrompt },
+      { role: 'user' as const, content: prompt },
+    ];
+    this.onTrace?.({
+      type: 'model_call', phase: 'started', modelCallId, purpose: 'planner',
+      provider: this.modelProvider.name, model: this.modelProvider.model,
+      attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
     });
-    if (response.usage) {
-      this.onUsage?.(response.usage);
+    try {
+      const response = await this.modelProvider.complete({
+        messages,
+        jsonMode: true,
+        timeoutMs: this.timeoutMs,
+      });
+      if (response.usage) {
+        this.onUsage?.(response.usage);
+      }
+      this.onTrace?.({
+        type: 'model_call', phase: 'completed', modelCallId, purpose: 'planner',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        usage: response.usage,
+      });
+      return response.content || '{}';
+    } catch (error) {
+      this.onTrace?.({
+        type: 'model_call', phase: 'failed', modelCallId, purpose: 'planner',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
-    return response.content || '{}';
   }
 
   private parsePlan(raw: string, userRequest: string): Plan {

@@ -1,0 +1,32 @@
+{
+  "id": "l3-ascii-compare",
+  "name": "L3：检索+对比纠错",
+  "description": "code.txt 里故意写错（66），正确是 65。考会不会被文件里的错误答案带偏。",
+  "prompt": "查一下 ASCII 表里字符 'A' 的十进制编码，然后和 code.txt 里记录的数字对比，告诉我一不一致、正确值是多少。",
+  "initialWorkspace": {
+    "code.txt": "66\n"
+  },
+  "requiredTools": [
+    {
+      "name": "web_search"
+    },
+    {
+      "name": "read_file"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "65"
+  ],
+  "finalAnswerContains": [
+    "不一致",
+    "不对",
+    "不是",
+    "错误",
+    "有误"
+  ],
+  "capabilities": [
+    "web-retrieval"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

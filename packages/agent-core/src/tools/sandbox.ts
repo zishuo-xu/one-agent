@@ -23,12 +23,22 @@ export class Sandbox {
 
   isTextFile(relativePath: string): boolean {
     const ext = path.extname(relativePath).toLowerCase();
+    const basename = path.basename(relativePath).toLowerCase();
     const allowed = new Set([
       '.txt', '.md', '.json', '.ts', '.js', '.mjs', '.cjs', '.jsx', '.tsx',
       '.yaml', '.yml', '.html', '.css', '.scss', '.sql', '.sh', '.py', '.go',
       '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php',
+      '.csv', '.ini', '.log', '.conf', '.xml', '.toml',
     ]);
-    return allowed.has(ext);
+
+    // Extensionless files (for example Dockerfile and Makefile) and common
+    // environment dotfiles are normally plain text. Rotated logs use a
+    // numeric suffix, so path.extname alone would otherwise see only ".1".
+    return ext === ''
+      || basename === '.env'
+      || basename.startsWith('.env.')
+      || allowed.has(ext)
+      || /\.log\.\d+$/.test(basename);
   }
 
   get rootPath(): string {

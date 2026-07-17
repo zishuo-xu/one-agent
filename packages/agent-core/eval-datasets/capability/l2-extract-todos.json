@@ -1,0 +1,25 @@
+{
+  "id": "l2-extract-todos",
+  "name": "L2：过滤提取",
+  "description": "从 notes.md 提取 4 行 TODO 写入 todos.txt，判 4 项齐全。",
+  "prompt": "把 notes.md 里所有包含 TODO 的行提取出来，存成 todos.txt。",
+  "initialWorkspace": {
+    "notes.md": "# 项目笔记\n\n## 周一\n- TODO: 修复登录页样式\n- 完成了接口联调\n- TODO: 更新依赖版本\n## 周二\n- 常规巡检\n- TODO: 写周报模板\n- 整理文档\n- TODO: 备份数据库\n- 其他事项\n"
+  },
+  "expectedFiles": [
+    {
+      "path": "todos.txt",
+      "containsAll": [
+        "修复登录页样式",
+        "更新依赖版本",
+        "写周报模板",
+        "备份数据库"
+      ]
+    }
+  ],
+  "capabilities": [
+    "tool-chain"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 120000
+}

@@ -1,0 +1,31 @@
+{
+  "id": "l3-ts5-release",
+  "name": "L3：检索历史固定事实",
+  "description": "TypeScript 5.0 发布于 2023 年 3 月（固定事实，答案不随时间变）。",
+  "prompt": "TypeScript 5.0 正式版是哪年哪月发布的？把结论写入 facts.txt，并回答我。",
+  "requiredTools": [
+    {
+      "name": "web_search"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "2023"
+  ],
+  "finalAnswerContains": [
+    "3月",
+    "March",
+    "Mar",
+    "3 月"
+  ],
+  "expectedFiles": [
+    {
+      "path": "facts.txt",
+      "contains": "2023"
+    }
+  ],
+  "capabilities": [
+    "web-retrieval"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

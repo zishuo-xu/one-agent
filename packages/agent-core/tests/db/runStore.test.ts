@@ -48,6 +48,39 @@ describe('RunStore', () => {
     expect(found?.reasoningChain).toEqual(steps);
   });
 
+  it('persists trace health separately from run status', () => {
+    const run = store.create({ threadId, model: 'gpt-test' });
+    store.update(run.id, {
+      traceStatus: 'partial',
+      droppedTraceEvents: 2,
+      traceError: 'disk busy',
+    });
+
+    expect(store.getById(run.id)).toMatchObject({
+      traceStatus: 'partial',
+      droppedTraceEvents: 2,
+      traceError: 'disk busy',
+    });
+  });
+
+  it('persists a JSON checkpoint and lists recoverable runs', () => {
+    const checkpoint = {
+      version: 1 as const,
+      updatedAt: new Date().toISOString(),
+      originalMessage: 'Finish the task',
+      loopMode: 'planning' as const,
+      plan: { reasoning: 'test', steps: [] },
+      currentUnitIndex: 0,
+      replanAttempts: 0,
+      retryAttempts: 0,
+      recoveryCount: 0,
+    };
+    const run = store.create({ threadId, model: 'gpt-test', checkpoint });
+
+    expect(store.getById(run.id)?.checkpoint).toEqual(checkpoint);
+    expect(store.getRecoverableByThread(threadId).map((item) => item.id)).toEqual([run.id]);
+  });
+
   it('completes a run', () => {
     const run = store.create({ threadId, model: 'gpt-test' });
     store.complete(run.id);

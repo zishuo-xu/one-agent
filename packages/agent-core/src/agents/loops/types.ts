@@ -8,6 +8,7 @@ import type { TaskJudge } from '../../planning/TaskJudge.js';
 import type { ModelCaller } from '../ModelCaller.js';
 import type { RunRecorder } from '../RunRecorder.js';
 import type { SubAgentRunner } from '../SubAgentRunner.js';
+import type { RunCheckpoint } from '../checkpoint.js';
 
 /** Collaborators every loop strategy shares (assembled once by AgentLoop). */
 export interface LoopInfrastructure {
@@ -24,6 +25,7 @@ export interface LoopInfrastructure {
   maxRetryAttempts: number;
   checkSignal: () => void;
   persistToolCall: (runId: string | undefined, toolCall: ToolCall, result: ToolResult) => void;
+  saveCheckpoint: (runId: string | undefined, checkpoint: RunCheckpoint) => void;
 }
 
 /** Per-chat input for a loop run. */
@@ -32,6 +34,8 @@ export interface LoopRunInput {
   runId?: string;
   memories?: string;
   reasoningChain: ReasoningChain;
+  resumeCheckpoint?: RunCheckpoint;
+  resumedFromRunId?: string;
 }
 
 /** One execution strategy. Add a new loop mode by implementing this interface. */

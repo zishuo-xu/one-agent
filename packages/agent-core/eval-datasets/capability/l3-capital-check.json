@@ -1,0 +1,28 @@
+{
+  "id": "l3-capital-check",
+  "name": "L3：检索固定统计数据并比较",
+  "description": "以 2020 年美国人口普查为固定口径，Jacksonville（949,611）人口多于 Fort Worth（918,915）。",
+  "prompt": "请使用 web_search 查询并核对 2020 年美国人口普查中 Jacksonville, Florida 和 Fort Worth, Texas 的人口。把两个城市的人口以及哪个城市人口更多写入 check.txt，并告诉我结论。",
+  "requiredTools": [
+    {
+      "name": "web_search"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "Jacksonville"
+  ],
+  "expectedFiles": [
+    {
+      "path": "check.txt",
+      "containsAll": [
+        "Jacksonville",
+        "Fort Worth"
+      ]
+    }
+  ],
+  "capabilities": [
+    "web-retrieval"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 180000
+}

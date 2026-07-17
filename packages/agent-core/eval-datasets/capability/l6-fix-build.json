@@ -1,0 +1,55 @@
+{
+  "id": "l6-fix-build",
+  "name": "L6 场景：修复构建脚本",
+  "description": "build.sh 引用 assets/ 但实际目录叫 asset/。考：定位根因、修复、真跑到成功（dist/banner.txt 产出为证）。",
+  "prompt": "build.sh 跑不起来，报错说找不到目录，帮我修一下，跑到成功为止。",
+  "initialWorkspace": {
+    "build.sh": "#!/bin/sh\nmkdir -p dist\ncp assets/banner.txt dist/banner.txt\necho BUILD_OK\n",
+    "asset/banner.txt": "ONE-AGENT BUILD v3\n"
+  },
+  "requiredTools": [
+    {
+      "name": "run_command"
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "output",
+      "description": "dist/banner.txt 产出且内容正确（跑通的铁证）",
+      "points": 3,
+      "expectedFiles": [
+        {
+          "path": "dist/banner.txt",
+          "contains": "ONE-AGENT BUILD v3"
+        }
+      ]
+    },
+    {
+      "id": "root-cause",
+      "description": "说出根因（目录名 asset/assets）",
+      "points": 1,
+      "finalAnswerContains": [
+        "asset",
+        "assets",
+        "目录"
+      ]
+    },
+    {
+      "id": "success-report",
+      "description": "报告跑通结果",
+      "points": 1,
+      "finalAnswerContains": [
+        "BUILD_OK",
+        "成功",
+        "跑通",
+        "succeeded"
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "recovery"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

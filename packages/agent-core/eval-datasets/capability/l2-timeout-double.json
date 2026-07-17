@@ -1,0 +1,70 @@
+{
+  "id": "l2-timeout-double",
+  "name": "L2 工具链：读配置乘二写入新文件",
+  "description": "读取 config.json 的 timeout，乘 2 写入 timeout_new.txt。capability 数据集格式样例（L2 工具链档）：requiredTools + finalAnswerContainsAll + expectedFiles + capabilities/difficulty 标签。",
+  "prompt": "读取 config.json 里的 timeout 值，把它乘以 2，写入 timeout_new.txt，并告诉我新值。",
+  "initialWorkspace": {
+    "config.json": "{\n  \"host\": \"api.internal\",\n  \"port\": 8080,\n  \"timeout\": 1500\n}\n"
+  },
+  "requiredTools": [
+    { "name": "read_file" },
+    { "name": "write_file" }
+  ],
+  "finalAnswerContainsAll": ["3000"],
+  "expectedFiles": [
+    { "path": "timeout_new.txt", "contains": "3000" }
+  ],
+  "capabilities": ["tool-chain", "file-ops"],
+  "difficulty": "easy",
+  "enablePlanning": false,
+  "timeoutMs": 60000,
+  "mockResponses": [
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"config.json\"}"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                  "name": "write_file",
+                  "arguments": "{\"path\":\"timeout_new.txt\",\"content\":\"3000\"}"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "message": {
+            "content": "新的 timeout 值是 3000，已写入 timeout_new.txt。"
+          }
+        }
+      ]
+    }
+  ]
+}

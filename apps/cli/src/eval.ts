@@ -8,6 +8,7 @@ import {
   realModelBenchmarkTasks,
   loadEvalDataset,
 } from '@one-agent/agent-core';
+import { parseEvalConcurrency } from './eval-options.js';
 
 function getFlagValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -16,7 +17,9 @@ function getFlagValue(flag: string): string | undefined {
 
 async function main() {
   const realMode = process.argv.includes('--real');
+  const planning = process.argv.includes('--planning');
   const trace = process.argv.includes('--trace');
+  const concurrency = parseEvalConcurrency(process.argv.slice(2));
   const datasetDir = getFlagValue('--dataset');
   const traceDbPath = trace ? resolve(getFlagValue('--db') ?? './eval-traces.db') : undefined;
 
@@ -31,18 +34,25 @@ async function main() {
 
   const taskSource = datasetDir ? `dataset ${resolve(datasetDir)}` : 'built-in';
   console.log(
-    `Running evaluation in ${realMode ? 'real' : 'mock'} mode on ${tasks.length} task(s) (${taskSource})...\n`,
+    `Running evaluation in ${realMode ? 'real' : 'mock'} mode${planning ? ' with PlanningLoop' : ''} on ${tasks.length} task(s) (${taskSource}, concurrency=${concurrency})...\n`,
   );
 
+  const evaluationStartedAt = Date.now();
   const summary = await runner.run({
     tasks,
     workspaceRoot,
     mode: realMode ? 'real' : 'mock',
+    concurrency,
+    // Tasks that set enablePlanning explicitly keep their own value; the flag
+    // is the default for everything else (SimpleLoop vs PlanningLoop control).
+    enablePlanning: planning,
     traceDbPath,
   });
+  const wallDuration = Date.now() - evaluationStartedAt;
 
   let totalTokens = 0;
   let totalDuration = 0;
+  const verificationCounts = new Map<string, number>();
 
   for (const result of summary.results) {
     const status = result.passed ? 'PASS' : 'FAIL';
@@ -58,6 +68,13 @@ async function main() {
     }
     if (result.maxScore !== undefined) {
       metrics.push(`score=${result.score}/${result.maxScore}`);
+    }
+    if (result.completionOutcome) {
+      metrics.push(`verification=${result.completionOutcome.status}`);
+      verificationCounts.set(
+        result.completionOutcome.status,
+        (verificationCounts.get(result.completionOutcome.status) ?? 0) + 1,
+      );
     }
     totalDuration += result.durationMs;
     console.log(`[${status}] ${result.taskId} - ${metrics.join(' | ')}`);
@@ -80,7 +97,14 @@ async function main() {
 
   const passRate = summary.total > 0 ? ((summary.passed / summary.total) * 100).toFixed(0) : '0';
   console.log('');
-  console.log(`Summary: ${summary.passed}/${summary.total} passed (${passRate}%) | ${totalDuration}ms total | ${totalTokens} tokens`);
+  console.log(
+    `Summary: ${summary.passed}/${summary.total} passed (${passRate}%) | ${wallDuration}ms wall | ${totalDuration}ms cumulative task time | ${totalTokens} tokens`,
+  );
+  if (verificationCounts.size > 0) {
+    console.log(
+      `Verification: ${[...verificationCounts.entries()].map(([status, count]) => `${status}=${count}`).join(' | ')}`,
+    );
+  }
   if (summary.totalMaxScore !== undefined) {
     console.log(`Score: ${summary.totalScore}/${summary.totalMaxScore} checkpoint points`);
   }

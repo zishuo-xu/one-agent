@@ -30,17 +30,50 @@ import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import { MockProvider } from '../model/MockProvider.js';
 import { createConnection } from '../db/connection.js';
 import { ThreadStore } from '../db/threadStore.js';
-import { RunStore } from '../db/runStore.js';
 import type Database from 'better-sqlite3';
 import type { MockChatCompletionResponse } from './types.js';
+import { EvidenceCompletionVerifier } from '../verification/EvidenceCompletionVerifier.js';
+import type { CompletionRequirement } from '../verification/types.js';
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    }),
-  ]);
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+/** Map with a fixed worker pool while preserving the input order. */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(`Eval concurrency must be a positive integer, got ${concurrency}`);
+  }
+
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 export class EvalRunner {
@@ -61,15 +94,15 @@ export class EvalRunner {
     options: EvalRunnerOptions,
     traceDb?: Database.Database,
   ): Promise<EvalRunSummary> {
-    const results: EvalResult[] = [];
     const threadStore = traceDb ? new ThreadStore(traceDb) : undefined;
-    const runStore = traceDb ? new RunStore(traceDb) : undefined;
+    const concurrency = options.concurrency ?? 1;
 
-    for (const task of options.tasks) {
+    const results = await mapWithConcurrency(options.tasks, concurrency, async (task) => {
       const start = Date.now();
       const errors: string[] = [];
       const events: AgentLoopEvent[] = [];
       let reply = '';
+      let completionOutcome: EvalResult['completionOutcome'];
 
       // Each task runs in its own workspace directory so files left behind by
       // one task (deleted logs, moved files, generated reports) never leak
@@ -116,6 +149,10 @@ export class EvalRunner {
             : new OpenAICompatibleProvider(config.openai, config.model),
         ...(threadId && traceDb ? { threadId, db: traceDb } : {}),
       });
+      const completionVerifier = new EvidenceCompletionVerifier({
+        sandbox,
+        requirements: buildCompletionRequirements(task),
+      });
 
       agent.on('event', (event: AgentLoopEvent) => {
         events.push(event);
@@ -131,6 +168,11 @@ export class EvalRunner {
           `Task ${task.id}`
         );
         reply = run.reply;
+        completionOutcome = await completionVerifier.verify({
+          request: task.prompt,
+          reply: run.reply,
+          events: run.events,
+        });
         tokenUsage = run.tokenUsage;
         runId = run.runId;
       } catch (error) {
@@ -217,20 +259,14 @@ export class EvalRunner {
 
       const passed = errors.length === 0 && (maxScore === undefined || score === maxScore);
 
-      // Mark the persisted run/thread with the eval outcome so failures are
-      // easy to spot in trace-web.
+      // Label the eval-owned thread for navigation, but never rewrite the
+      // runtime run status: execution facts and offline evaluation results
+      // are separate dimensions.
       if (threadStore && threadId) {
         threadStore.updateTitle(threadId, `${passed ? '[PASS]' : '[FAIL]'} eval: ${task.name}`);
-        if (!passed && runStore && runId) {
-          const failureDetail = checkpointResults
-            ?.filter((c) => c.earned < c.points)
-            .map((c) => `checkpoint ${c.id}: ${c.errors.join(' | ')}`)
-            .join(' ; ');
-          runStore.fail(runId, [...errors, ...(failureDetail ? [failureDetail] : [])].join(' | '));
-        }
       }
 
-      results.push({
+      return {
         taskId: task.id,
         passed,
         reply,
@@ -246,13 +282,14 @@ export class EvalRunner {
           planStepCount: planEvents.reduce((sum, event) => sum + countPlanSteps(event.plan), 0),
         },
         reflectionCount: events.filter((e) => e.type === 'reflection').length,
+        completionOutcome,
         score,
         maxScore,
         checkpointResults,
         runId,
         threadId,
-      });
-    }
+      } satisfies EvalResult;
+    });
 
     const scored = results.filter((r) => r.maxScore !== undefined);
     return {
@@ -375,4 +412,46 @@ function countPlanSteps(plan: Plan): number {
     visit(step);
   }
   return count;
+}
+
+function buildCompletionRequirements(task: EvalTask): CompletionRequirement[] {
+  const requirements: CompletionRequirement[] = [];
+  const addExpectations = (expectations: {
+    expectedFiles?: EvalFileExpectation[];
+    forbiddenFiles?: string[];
+    finalAnswerContains?: string[];
+    finalAnswerContainsAll?: string[];
+    finalAnswerNotContains?: string[];
+  }) => {
+    for (const file of expectations.expectedFiles ?? []) {
+      requirements.push({
+        kind: 'artifact',
+        path: file.path,
+        containsAll: [
+          ...(file.contains ? [file.contains] : []),
+          ...(file.containsAll ?? []),
+        ],
+        notContains: file.notContains,
+      });
+    }
+    for (const path of expectations.forbiddenFiles ?? []) {
+      requirements.push({ kind: 'artifact', path, shouldExist: false });
+    }
+    if (
+      expectations.finalAnswerContains?.length ||
+      expectations.finalAnswerContainsAll?.length ||
+      expectations.finalAnswerNotContains?.length
+    ) {
+      requirements.push({
+        kind: 'response',
+        containsAny: expectations.finalAnswerContains,
+        containsAll: expectations.finalAnswerContainsAll,
+        notContains: expectations.finalAnswerNotContains,
+      });
+    }
+  };
+
+  addExpectations(task);
+  for (const checkpoint of task.checkpoints ?? []) addExpectations(checkpoint);
+  return requirements;
 }

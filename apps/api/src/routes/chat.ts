@@ -76,7 +76,12 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         threadId = thread.id;
       }
 
-      const agent = new AgentLoop({ tools, threadId, memoryStore, memoryExtractor });
+      const agent = new AgentLoop({
+        tools,
+        threadId,
+        memoryStore,
+        memoryExtractor,
+      });
       const { reply: response, events } = await agent.chat(message);
       return { reply: response, events, threadId };
     } catch (error) {

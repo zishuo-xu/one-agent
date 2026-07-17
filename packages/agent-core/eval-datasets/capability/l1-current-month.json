@@ -1,0 +1,26 @@
+{
+  "id": "l1-current-month",
+  "name": "L1：实时信息必须调工具",
+  "description": "现在是哪年哪月——必须调 get_time，裸模型日期知识不可靠。【时效题：期望值每月需更新】",
+  "prompt": "现在是哪一年哪一月？请用 get_time 工具确认后再回答。",
+  "requiredTools": [
+    {
+      "name": "get_time"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "2026"
+  ],
+  "finalAnswerContains": [
+    "7月",
+    "七月",
+    "7 月",
+    "Jul",
+    "july"
+  ],
+  "capabilities": [
+    "tool-basic"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 90000
+}

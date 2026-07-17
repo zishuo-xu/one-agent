@@ -1,0 +1,22 @@
+{
+  "id": "l1-read-port",
+  "name": "L1：读文件取事实",
+  "description": "工作区 notes.txt 里写了端口 8347。考：会不会用 read_file 而不是凭训练记忆编。裸模型必错。",
+  "prompt": "服务器的端口号是多少？",
+  "initialWorkspace": {
+    "notes.txt": "# 服务配置\n端口：8347\n环境：staging\n负责人：ops-team\n"
+  },
+  "requiredTools": [
+    {
+      "name": "read_file"
+    }
+  ],
+  "finalAnswerContainsAll": [
+    "8347"
+  ],
+  "capabilities": [
+    "tool-basic"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 90000
+}

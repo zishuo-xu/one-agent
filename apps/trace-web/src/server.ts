@@ -111,6 +111,10 @@ function renderViewerPage(): string {
       --message_delta: #64748b;
       --failed: #ef4444;
       --sub_agent: #14b8a6;
+      --verification: #22c55e;
+      --run: #f8fafc;
+      --model_call: #06b6d4;
+      --plan_step: #a78bfa;
     }
     * { box-sizing: border-box; }
     body {
@@ -203,6 +207,10 @@ function renderViewerPage(): string {
     .event.reflection { border-left-color: var(--reflection); }
     .event.message_delta { border-left-color: var(--message_delta); }
     .event.sub_agent { border-left-color: var(--sub_agent); }
+    .event.verification { border-left-color: var(--verification); }
+    .event.run { border-left-color: var(--run); }
+    .event.model_call { border-left-color: var(--model_call); }
+    .event.plan_step { border-left-color: var(--plan_step); }
     .event-header {
       display: flex;
       align-items: center;
@@ -283,6 +291,10 @@ function renderViewerPage(): string {
     .timeline-seg.message_delta { background: var(--message_delta); }
     .timeline-seg.reasoning_delta { background: #475569; }
     .timeline-seg.sub_agent { background: var(--sub_agent); }
+    .timeline-seg.verification { background: var(--verification); }
+    .timeline-seg.run { background: var(--run); }
+    .timeline-seg.model_call { background: var(--model_call); }
+    .timeline-seg.plan_step { background: var(--plan_step); }
     /* Filter buttons */
     .filters {
       display: flex;
@@ -310,6 +322,10 @@ function renderViewerPage(): string {
     .filter-btn.message_delta { border-color: var(--message_delta); }
     .filter-btn.reasoning_delta { border-color: #475569; }
     .filter-btn.sub_agent { border-color: var(--sub_agent); }
+    .filter-btn.verification { border-color: var(--verification); }
+    .filter-btn.run { border-color: var(--run); }
+    .filter-btn.model_call { border-color: var(--model_call); }
+    .filter-btn.plan_step { border-color: var(--plan_step); }
     /* Collapsible events */
     .event { cursor: pointer; }
     .event .event-full { display: none; margin-top: 8px; }
@@ -339,6 +355,7 @@ function renderViewerPage(): string {
     .event-children .child-event.tool_result { border-left-color: var(--tool_result); }
     .event-children .child-event.message { border-left-color: var(--message); }
     .event-children .child-event.reflection { border-left-color: var(--reflection); }
+    .event-children .child-event.verification { border-left-color: var(--verification); }
     .event-children .child-header { margin-bottom: 2px; }
     .event-children .child-preview {
       font-size: 12px;
@@ -425,8 +442,8 @@ function renderViewerPage(): string {
       } else {
         container.innerHTML = runs.map(r => \`
           <div class="item \${selectedRunId === r.id ? 'active' : ''} \${r.status === 'failed' ? 'failed' : ''}" onclick="selectRun(\${escapeHtml(JSON.stringify(r.id))})">
-            <div class="item-title">\${escapeHtml(r.preview || r.status)}</div>
-            <div class="item-meta">\${escapeHtml(r.status)} · \${formatTime(r.startTime)}</div>
+            <div class="item-title">\${escapeHtml(r.preview || r.status)}\${r.checkpoint?.resumedFromRunId ? ' ↩ resumed' : ''}</div>
+            <div class="item-meta">\${escapeHtml(r.id.slice(0, 8))} · \${escapeHtml(r.status)} · trace \${escapeHtml(r.traceStatus || 'unknown')}\${r.droppedTraceEvents ? ' (' + r.droppedTraceEvents + ' dropped)' : ''} · \${formatTime(r.startTime)}</div>
             \${r.status === 'failed' && r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
           </div>
         \`).join('');
@@ -458,11 +475,23 @@ function renderViewerPage(): string {
     function summarizeEvent(e) {
       const d = e.eventData ?? {};
       switch (e.eventType) {
+        case 'run':
+          return {
+            label: d.phase ?? '',
+            preview: d.error ?? ((d.loopMode ?? '') + (d.resumedFromRunId ? ' · resumed from ' + d.resumedFromRunId.slice(0, 8) : '') + (d.durationMs !== undefined ? ' · ' + d.durationMs + 'ms' : '')),
+          };
+        case 'model_call': {
+          const usage = d.usage?.totalTokens ? ' · ' + d.usage.totalTokens + ' tokens' : '';
+          const duration = d.durationMs !== undefined ? ' · ' + d.durationMs + 'ms' : '';
+          return { label: (d.purpose ?? '?') + ' · ' + (d.phase ?? '?'), preview: (d.provider ?? '') + '/' + (d.model ?? '') + duration + usage + (d.error ? ' · ' + d.error : '') };
+        }
         case 'plan': {
           const steps = d.plan?.steps ?? [];
           const stepText = steps.map(s => s.description + (s.toolName ? ' [' + s.toolName + ']' : '')).join(' → ');
           return { label: steps.length + ' steps', preview: stepText };
         }
+        case 'plan_step':
+          return { label: (d.stepId ?? '?') + ' · ' + (d.status ?? '?'), preview: d.failureAnalysis?.rootCause ?? '' };
         case 'thought':
           return { label: '', preview: (d.content ?? '').slice(0, 200) };
         case 'reflection':
@@ -474,7 +503,7 @@ function renderViewerPage(): string {
         }
         case 'tool_result': {
           const tr = d.toolResult ?? {};
-          if (!tr.success) return { label: 'failed', preview: tr.error ?? '' };
+          if (!tr.success) return { label: d.status ?? 'failed', preview: (tr.error ?? '') + (d.durationMs !== undefined ? ' · ' + d.durationMs + 'ms' : '') };
           const data = tr.data;
           if (data?.results && Array.isArray(data.results)) {
             return { label: data.results.length + ' results', preview: data.results.map(r => r.title ?? r.url ?? '').slice(0, 3).join(' | ') };
@@ -483,10 +512,15 @@ function renderViewerPage(): string {
             const keys = Object.keys(data);
             return { label: 'ok', preview: keys.slice(0, 5).join(', ') };
           }
-          return { label: 'ok', preview: typeof data === 'string' ? data.slice(0, 200) : '' };
+          return { label: 'ok' + (d.durationMs !== undefined ? ' · ' + d.durationMs + 'ms' : ''), preview: typeof data === 'string' ? data.slice(0, 200) : '' };
         }
         case 'message':
           return { label: '', preview: (d.content ?? '').slice(0, 300) };
+        case 'verification': {
+          const outcome = d.outcome ?? {};
+          const evidenceCount = Array.isArray(outcome.evidence) ? outcome.evidence.length : 0;
+          return { label: 'legacy · ' + (outcome.status ?? 'unknown'), preview: (outcome.reason ?? '') + (evidenceCount ? ' · ' + evidenceCount + ' evidence item(s)' : '') };
+        }
         case 'sub_agent': {
           const status = d.status ?? '?';
           const task = (d.task ?? '').slice(0, 120);
@@ -579,7 +613,7 @@ function renderViewerPage(): string {
           <div class="event \${e.eventType}" id="event-\${idx}" onclick="toggleExpand(\${idx})" data-type="\${e.eventType}">
             <div class="event-header">
               <span class="event-type">\${escapeHtml(typeLabel)}</span>
-              <span class="event-time">\${timeLabel}</span>
+              <span class="event-time">\${e.sequence !== undefined ? '#' + e.sequence + ' · ' : ''}\${timeLabel}</span>
             </div>
             <div class="event-data">\${escapeHtml(preview)}</div>
             \${renderSubAgentChildren(e)}

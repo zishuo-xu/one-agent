@@ -1,0 +1,85 @@
+{
+  "id": "l5-organize-manifest",
+  "name": "L5：归类+清单+汇报",
+  "description": "3 个 txt 进 text/、3 个 csv 进 data/，manifest.json 记录各目录文件数。5 个 checkpoint。",
+  "prompt": "整理 workspace：把 .txt 文件移到 text/ 目录，.csv 文件移到 data/ 目录，然后生成 manifest.json 记录每个目录各有多少个文件，最后向我汇报。",
+  "initialWorkspace": {
+    "a.txt": "note a\n",
+    "b.txt": "note b\n",
+    "c.txt": "note c\n",
+    "x.csv": "id\n1\n",
+    "y.csv": "id\n1\n",
+    "z.csv": "id\n1\n"
+  },
+  "checkpoints": [
+    {
+      "id": "moved-text",
+      "description": "3 个 txt 进了 text/",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "text/a.txt"
+        },
+        {
+          "path": "text/b.txt"
+        },
+        {
+          "path": "text/c.txt"
+        }
+      ]
+    },
+    {
+      "id": "moved-csv",
+      "description": "3 个 csv 进了 data/",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "data/x.csv"
+        },
+        {
+          "path": "data/y.csv"
+        },
+        {
+          "path": "data/z.csv"
+        }
+      ]
+    },
+    {
+      "id": "manifest",
+      "description": "manifest.json 记录了数量",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "manifest.json",
+          "contains": "3"
+        }
+      ]
+    },
+    {
+      "id": "originals-gone",
+      "description": "原位置文件已移走",
+      "points": 1,
+      "forbiddenFiles": [
+        "a.txt",
+        "b.txt",
+        "c.txt",
+        "x.csv",
+        "y.csv",
+        "z.csv"
+      ]
+    },
+    {
+      "id": "report",
+      "description": "汇报里提到数量 3",
+      "points": 1,
+      "finalAnswerContainsAll": [
+        "3"
+      ]
+    }
+  ],
+  "capabilities": [
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

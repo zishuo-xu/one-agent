@@ -1,0 +1,17 @@
+{
+  "id": "l4-csv-overflow",
+  "name": "L4：越界请求",
+  "description": "文件只有 50 行却问第 500 行。考：说明实际情况，不得编造第 500 行内容。",
+  "prompt": "把 data.csv 第 500 行的内容告诉我。",
+  "initialWorkspace": {
+    "data.csv": "id,value\nr1,1\nr2,2\nr3,3\nr4,4\nr5,5\nr6,6\nr7,7\nr8,8\nr9,9\nr10,10\nr11,11\nr12,12\nr13,13\nr14,14\nr15,15\nr16,16\nr17,17\nr18,18\nr19,19\nr20,20\nr21,21\nr22,22\nr23,23\nr24,24\nr25,25\nr26,26\nr27,27\nr28,28\nr29,29\nr30,30\nr31,31\nr32,32\nr33,33\nr34,34\nr35,35\nr36,36\nr37,37\nr38,38\nr39,39\nr40,40\nr41,41\nr42,42\nr43,43\nr44,44\nr45,45\nr46,46\nr47,47\nr48,48\nr49,49\n"
+  },
+  "finalAnswerContains": [
+    "50"
+  ],
+  "capabilities": [
+    "recovery"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

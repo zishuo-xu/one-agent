@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider, TokenUsage } from '../model/types.js';
+import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
 import { JudgeOptions, JudgeResult, Plan, ReasoningStep } from './types.js';
 import { extractJsonObject } from './extractJson.js';
 
@@ -34,6 +35,7 @@ export class TaskJudge {
   private readonly timeoutMs: number;
   /** Same usage-sink contract as Planner.onUsage (wired by AgentLoop). */
   onUsage?: (usage: TokenUsage) => void;
+  onTrace?: (event: ModelCallTraceEvent) => void;
 
   constructor(options: JudgeOptions = {}) {
     this.systemPrompt =
@@ -52,23 +54,44 @@ export class TaskJudge {
 
   async judge(plan: Plan, steps: ReasoningStep[]): Promise<JudgeResult> {
     const prompt = this.buildPrompt(plan, steps);
+    const modelCallId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const startedMs = Date.now();
+    const messages = [
+      { role: 'system' as const, content: this.systemPrompt },
+      { role: 'user' as const, content: prompt },
+    ];
+    this.onTrace?.({
+      type: 'model_call', phase: 'started', modelCallId, purpose: 'judge',
+      provider: this.modelProvider.name, model: this.modelProvider.model,
+      attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
+    });
 
     try {
       const response = await this.modelProvider.complete({
-        messages: [
-          { role: 'system', content: this.systemPrompt },
-          { role: 'user', content: prompt },
-        ],
+        messages,
         jsonMode: true,
         timeoutMs: this.timeoutMs,
       });
       if (response.usage) {
         this.onUsage?.(response.usage);
       }
+      this.onTrace?.({
+        type: 'model_call', phase: 'completed', modelCallId, purpose: 'judge',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        usage: response.usage,
+      });
 
       const raw = response.content || '{}';
       return this.parseResult(raw);
     } catch (error) {
+      this.onTrace?.({
+        type: 'model_call', phase: 'failed', modelCallId, purpose: 'judge',
+        provider: this.modelProvider.name, model: this.modelProvider.model,
+        attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return {
         complete: false,
         reasoning: `Judge failed: ${error instanceof Error ? error.message : String(error)}`,

@@ -1,0 +1,22 @@
+{
+  "id": "l3-rfc2616-title",
+  "name": "L3：检索并写入文件",
+  "description": "RFC 2616 标题 Hypertext Transfer Protocol -- HTTP/1.1。",
+  "prompt": "查一下 RFC 2616 的正式标题，写入 rfc.txt。",
+  "requiredTools": [
+    {
+      "name": "web_search"
+    }
+  ],
+  "expectedFiles": [
+    {
+      "path": "rfc.txt",
+      "contains": "Hypertext Transfer Protocol"
+    }
+  ],
+  "capabilities": [
+    "web-retrieval"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

@@ -1,0 +1,82 @@
+{
+  "id": "l6-weekly-report",
+  "name": "L6 场景：周报汇总",
+  "description": "5 天日报汇总：11 个完成项 + 3 个风险项，开头数字概览。",
+  "prompt": "周五了，帮我把 reports/ 里这一周的日报汇总成 workspace 根目录的 weekly.md（不要写进 reports/ 子目录）：列出所有完成事项和风险事项，开头用一句话给个数字概览。",
+  "initialWorkspace": {
+    "reports/daily-mon.md": "# 日报（mon）\n\n## 完成\n- 登录页开发\n- 支付联调\n- 压测报告\n\n## 风险\n- 接口文档缺失\n",
+    "reports/daily-tue.md": "# 日报（tue）\n\n## 完成\n- 用户文档\n- 回归测试\n\n## 风险\n- 测试人力不足\n",
+    "reports/daily-wed.md": "# 日报（wed）\n\n## 完成\n- 灰度发布\n- 修复NPE\n\n## 风险\n- 无\n",
+    "reports/daily-thu.md": "# 日报（thu）\n\n## 完成\n- 迁移脚本\n- 设计评审\n\n## 风险\n- 依赖方延期\n",
+    "reports/daily-fri.md": "# 日报（fri）\n\n## 完成\n- 新人培训\n- 安全巡检\n\n## 风险\n- 无\n"
+  },
+  "checkpoints": [
+    {
+      "id": "structure",
+      "description": "weekly.md 有完成/风险两节",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "weekly.md",
+          "containsAll": [
+            "完成",
+            "风险"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "items",
+      "description": "11 个完成项齐全",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "weekly.md",
+          "containsAll": [
+            "登录页开发",
+            "支付联调",
+            "压测报告",
+            "用户文档",
+            "回归测试",
+            "灰度发布",
+            "修复NPE",
+            "迁移脚本",
+            "设计评审",
+            "新人培训",
+            "安全巡检"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "risks",
+      "description": "3 个风险齐全",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "weekly.md",
+          "containsAll": [
+            "接口文档缺失",
+            "测试人力不足",
+            "依赖方延期"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "counts",
+      "description": "概览数字 11 和 3",
+      "points": 1,
+      "finalAnswerContainsAll": [
+        "11",
+        "3"
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 300000
+}

@@ -7,6 +7,23 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
+export interface ModelCallTraceEvent {
+  type: 'model_call';
+  phase: 'started' | 'completed' | 'failed';
+  modelCallId: string;
+  purpose: 'main' | 'classifier' | 'planner' | 'judge' | 'summary' | 'memory' | 'sub_agent';
+  provider: string;
+  model: string;
+  attempt: number;
+  streaming: boolean;
+  startedAt: string;
+  durationMs?: number;
+  messageCount?: number;
+  toolCount?: number;
+  usage?: TokenUsage;
+  error?: string;
+}
+
 /** A single fragmented tool-call piece from a streaming chunk. */
 export interface ToolCallDelta {
   index: number;

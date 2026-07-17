@@ -1,0 +1,23 @@
+{
+  "id": "l1-count-logs",
+  "name": "L1：数文件",
+  "description": "7 个文件里 3 个 .log。考 list_files/search_files 的基本使用。",
+  "prompt": "workspace 里有几个 .log 文件？",
+  "initialWorkspace": {
+    "app.log": "x\n",
+    "error.log": "x\n",
+    "access.log": "x\n",
+    "readme.md": "x\n",
+    "config.json": "{}\n",
+    "data.csv": "x\n",
+    "notes.txt": "x\n"
+  },
+  "finalAnswerContainsAll": [
+    "3"
+  ],
+  "capabilities": [
+    "tool-basic"
+  ],
+  "difficulty": "easy",
+  "timeoutMs": 90000
+}

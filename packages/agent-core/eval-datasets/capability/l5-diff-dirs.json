@@ -1,0 +1,52 @@
+{
+  "id": "l5-diff-dirs",
+  "name": "L5：目录对比",
+  "description": "v1/ 和 v2/ 五个同名文件，b.txt 和 d.txt 有差异。diff.txt 只写差异文件名。",
+  "prompt": "对比 v1/ 和 v2/ 两个目录下的同名文件，把内容有差异的文件名写入 diff.txt（每行一个，只写文件名），并告诉我有几个。",
+  "initialWorkspace": {
+    "v1/a.txt": "same content\n",
+    "v1/b.txt": "v1 的 b\n",
+    "v1/c.txt": "same content\n",
+    "v1/d.txt": "v1 的 d\n",
+    "v1/e.txt": "same content\n",
+    "v2/a.txt": "same content\n",
+    "v2/b.txt": "v2 的 b 改了\n",
+    "v2/c.txt": "same content\n",
+    "v2/d.txt": "v2 的 d 改了\n",
+    "v2/e.txt": "same content\n"
+  },
+  "checkpoints": [
+    {
+      "id": "diff-file",
+      "description": "diff.txt 恰好列出 b.txt 和 d.txt",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "diff.txt",
+          "containsAll": [
+            "b.txt",
+            "d.txt"
+          ],
+          "notContains": [
+            "a.txt",
+            "c.txt",
+            "e.txt"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "count",
+      "description": "回答数量 2",
+      "points": 1,
+      "finalAnswerContainsAll": [
+        "2"
+      ]
+    }
+  ],
+  "capabilities": [
+    "planning"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 240000
+}

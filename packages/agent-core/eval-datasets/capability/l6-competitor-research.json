@@ -1,0 +1,72 @@
+{
+  "id": "l6-competitor-research",
+  "name": "L6 场景：竞品调研",
+  "description": "Redis 2009/Sanfilippo、Memcached 2003/Fitzpatrick、Valkey 2024/Linux Foundation——全固定事实，避开许可证等时效坑。",
+  "prompt": "帮我对比 Redis、Memcached、Valkey 三个内存数据库，写入 compare.md：各自的初始发布年份、最初作者或发起方。最后加一段选型建议。",
+  "requiredTools": [
+    {
+      "name": "web_search"
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "redis",
+      "description": "Redis 年份与作者",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "compare.md",
+          "containsAll": [
+            "2009",
+            "Sanfilippo"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "memcached",
+      "description": "Memcached 年份与作者",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "compare.md",
+          "containsAll": [
+            "2003",
+            "Fitzpatrick"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "valkey",
+      "description": "Valkey 年份与发起方",
+      "points": 2,
+      "expectedFiles": [
+        {
+          "path": "compare.md",
+          "containsAll": [
+            "2024",
+            "Linux Foundation"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "advice",
+      "description": "有选型建议段",
+      "points": 1,
+      "expectedFiles": [
+        {
+          "path": "compare.md",
+          "contains": "建议"
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    "scenario",
+    "web-retrieval"
+  ],
+  "difficulty": "hard",
+  "timeoutMs": 300000
+}

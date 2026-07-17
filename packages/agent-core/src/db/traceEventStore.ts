@@ -10,6 +10,7 @@ interface TraceEventRow {
   event_type: string;
   event_data: string;
   model: string | null;
+  sequence: number;
   created_at: string;
 }
 
@@ -22,6 +23,7 @@ function rowToTraceEvent(row: TraceEventRow): TraceEvent {
     eventType: row.event_type,
     eventData: JSON.parse(row.event_data) as TraceEvent['eventData'],
     model: row.model,
+    sequence: row.sequence,
     createdAt: row.created_at,
   };
 }
@@ -31,12 +33,19 @@ export class TraceEventStore {
 
   create(input: CreateTraceEventInput): TraceEvent {
     const id = input.id ?? crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = input.createdAt ?? new Date().toISOString();
+    const sequence =
+      input.sequence ??
+      (input.runId
+        ? ((this.db
+            .prepare('SELECT COALESCE(MAX(sequence), -1) AS max_sequence FROM trace_events WHERE run_id = ?')
+            .get(input.runId) as { max_sequence: number }).max_sequence + 1)
+        : 0);
 
     this.db
       .prepare(
-        `INSERT INTO trace_events (id, run_id, task_id, thread_id, event_type, event_data, model, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO trace_events (id, run_id, task_id, thread_id, event_type, event_data, model, sequence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -46,6 +55,7 @@ export class TraceEventStore {
         input.eventType,
         JSON.stringify(input.eventData),
         input.model ?? null,
+        sequence,
         now
       );
 
@@ -63,7 +73,7 @@ export class TraceEventStore {
   getByRun(runId: string): TraceEvent[] {
     const rows = this.db
       .prepare(
-        'SELECT * FROM trace_events WHERE run_id = ? ORDER BY created_at ASC'
+        'SELECT * FROM trace_events WHERE run_id = ? ORDER BY sequence ASC, created_at ASC, rowid ASC'
       )
       .all(runId) as TraceEventRow[];
 
@@ -73,7 +83,7 @@ export class TraceEventStore {
   getByTask(taskId: string): TraceEvent[] {
     const rows = this.db
       .prepare(
-        'SELECT * FROM trace_events WHERE task_id = ? ORDER BY created_at ASC'
+        'SELECT * FROM trace_events WHERE task_id = ? ORDER BY created_at ASC, rowid ASC'
       )
       .all(taskId) as TraceEventRow[];
 
@@ -83,7 +93,7 @@ export class TraceEventStore {
   getByThread(threadId: string): TraceEvent[] {
     const rows = this.db
       .prepare(
-        'SELECT * FROM trace_events WHERE thread_id = ? ORDER BY created_at ASC'
+        'SELECT * FROM trace_events WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC'
       )
       .all(threadId) as TraceEventRow[];
 

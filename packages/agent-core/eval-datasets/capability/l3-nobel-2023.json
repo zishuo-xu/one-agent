@@ -1,0 +1,31 @@
+{
+  "id": "l3-nobel-2023",
+  "name": "L3：检索+计数+写入",
+  "description": "2023 诺贝尔物理学奖 3 位得主（Agostini/Krausz/L'Huillier）。",
+  "prompt": "2023 年诺贝尔物理学奖一共颁给了几位科学家？把人数和其中一位的姓名写入 nobel.txt，并回答我。",
+  "requiredTools": [
+    {
+      "name": "web_search"
+    }
+  ],
+  "finalAnswerContains": [
+    "Agostini",
+    "Krausz",
+    "L'Huillier",
+    "L’Huillier",
+    "阿戈斯蒂尼",
+    "克劳斯",
+    "吕利耶"
+  ],
+  "expectedFiles": [
+    {
+      "path": "nobel.txt",
+      "contains": "3"
+    }
+  ],
+  "capabilities": [
+    "web-retrieval"
+  ],
+  "difficulty": "medium",
+  "timeoutMs": 120000
+}

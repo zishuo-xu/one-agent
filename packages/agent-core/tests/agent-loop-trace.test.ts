@@ -83,11 +83,23 @@ describe('AgentLoop trace persistence', () => {
 
     const traces = traceStore.getByRun(runId!);
     expect(traces.length).toBeGreaterThanOrEqual(2);
+    expect(traces[0].eventType).toBe('run');
+    expect(traces[0].eventData).toMatchObject({ phase: 'started' });
+    expect(traces.at(-1)?.eventType).toBe('run');
+    expect(traces.at(-1)?.eventData).toMatchObject({ phase: 'completed' });
+    expect(traces.map((trace) => trace.sequence)).toEqual(
+      traces.map((_, index) => index)
+    );
+    expect(traces.some((t) => t.eventType === 'model_call')).toBe(true);
     expect(traces.some((t) => t.eventType === 'tool_call')).toBe(true);
     expect(traces.some((t) => t.eventType === 'tool_result')).toBe(true);
     expect(traces.some((t) => t.eventType === 'message')).toBe(true);
+    expect(traces.some((t) => t.eventType === 'verification')).toBe(false);
     expect(traces.every((t) => t.taskId === 'task-trace-1')).toBe(true);
     expect(traces.every((t) => t.threadId === threadId)).toBe(true);
+
+    const run = new RunStore(db).getById(runId!);
+    expect(run).toMatchObject({ traceStatus: 'complete', droppedTraceEvents: 0 });
   });
 
   it('persists streaming deltas as one aggregated row per stream instead of one row per token', async () => {
@@ -113,5 +125,31 @@ describe('AgentLoop trace persistence', () => {
     // Non-delta events still persist individually and in order.
     const traces = traceStore.getByRun(runId!);
     expect(traces.some((t) => t.eventType === 'message')).toBe(true);
+  });
+
+  it('returns the reply and marks trace health failed when trace persistence is unavailable', async () => {
+    const threadId = threadStore.create({ id: 'thread-trace-failure' }).id;
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'Reply survives.' } }],
+    } as never);
+    const unavailableTraceStore = {
+      create: vi.fn(() => {
+        throw new Error('trace database unavailable');
+      }),
+    } as unknown as TraceEventStore;
+
+    const agent = new AgentLoop({
+      threadId,
+      db,
+      traceEventStore: unavailableTraceStore,
+      enablePlanning: false,
+    });
+    const result = await agent.chat('Hi');
+
+    expect(result.reply).toBe('Reply survives.');
+    const run = new RunStore(db).getById(result.runId!);
+    expect(run?.traceStatus).toBe('failed');
+    expect(run?.droppedTraceEvents).toBeGreaterThan(0);
+    expect(run?.traceError).toContain('trace database unavailable');
   });
 });
