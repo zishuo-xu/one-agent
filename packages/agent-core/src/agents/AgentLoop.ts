@@ -199,8 +199,15 @@ export class AgentLoop extends EventEmitter {
       }
     }
 
-    this.planner = options.planner ?? new Planner();
-    this.taskJudge = options.taskJudge ?? new TaskJudge();
+    // An explicitly pinned provider (tests, eval) always wins for the
+    // auxiliary roles too; otherwise they fall back to their own defaults
+    // (PLANNING_MODEL / shared chain).
+    this.planner =
+      options.planner ??
+      new Planner(options.modelProvider ? { modelProvider: options.modelProvider } : {});
+    this.taskJudge =
+      options.taskJudge ??
+      new TaskJudge(options.modelProvider ? { modelProvider: options.modelProvider } : {});
     // Roll auxiliary model calls (planner / judge / auto-mode classifier)
     // into the run's token accounting. Their prompts are not part of the
     // conversation context, so they must not anchor its size estimate.

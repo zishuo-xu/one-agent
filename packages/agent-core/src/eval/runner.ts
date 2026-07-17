@@ -22,6 +22,7 @@ import {
 import { Plan } from '../planning/types.js';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
+import { MockProvider } from '../model/MockProvider.js';
 import { createConnection } from '../db/connection.js';
 import { ThreadStore } from '../db/threadStore.js';
 import { RunStore } from '../db/runStore.js';
@@ -82,17 +83,10 @@ export class EvalRunner {
       const tools = new ToolRegistry();
       tools.registerMany(createBuiltInTools(sandbox));
 
-      let originalCreate: typeof config.openai.chat.completions.create | undefined;
-      if (options.mode === 'mock') {
-        if (!task.mockResponses || task.mockResponses.length === 0) {
-          throw new Error(
-            `Task ${task.id} is missing mockResponses required for mock evaluation mode.`
-          );
-        }
-        originalCreate = config.openai.chat.completions.create;
-        config.openai.chat.completions.create = buildMockCreate(
-          task.mockResponses
-        ) as unknown as typeof config.openai.chat.completions.create;
+      if (options.mode === 'mock' && (!task.mockResponses || task.mockResponses.length === 0)) {
+        throw new Error(
+          `Task ${task.id} is missing mockResponses required for mock evaluation mode.`
+        );
       }
 
       // Persist this task's run in its own thread when tracing.
@@ -101,10 +95,15 @@ export class EvalRunner {
       const agent = new AgentLoop({
         tools,
         enablePlanning: task.enablePlanning ?? options.enablePlanning ?? false,
-        // Pin eval to the primary provider so a configured fallback chain
-        // never re-routes mock traffic ("Mock model exhausted" must surface
-        // as an error, not trigger a silent switch to a real endpoint).
-        modelProvider: new OpenAICompatibleProvider(config.openai, config.model),
+        // Mock mode replays deterministic responses through an injected
+        // provider — no global monkey-patching, so eval tasks are isolated
+        // and parallel-safe. Real mode pins the primary provider so a
+        // configured fallback chain never re-routes traffic ("Mock model
+        // exhausted" must surface as an error, not a silent switch).
+        modelProvider:
+          options.mode === 'mock'
+            ? new MockProvider(task.mockResponses!)
+            : new OpenAICompatibleProvider(config.openai, config.model),
         ...(threadId && traceDb ? { threadId, db: traceDb } : {}),
       });
 
@@ -126,12 +125,6 @@ export class EvalRunner {
         runId = run.runId;
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
-      } finally {
-        // Always restore the real model client so subsequent tasks or tests are not affected.
-        if (originalCreate) {
-          config.openai.chat.completions.create = originalCreate;
-          originalCreate = undefined;
-        }
       }
 
       const toolCalls = extractToolCalls(events);
@@ -240,18 +233,6 @@ export class EvalRunner {
       results,
     };
   }
-}
-
-function buildMockCreate(responses: MockChatCompletionResponse[]) {
-  let index = 0;
-  return async function mockCreate(_params: unknown, _options?: unknown) {
-    if (index >= responses.length) {
-      throw new Error(
-        `Mock model exhausted at response index ${index}; add more mockResponses to the eval task.`
-      );
-    }
-    return responses[index++] as unknown;
-  };
 }
 
 function countPlanSteps(plan: Plan): number {
