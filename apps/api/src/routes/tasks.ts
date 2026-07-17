@@ -183,6 +183,7 @@ export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
       taskQueue.off('cancelled', onCancelled as never);
       taskQueue.off('dead_letter', onDeadLetter as never);
       request.raw.off('close', cleanup);
+      clearInterval(heartbeat);
       reply.raw.end();
       resolve();
     };
@@ -193,6 +194,33 @@ export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
     taskQueue.on('cancelled', onCancelled as never);
     taskQueue.on('dead_letter', onDeadLetter as never);
     request.raw.on('close', cleanup);
+
+    // Keep idle connections alive and let the server notice dead peers:
+    // SSE comment heartbeat (intermediaries often drop silent streams).
+    const heartbeat = setInterval(() => {
+      reply.raw.write(': ping\n\n');
+    }, 25_000);
+
+    // Defense in depth: re-check terminal state after listener registration.
+    // Today the handler is synchronous between snapshot and registration, but
+    // if a future edit introduces an await in that gap, a terminal event
+    // could fire before the listeners exist — without this re-check the
+    // client would hang forever with no terminal frame.
+    const latest = taskQueue.get(id);
+    if (
+      latest &&
+      (latest.status === 'completed' ||
+        latest.status === 'failed' ||
+        latest.status === 'cancelled' ||
+        latest.status === 'dead_letter')
+    ) {
+      for (const event of latest.events.slice(task.events.length)) {
+        sse({ type: 'agent', event });
+      }
+      sse({ type: 'task', status: latest.status, reply: latest.reply, error: latest.error });
+      cleanup();
+      return;
+    }
 
     await promise;
   });

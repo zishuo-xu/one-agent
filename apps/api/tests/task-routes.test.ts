@@ -1,27 +1,55 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resetSharedConnection, SqliteTaskStore, getSharedConnection } from '@one-agent/agent-core';
+import {
+  resetSharedConnection,
+  SqliteTaskStore,
+  getSharedConnection,
+  config,
+  OpenAICompatibleProvider,
+} from '@one-agent/agent-core';
 import { buildServer } from '../src/server.js';
 
 const mockCreate = vi.fn();
 
-vi.mock('openai', () => ({
-  default: class MockOpenAI {
-    chat = {
-      completions: {
-        create: mockCreate,
-      },
-    };
-  },
-}));
+// vi.mock('openai') cannot reach the externalized workspace dist, so the
+// tests below used to run tasks against the REAL OpenAI client (401s),
+// masked by a vacuous waiter. Mutate the shared config object instead —
+// module-runner independent.
+const originalOpenai = config.openai;
+const originalProvider = config.modelProvider;
+
+function stubModelClient(): void {
+  config.openai = { chat: { completions: { create: mockCreate } } } as never;
+  config.modelProvider = new OpenAICompatibleProvider(config.openai as never, config.model);
+}
+
+async function waitForStatus(
+  server: Awaited<ReturnType<typeof buildServer>>,
+  taskId: string,
+  expected: string
+): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const status = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
+      const actual = JSON.parse(status.body).status;
+      if (actual !== expected) {
+        throw new Error(`task ${taskId} is ${actual}, waiting for ${expected}`);
+      }
+    },
+    { timeout: 5000 }
+  );
+}
 
 describe('task routes', () => {
   beforeEach(() => {
     process.env.DATABASE_PATH = ':memory:';
     resetSharedConnection();
     mockCreate.mockReset();
+    stubModelClient();
   });
 
   afterEach(() => {
+    config.openai = originalOpenai;
+    config.modelProvider = originalProvider;
     resetSharedConnection();
   });
 
@@ -52,13 +80,39 @@ describe('task routes', () => {
     });
     const { taskId } = JSON.parse(created.body);
 
-    await vi.waitFor(
-      async () => {
-        const status = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
-        return JSON.parse(status.body).status === 'completed';
-      },
-      { timeout: 1000 }
-    );
+    await waitForStatus(server, taskId, 'completed');
+  });
+
+  it('GET /api/tasks/:id/events streams agent events and a terminal frame', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'Hello from SSE' } }],
+    } as never);
+
+    const server = await buildServer();
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/tasks',
+      payload: { message: 'Hi' },
+    });
+    const { taskId } = JSON.parse(created.body);
+
+    await waitForStatus(server, taskId, 'completed');
+
+    const response = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}/events` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    // Agent events are replayed, then the terminal task frame closes the stream.
+    expect(response.body).toContain('"type":"agent"');
+    expect(response.body).toContain('"type":"task"');
+    expect(response.body).toContain('"status":"completed"');
+    expect(response.body).toContain('Hello from SSE');
+  });
+
+  it('GET /api/tasks/:id/events returns 404 for unknown tasks', async () => {
+    const server = await buildServer();
+    const response = await server.inject({ method: 'GET', url: '/api/tasks/nope/events' });
+    expect(response.statusCode).toBe(404);
   });
 
   it('GET /api/tasks returns all tasks', async () => {
@@ -154,13 +208,7 @@ describe('task routes', () => {
     const retryBody = JSON.parse(retryResponse.body);
     expect(retryBody.status).toBe('pending');
 
-    await vi.waitFor(
-      async () => {
-        const status = await server.inject({ method: 'GET', url: `/api/tasks/${taskId}` });
-        return JSON.parse(status.body).status === 'completed';
-      },
-      { timeout: 2000 }
-    );
+    await waitForStatus(server, taskId, 'completed');
   });
 
   it('POST /api/tasks returns the same taskId for the same idempotencyKey', async () => {
