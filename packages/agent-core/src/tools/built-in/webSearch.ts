@@ -22,9 +22,13 @@ export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
     execute: async (args) => {
       const { query, limit = 5 } = args as { query: string; limit?: number };
 
+      // Provider chain: configured API (Tavily/Brave/generic) → DuckDuckGo
+      // HTML scraping as the zero-config fallback. The old third leg
+      // (DuckDuckGo Instant Answer) was removed: api.duckduckgo.com returns
+      // 200 with an empty body to Node's TLS fingerprint, so it never
+      // actually worked from this runtime.
       const results = await searchWithConfigApi(query, limit) ??
-        (await searchDuckDuckGoHtml(query, limit)) ??
-        (await searchDuckDuckGoInstantAnswer(query, limit));
+        (await searchDuckDuckGoHtml(query, limit));
 
       if (!results || results.length === 0) {
         return {
@@ -262,59 +266,6 @@ function extractRealUrl(rawUrl: string): string {
     }
   }
   return rawUrl;
-}
-
-async function searchDuckDuckGoInstantAnswer(query: string, limit: number): Promise<SearchResult[] | null> {
-  try {
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
-
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'one-agent/1.0',
-      },
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = await response.json() as {
-      AbstractText?: string;
-      AbstractURL?: string;
-      Heading?: string;
-      RelatedTopics?: Array<{
-        Text?: string;
-        FirstURL?: string;
-      }>;
-    };
-
-    const results: SearchResult[] = [];
-
-    if (data.AbstractText && data.AbstractURL) {
-      results.push({
-        title: data.Heading || query,
-        snippet: data.AbstractText,
-        url: data.AbstractURL,
-      });
-    }
-
-    for (const topic of data.RelatedTopics ?? []) {
-      if (topic.Text && topic.FirstURL) {
-        results.push({
-          title: topic.Text.split(' - ')[0] ?? topic.Text,
-          snippet: topic.Text,
-          url: topic.FirstURL,
-        });
-      }
-      if (results.length >= limit) break;
-    }
-
-    return results.length > 0 ? results : null;
-  } catch {
-    return null;
-  }
 }
 
 function normalizeSearchResults(data: unknown, limit: number): SearchResult[] | null {

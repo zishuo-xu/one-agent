@@ -23,6 +23,7 @@
 | Phase 12：多模型抽象层 | ✅ | `ModelProvider` 接口、`OpenAICompatibleProvider`、`FallbackProvider` 主备切换 |
 | Phase 13：工具生态扩展 | ✅ | `run_command` Shell 工具、`append_file`/`delete_file`/`search_files`、`DISABLED_TOOLS` |
 | Phase 14：Eval+Trace 联动 | ✅ | eval trace 持久化、[FAIL]/[PASS] 标记、JSON 数据集独立管理、trace-web 失败现场 |
+| Phase 15：子 Agent | ✅ | SubAgentRunner、spawn_agent 工具、delegate/parallel 波次并行、只读约束、递归阻断 |
 
 ---
 
@@ -55,7 +56,7 @@
    已实现。`built-in/index.ts` 通过 `loadBuiltInFactories()` 动态扫描目录，自动加载所有 `default export` 的工具工厂，新增工具只需添加文件即可。
 
 3. **文件工具增强** ✅  
-   - ✅ `web_search`：调用 DuckDuckGo Instant Answer API 搜索网络，无需 API key，适合获取当前不在 workspace 中的信息
+   - ✅ `web_search`：网络搜索。优先走 `SEARCH_API_URL` 配置（Tavily/Brave，推荐），未配置时回退 DuckDuckGo HTML 抓取（免 key、低频可用、突发会限流）；Instant Answer 兜底已移除（对 Node TLS 指纹返回空 body，从未生效）
    - ✅ `append_file`：追加内容
    - ✅ `delete_file`：删除文件（workspace 限定，拒目录/路径穿越）
    - ✅ `search_files`：按文件名通配 + 内容子串搜索 workspace（跳过 node_modules/.git/dist）
@@ -247,9 +248,12 @@
 - `docs/phase12-multi-model.md`
 - `docs/phase13-tool-ecosystem.md`
 - `docs/phase14-eval-trace.md`
+- `docs/phase15-sub-agents.md`
+- `docs/phase16-sub-agent-observability.md`
 - `docs/cli-interaction-improvements.md`
 - `docs/cli-ux-optimization.md`
 - `docs/correctness-fixes.md`
+- `docs/fixes-functional-test-2026-07.md`
 - `SIMPLIFIED_AGENT_PROJECT_ROADMAP.md`
 
 ---

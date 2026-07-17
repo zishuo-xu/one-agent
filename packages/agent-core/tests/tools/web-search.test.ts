@@ -37,36 +37,26 @@ describe('web_search tool', () => {
     expect(result.results[1].url).toBe('https://nodejs.org/en/download/');
   });
 
-  it('falls back to Instant Answer when HTML search returns no results', async () => {
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        text: async () => '<html></html>',
-        json: async () => ({}),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        text: async () => '',
-        json: async () => ({
-          AbstractText: 'JavaScript is a programming language.',
-          AbstractURL: 'https://example.com/js',
-          Heading: 'JavaScript',
-          RelatedTopics: [
-            { Text: 'JavaScript - MDN Web Docs', FirstURL: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript' },
-          ],
-        }),
-      });
+  it('returns empty results when HTML search finds nothing (no Instant Answer leg anymore)', async () => {
+    // The DuckDuckGo Instant Answer fallback was removed: api.duckduckgo.com
+    // answers Node requests with a 200 + empty body, so it never worked.
+    // An empty HTML page must therefore yield the empty-result response
+    // directly, without any second provider call.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '<html></html>',
+      json: async () => ({}),
+    });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
 
     const tool = createWebSearchTool(new Sandbox('/tmp'));
     const result = await tool.execute({ query: 'JavaScript', limit: 2 });
 
-    expect(result.results).toHaveLength(2);
-    expect(result.results[0].url).toBe('https://example.com/js');
+    expect(result.results).toHaveLength(0);
+    expect(result.summary).toContain('No useful results');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it('returns empty result when all search backends fail', async () => {
