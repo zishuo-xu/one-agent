@@ -104,7 +104,7 @@ export class PlanningLoop implements LoopStrategy {
               rootCause: 'One or more sub-steps failed.',
               recommendation: 'Replan the affected sub-steps or provide a fallback.',
             };
-            this.reasoningChain.addFailureAnalysis(failureAnalysis);
+            this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
             const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
             if (judge.complete || judge.nextAction === 'finalize') {
               return this.finalizeAnswer();
@@ -254,7 +254,7 @@ export class PlanningLoop implements LoopStrategy {
       rootCause: `Sub-agent failed: ${result.error ?? 'unknown'}`,
       recommendation: 'Retry the delegated step or replan with a different decomposition.',
     };
-    this.reasoningChain.addFailureAnalysis(failureAnalysis);
+    this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
     const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
     if (judge.complete || judge.nextAction === 'finalize') {
       return { next: 'final' };
@@ -332,7 +332,7 @@ export class PlanningLoop implements LoopStrategy {
    * so later steps and the final answer can build on it.
    */
   private async executeDelegatedStep(step: PlanStep, plan: Plan): Promise<SubAgentResult> {
-    this.reasoningChain.setCurrentPlanStepId(step.id);
+
     const allowedTools = step.parallel ? READ_ONLY_DELEGATION_TOOLS : undefined;
 
     const planSummary = plan.steps.map((s) => `${s.id}. ${s.description}`).join('; ');
@@ -349,8 +349,9 @@ export class PlanningLoop implements LoopStrategy {
       result.success
         ? `Delegated step completed: ${result.reply.slice(0, 200)}`
         : `Delegated step failed: ${result.error ?? 'unknown'}`,
+      step.id,
     );
-    this.reasoningChain.commitStep();
+    this.reasoningChain.commitStep(step.id);
 
     this.contextManager.addMessage({
       role: 'user',
@@ -368,7 +369,7 @@ export class PlanningLoop implements LoopStrategy {
     plan: Plan,
     runId?: string
   ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
-    this.reasoningChain.setCurrentPlanStepId(step.id);
+
 
     const constraint = this.resolveStepToolConstraint(step);
     const allowedToolNames = constraint.requiredTool
@@ -388,7 +389,7 @@ export class PlanningLoop implements LoopStrategy {
     // return generated text there (provider surfaces both separately).
     const thought = (response.content.trim() ? response.content : (response.reasoning ?? '')).trim();
     if (thought) {
-      this.reasoningChain.addThought(thought);
+      this.reasoningChain.addThought(thought, step.id);
       this.recorder.record({ type: 'thought', content: thought });
       this.contextManager.addMessage({ role: 'assistant', content: thought, internal: true });
     }
@@ -410,7 +411,7 @@ export class PlanningLoop implements LoopStrategy {
       });
 
       for (const call of toolCalls) {
-        this.reasoningChain.addAction(call);
+        this.reasoningChain.addAction(call, step.id);
         this.recorder.record({ type: 'tool_call', toolCall: call });
       }
 
@@ -437,7 +438,7 @@ export class PlanningLoop implements LoopStrategy {
           rootCause: `Step required ${this.formatExpectedTools(constraint)} but model used: ${toolCalls.map((c) => c.name).join(', ')}`,
           recommendation: 'Retry the step with the expected tool or replan if the tool set is insufficient.',
         };
-        this.reasoningChain.addFailureAnalysis(failureAnalysis);
+        this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
         step.status = 'failed';
         const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
         if (judge.complete || judge.nextAction === 'finalize') {
@@ -461,7 +462,7 @@ export class PlanningLoop implements LoopStrategy {
           this.checkSignal();
           result = await this.toolExecutor.execute(call);
         }
-        this.reasoningChain.addObservation(result);
+        this.reasoningChain.addObservation(result, step.id);
         this.recorder.record({ type: 'tool_result', toolResult: result });
         this.contextManager.addMessage({
           role: 'tool',
@@ -493,7 +494,7 @@ export class PlanningLoop implements LoopStrategy {
             rootCause: `Tool ${call.name} failed: ${result.error ?? 'unknown'}`,
             recommendation: 'Retry the tool call or replan to work around the failure.',
           };
-          this.reasoningChain.addFailureAnalysis(failureAnalysis);
+          this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
           const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
           if (judge.complete || judge.nextAction === 'finalize') {
             return { next: 'final' };
@@ -512,8 +513,7 @@ export class PlanningLoop implements LoopStrategy {
       }
     }
 
-    this.reasoningChain.commitStep();
-    this.reasoningChain.setCurrentPlanStepId(undefined);
+    this.reasoningChain.commitStep(step.id);
 
     // A step that satisfied a required-tool constraint was already validated
     // mechanically (deviation and tool failures are handled above), so skip

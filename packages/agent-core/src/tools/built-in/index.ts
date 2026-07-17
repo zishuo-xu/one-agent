@@ -1,8 +1,14 @@
-import { readdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import { Sandbox } from '../sandbox.js';
 import { ToolDefinition } from '../types.js';
+import { createReadFileTool } from './readFile.js';
+import { createWriteFileTool } from './writeFile.js';
+import { createAppendFileTool } from './appendFile.js';
+import { createDeleteFileTool } from './deleteFile.js';
+import { createSearchFilesTool } from './searchFiles.js';
+import { createListFilesTool } from './listFiles.js';
+import { createGetTimeTool } from './getTime.js';
+import { createRunCommandTool } from './shellExec.js';
+import { createWebSearchTool } from './webSearch.js';
 
 export { createReadFileTool } from './readFile.js';
 export { createWriteFileTool } from './writeFile.js';
@@ -12,11 +18,25 @@ export { createSearchFilesTool } from './searchFiles.js';
 export { createListFilesTool } from './listFiles.js';
 export { createGetTimeTool } from './getTime.js';
 export { createRunCommandTool } from './shellExec.js';
+export { createWebSearchTool } from './webSearch.js';
 
-const BUILT_IN_DIR = path.dirname(fileURLToPath(import.meta.url));
-const EXTENSION = path.extname(fileURLToPath(import.meta.url));
-
-const factories = await loadBuiltInFactories();
+/**
+ * Explicit factory list: deterministic order, bundler-safe, and a new tool
+ * is registered by adding one import + one line here (the previous
+ * read-our-own-directory scan did implicit, order-unstable discovery with a
+ * top-level await).
+ */
+const factories: Array<(sandbox: Sandbox) => ToolDefinition> = [
+  createReadFileTool,
+  createWriteFileTool,
+  createAppendFileTool,
+  createDeleteFileTool,
+  createListFilesTool,
+  createSearchFilesTool,
+  createGetTimeTool,
+  createRunCommandTool,
+  createWebSearchTool,
+];
 
 export function createBuiltInTools(sandbox: Sandbox): ToolDefinition[] {
   // Operators can disable tools by name (e.g. DISABLED_TOOLS=run_command,delete_file)
@@ -28,22 +48,4 @@ export function createBuiltInTools(sandbox: Sandbox): ToolDefinition[] {
   return factories
     .map((factory) => factory(sandbox))
     .filter((tool) => !disabled.includes(tool.name));
-}
-
-async function loadBuiltInFactories(): Promise<Array<(sandbox: Sandbox) => ToolDefinition>> {
-  const entries = await readdir(BUILT_IN_DIR);
-  const factories: Array<(sandbox: Sandbox) => ToolDefinition> = [];
-
-  for (const entry of entries) {
-    if (entry === `index${EXTENSION}`) continue;
-    if (!entry.endsWith(EXTENSION)) continue;
-
-    const moduleUrl = new URL(`./${entry}`, import.meta.url).href;
-    const mod = (await import(moduleUrl)) as { default?: (sandbox: Sandbox) => ToolDefinition };
-    if (typeof mod.default === 'function') {
-      factories.push(mod.default);
-    }
-  }
-
-  return factories;
 }

@@ -4,11 +4,9 @@ import { ReasoningChain } from '../../src/planning/ReasoningChain.js';
 describe('ReasoningChain', () => {
   it('records thought, action, observation', () => {
     const chain = new ReasoningChain();
-    chain.setCurrentPlanStepId('step-1');
-
-    chain.addThought('I need to read the file');
-    chain.addAction({ id: 'call_1', name: 'read_file', arguments: { path: 'a.txt' } });
-    chain.addObservation({ success: true, data: { content: 'hello' } });
+    chain.addThought('I need to read the file', 'step-1');
+    chain.addAction({ id: 'call_1', name: 'read_file', arguments: { path: 'a.txt' } }, 'step-1');
+    chain.addObservation({ success: true, data: { content: 'hello' } }, 'step-1');
 
     const steps = chain.getSteps();
     expect(steps).toHaveLength(1);
@@ -21,13 +19,11 @@ describe('ReasoningChain', () => {
   it('filters steps by plan step id', () => {
     const chain = new ReasoningChain();
 
-    chain.setCurrentPlanStepId('step-1');
-    chain.addThought('first');
-    chain.addObservation({ success: true });
+    chain.addThought('first', 'step-1');
+    chain.addObservation({ success: true }, 'step-1');
 
-    chain.setCurrentPlanStepId('step-2');
-    chain.addThought('second');
-    chain.addObservation({ success: true });
+    chain.addThought('second', 'step-2');
+    chain.addObservation({ success: true }, 'step-2');
 
     expect(chain.getStepsByPlanStep('step-1')).toHaveLength(1);
     expect(chain.getStepsByPlanStep('step-1')[0].thought).toBe('first');
@@ -36,11 +32,10 @@ describe('ReasoningChain', () => {
 
   it('commits partial steps with plan step id', () => {
     const chain = new ReasoningChain();
-    chain.setCurrentPlanStepId('step-1');
-    chain.addThought('I will think');
-    chain.commitStep();
-    chain.addReflection('Actually, reconsider');
-    chain.commitStep();
+    chain.addThought('I will think', 'step-1');
+    chain.commitStep('step-1');
+    chain.addReflection('Actually, reconsider', 'step-1');
+    chain.commitStep('step-1');
 
     expect(chain.getSteps()).toHaveLength(2);
     expect(chain.getSteps().every((s) => s.planStepId === 'step-1')).toBe(true);
@@ -48,14 +43,13 @@ describe('ReasoningChain', () => {
 
   it('records failure analysis', () => {
     const chain = new ReasoningChain();
-    chain.setCurrentPlanStepId('step-1');
     chain.addFailureAnalysis({
       category: 'plan_mismatch',
       affectedStepIds: ['step-1'],
       rootCause: 'Wrong tool',
       recommendation: 'Retry',
-    });
-    chain.commitStep();
+    }, 'step-1');
+    chain.commitStep('step-1');
 
     const steps = chain.getSteps();
     expect(steps).toHaveLength(1);
@@ -65,14 +59,13 @@ describe('ReasoningChain', () => {
 
   it('commits failure analysis immediately so the judge sees it, without leaking into the next step', () => {
     const chain = new ReasoningChain();
-    chain.setCurrentPlanStepId('step-1');
-    chain.addThought('trying the step');
+    chain.addThought('trying the step', 'step-1');
     chain.addFailureAnalysis({
       category: 'tool_failure',
       affectedStepIds: ['step-1'],
       rootCause: 'tool exploded',
       recommendation: 'Retry',
-    });
+    }, 'step-1');
 
     // Visible to getSteps() without an explicit commitStep().
     const steps = chain.getSteps();
@@ -81,9 +74,8 @@ describe('ReasoningChain', () => {
     expect(steps[0].planStepId).toBe('step-1');
 
     // The next step starts clean: no stale failure state leaks into it.
-    chain.setCurrentPlanStepId('step-2');
-    chain.addThought('fresh step');
-    chain.addObservation({ success: true });
+    chain.addThought('fresh step', 'step-2');
+    chain.addObservation({ success: true }, 'step-2');
     const all = chain.getSteps();
     expect(all).toHaveLength(2);
     expect(all[1].planStepId).toBe('step-2');

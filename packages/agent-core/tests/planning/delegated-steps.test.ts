@@ -141,6 +141,37 @@ describe('delegated plan steps', () => {
     }
   });
 
+  it('parallel wave steps record separate reasoning entries with correct attribution', async () => {
+    const plan: Plan = {
+      reasoning: 'attribution wave',
+      steps: [
+        { id: '1', description: 'parallel research alpha', status: 'pending', delegate: true, parallel: true },
+        { id: '2', description: 'parallel research beta', status: 'pending', delegate: true, parallel: true },
+      ],
+    };
+    const { agent } = makeAgent(plan);
+
+    mockCreate.mockImplementation(async (params: unknown) => {
+      const text = JSON.stringify((params as { messages: unknown }).messages);
+      if (text.includes('Your sub-task: parallel research alpha')) return textResponse('alpha result');
+      if (text.includes('Your sub-task: parallel research beta')) return textResponse('beta result');
+      return textResponse('final answer');
+    });
+
+    await agent.chat('run the wave');
+
+    // Concurrent steps write to separate buckets: each step's record is
+    // attributed to its own plan step and mentions its own result — never
+    // clobbered by the sibling running at the same time.
+    const chain = agent.getReasoningChain();
+    const alphaSteps = chain.getStepsByPlanStep('1');
+    const betaSteps = chain.getStepsByPlanStep('2');
+    expect(alphaSteps.length).toBeGreaterThan(0);
+    expect(betaSteps.length).toBeGreaterThan(0);
+    expect(alphaSteps.map((s) => s.thought).join(' ')).toContain('alpha result');
+    expect(betaSteps.map((s) => s.thought).join(' ')).toContain('beta result');
+  });
+
   it('marks a failed wave step, consults the judge once, and still finalizes', async () => {
     const plan: Plan = {
       reasoning: 'wave with failure',
