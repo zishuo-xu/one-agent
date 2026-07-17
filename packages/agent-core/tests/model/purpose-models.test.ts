@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 vi.mock('../../src/config.js', async () => {
   const { OpenAICompatibleProvider } = await import('../../src/model/OpenAICompatibleProvider.js');
@@ -23,12 +24,40 @@ import { Planner } from '../../src/planning/Planner.js';
 import { TaskJudge } from '../../src/planning/TaskJudge.js';
 import { MemoryExtractor } from '../../src/memory/MemoryExtractor.js';
 import { ContextManager } from '../../src/context/ContextManager.js';
+import { AgentLoop } from '../../src/agents/AgentLoop.js';
+import { ToolRegistry } from '../../src/tools/registry.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
 function lastCallModel(): string {
   const calls = mockCreate.mock.calls;
   return (calls[calls.length - 1][0] as { model: string }).model;
+}
+
+function callModel(index: number): string {
+  return (mockCreate.mock.calls[index][0] as { model: string }).model;
+}
+
+function spawnAgentResponse() {
+  return {
+    choices: [{
+      message: {
+        content: '',
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"sub job"}' } }],
+      },
+    }],
+  };
+}
+
+function makeAgentTools(): ToolRegistry {
+  const registry = new ToolRegistry();
+  registry.register({
+    name: 'echo',
+    description: 'Echo',
+    parameters: z.object({ message: z.string() }),
+    execute: (args: unknown) => args,
+  });
+  return registry;
 }
 
 describe('per-purpose model selection', () => {
@@ -93,5 +122,37 @@ describe('per-purpose model selection', () => {
     await new MemoryExtractor({ modelProvider: pinned }).extract('hi', 'hello');
 
     expect(lastCallModel()).toBe('pinned-model');
+  });
+
+  it('sub-agents default to the utility model while the parent stays on the main model', async () => {
+    mockCreate
+      // Parent decides to delegate.
+      .mockResolvedValueOnce(spawnAgentResponse() as never)
+      // Sub-agent answers.
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'sub done' } }] } as never)
+      // Parent wraps up.
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'wrapped' } }] } as never);
+
+    const agent = new AgentLoop({ tools: makeAgentTools() });
+    await agent.chat('delegate something');
+
+    expect(callModel(0)).toBe('default-model');
+    expect(callModel(1)).toBe('utility-model');
+    expect(callModel(2)).toBe('default-model');
+  });
+
+  it('an explicitly pinned provider propagates to sub-agents', async () => {
+    mockCreate
+      .mockResolvedValueOnce(spawnAgentResponse() as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'sub done' } }] } as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'wrapped' } }] } as never);
+
+    const { OpenAICompatibleProvider } = await import('../../src/model/OpenAICompatibleProvider.js');
+    const pinned = new OpenAICompatibleProvider(config.openai as never, 'pinned-model');
+    const agent = new AgentLoop({ tools: makeAgentTools(), modelProvider: pinned });
+    await agent.chat('delegate something');
+
+    expect(callModel(0)).toBe('pinned-model');
+    expect(callModel(1)).toBe('pinned-model');
   });
 });

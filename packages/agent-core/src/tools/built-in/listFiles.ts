@@ -14,7 +14,7 @@ export function createListFilesTool(sandbox: Sandbox): ToolDefinition {
       path: z
         .string()
         .optional()
-        .describe('Relative path to the directory within the workspace. Defaults to root.'),
+        .describe('Relative path to the directory within the workspace (e.g. "src"); never an absolute path. Defaults to root.'),
     }),
     execute: (args) => {
       const { path: dirPath = '' } = args as { path?: string };

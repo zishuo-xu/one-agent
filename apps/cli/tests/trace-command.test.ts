@@ -85,4 +85,58 @@ describe('trace command helpers', () => {
     printTraces([]);
     expect(logSpy).toHaveBeenCalledWith('No traces found.');
   });
+
+  it('groups consecutive per-token delta events into one summary line', () => {
+    const delta = (id: string, content: string, at: string): TraceEvent => ({
+      id,
+      runId: 'r1',
+      taskId: null,
+      threadId: 'th1',
+      eventType: 'message_delta',
+      eventData: { type: 'message_delta', content },
+      model: 'test',
+      createdAt: at,
+    });
+    const events: TraceEvent[] = [
+      delta('t1', 'Hel', '2026-07-13T10:00:00.000Z'),
+      delta('t2', 'lo', '2026-07-13T10:00:00.100Z'),
+      delta('t3', ' world', '2026-07-13T10:00:00.200Z'),
+      {
+        id: 't4',
+        runId: 'r1',
+        taskId: null,
+        threadId: 'th1',
+        eventType: 'message',
+        eventData: { type: 'message', content: 'Hello world' },
+        model: 'test',
+        createdAt: '2026-07-13T10:00:01.000Z',
+      },
+    ];
+
+    printTraces(events);
+
+    // 3 token rows collapse into 1 grouped line + 1 message line.
+    expect(logSpy).toHaveBeenCalledTimes(2);
+    expect(logSpy.mock.calls[0][0]).toContain('[message_delta]');
+    expect(logSpy.mock.calls[0][0]).toContain('× 3');
+    expect(logSpy.mock.calls[0][0]).toContain('Hello world');
+    expect(logSpy.mock.calls[1][0]).toContain('[message]');
+  });
+
+  it('verbose mode lifts the default trace limit', () => {
+    const events: TraceEvent[] = Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`,
+      runId: 'r1',
+      taskId: null,
+      threadId: 'th1',
+      eventType: 'message',
+      eventData: { type: 'message', content: `m${i}` },
+      model: 'test',
+      createdAt: '2026-07-13T10:00:00.000Z',
+    }));
+
+    printTraces(events, { verbose: true });
+
+    expect(logSpy).toHaveBeenCalledTimes(30);
+  });
 });

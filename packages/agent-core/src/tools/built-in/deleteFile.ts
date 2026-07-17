@@ -10,7 +10,7 @@ export function createDeleteFileTool(sandbox: Sandbox): ToolDefinition {
       'Delete a file within the workspace. The path is relative to the workspace root. ' +
       'Deletion is permanent; use with care. Directories cannot be deleted with this tool.',
     parameters: z.object({
-      path: z.string().describe('Relative path to the file within the workspace.'),
+      path: z.string().describe('Relative path to the file within the workspace (e.g. "REPORT.md" or "src/index.ts"); never an absolute path.'),
     }),
     execute: async (args) => {
       const { path: filePath } = args as { path: string };

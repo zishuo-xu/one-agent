@@ -43,6 +43,22 @@ describe('MemoryStore', () => {
     expect(ids).not.toContain(m3.id);
   });
 
+  it('retrieves relevant memories from unsegmented Chinese queries via bigrams', () => {
+    const m1 = store.create({ key: '最喜欢的编程语言', value: 'Rust' });
+    store.create({ key: '时区', value: '北京' });
+
+    // The F11 scenario: a full Chinese sentence with no spaces must still hit.
+    const relevant = store.getRelevantMemories('我最喜欢的编程语言是什么？');
+    const ids = relevant.map((m) => m.id);
+    expect(ids).toContain(m1.id);
+  });
+
+  it('does not match irrelevant Chinese memories', () => {
+    store.create({ key: '时区', value: '北京' });
+    const relevant = store.getRelevantMemories('我最喜欢的编程语言是什么？');
+    expect(relevant).toEqual([]);
+  });
+
   it('returns empty array for irrelevant or short queries', () => {
     store.create({ key: 'language', value: 'Chinese' });
     expect(store.getRelevantMemories('is it')).toEqual([]);

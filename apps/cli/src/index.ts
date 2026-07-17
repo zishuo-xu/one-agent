@@ -141,6 +141,9 @@ function createProgressIndicator(label = 'Thinking'): {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let index = 0;
   let currentLabel = label;
+  // Spinner frames redraw via carriage return; when stdout is not a TTY
+  // (piped/redirected) they pollute the output, so stay a no-op there.
+  const animated = Boolean(process.stdout.isTTY);
 
   const render = () => {
     process.stdout.write(`\r${frames[index]} ${currentLabel}...  `);
@@ -148,7 +151,7 @@ function createProgressIndicator(label = 'Thinking'): {
 
   return {
     start: () => {
-      if (interval) return;
+      if (interval || !animated) return;
       render();
       interval = setInterval(() => {
         index = (index + 1) % frames.length;

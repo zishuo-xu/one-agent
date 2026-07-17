@@ -11,10 +11,12 @@ const MAX_OUTPUT_CHARS = 10_000;
 const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 /**
- * Dangerous-command guardrail. This is a basic demonstration-level filter,
- * NOT a security boundary: a determined model can always construct commands
- * that evade pattern matching. The real trust model is "the agent acts with
- * the user's own permissions" — see docs/phase13-tool-ecosystem.md.
+ * Dangerous-command guardrail plus workspace containment. This is still NOT
+ * a hard security boundary — shell expansion ($(), backticks, variables)
+ * can smuggle paths past static inspection — but simple path references
+ * must stay inside the workspace, closing the demonstrated bypass vectors
+ * (cat ../x, cat /etc/passwd, cat ~/x). The real trust model is "the agent
+ * acts with the user's own permissions" — see docs/phase13-tool-ecosystem.md.
  */
 const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*\s+)?(-[a-zA-Z]*f[a-zA-Z]*\s+)?(\/|~|\$HOME)(\s|$)/, reason: 'recursive delete of root/home' },
@@ -32,6 +34,40 @@ function assertCommandSafe(command: string): void {
   for (const { pattern, reason } of BLOCKED_PATTERNS) {
     if (pattern.test(normalized)) {
       throw new Error(`Command blocked for safety (${reason}): ${command}`);
+    }
+  }
+}
+
+/**
+ * Workspace containment: reject commands whose path-like tokens escape the
+ * workspace root — `..` traversal segments, `~` home references, and
+ * absolute paths outside the root. Relative paths (including `./x`) and
+ * absolute paths inside the workspace are allowed.
+ */
+const PATH_TOKEN_PATTERN = /(?:^|[\s|;&(='"`])((?:\/|~|\.\.?\/)[^\s|;&()'"]*)/g;
+/** A `..` path segment anywhere in the command (covers ../x, dir/../x, bare cd ..). */
+const DOTDOT_SEGMENT_PATTERN = /(?:^|[\s|;&(='"`/])\.\.(?:[\s|;&)'"`/]|$)/;
+
+function assertCommandContained(command: string, rootPath: string): void {
+  const blocked = (token: string): Error =>
+    new Error(
+      `Command blocked: path '${token}' escapes the workspace. ` +
+        'Use workspace-relative paths or the file tools instead.'
+    );
+
+  if (DOTDOT_SEGMENT_PATTERN.test(command)) {
+    throw blocked('..');
+  }
+  for (const match of command.matchAll(PATH_TOKEN_PATTERN)) {
+    const token = match[1];
+    if (token === '~' || token.startsWith('~/')) {
+      throw blocked(token);
+    }
+    if (token.startsWith('/')) {
+      const rootWithSep = rootPath.endsWith('/') ? rootPath : rootPath + '/';
+      if (token !== rootPath && !token.startsWith(rootWithSep)) {
+        throw blocked(token);
+      }
     }
   }
 }
@@ -87,6 +123,7 @@ export function createRunCommandTool(sandbox: Sandbox): ToolDefinition {
       'Use it for builds, tests, package installs, git operations, and general development tasks. ' +
       'Commands run with /bin/sh from the workspace root and time out after 30s by default. ' +
       'Dangerous commands (sudo, rm -rf /, disk formatting, piping remote scripts into a shell) are rejected. ' +
+      'Path references must stay inside the workspace: use relative paths; "..", "~", and absolute paths outside the workspace are rejected. ' +
       'Output longer than 10000 characters per stream is truncated.',
     parameters: z.object({
       command: z.string().describe('The shell command to execute, e.g. "ls -la" or "npm test".'),
@@ -101,6 +138,7 @@ export function createRunCommandTool(sandbox: Sandbox): ToolDefinition {
     execute: async (args) => {
       const { command, timeoutMs } = args as { command: string; timeoutMs?: number };
       assertCommandSafe(command);
+      assertCommandContained(command, sandbox.rootPath);
       const timeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const startedAt = Date.now();
       const outcome = await runShell(command, sandbox.rootPath, timeout);

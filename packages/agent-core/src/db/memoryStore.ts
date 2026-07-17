@@ -35,13 +35,38 @@ const STOP_WORDS = new Set([
   '和', '或', '与', '对', '为', '有', '没有', '不', '也', '就', '都',
 ]);
 
+/** Single CJK characters that carry no retrieval signal on their own. */
+const CJK_STOP_CHARS = new Set([
+  '的', '了', '在', '是', '我', '你', '他', '她', '和', '或',
+  '与', '对', '为', '有', '不', '也', '就', '都',
+]);
+
+const CJK_RUN_PATTERN = /[一-龥]+/g;
+
 function extractKeywords(query: string): string[] {
-  const words = query
-    .toLowerCase()
-    .replace(/[^\u4e00-\u9fa5a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 0 && !STOP_WORDS.has(w) && w.length >= 2);
-  return Array.from(new Set(words));
+  const cleaned = query.toLowerCase().replace(/[^一-龥a-z0-9\s]/g, ' ');
+  const keywords = new Set<string>();
+  for (const token of cleaned.split(/\s+/)) {
+    if (!token) continue;
+    // Latin/digit fragments keep the original whole-word behavior.
+    for (const word of token.split(/[一-龥]+/)) {
+      if (word.length >= 2 && !STOP_WORDS.has(word)) {
+        keywords.add(word);
+      }
+    }
+    // Unsegmented Chinese has no spaces: index CJK runs as sliding bigrams
+    // so LIKE substring matching can hit Chinese memory keys (a whole
+    // sentence as one keyword would never match).
+    for (const run of token.match(CJK_RUN_PATTERN) ?? []) {
+      for (let i = 0; i < run.length - 1; i++) {
+        const bigram = run.slice(i, i + 2);
+        if (STOP_WORDS.has(bigram)) continue;
+        if (CJK_STOP_CHARS.has(bigram[0]) && CJK_STOP_CHARS.has(bigram[1])) continue;
+        keywords.add(bigram);
+      }
+    }
+  }
+  return Array.from(keywords);
 }
 
 export class MemoryStore {

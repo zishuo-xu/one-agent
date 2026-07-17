@@ -59,4 +59,18 @@ describe('ThreadStore', () => {
     store.delete(thread.id);
     expect(store.getById(thread.id)).toBeUndefined();
   });
+
+  it('normalizes SQLite UTC wall-clock timestamps to explicit UTC ISO', () => {
+    // datetime('now') stores 'YYYY-MM-DD HH:MM:SS' (UTC, no zone marker);
+    // the mapper must expose an unambiguous ISO string so Date parsing
+    // is correct in any host timezone.
+    const before = Date.now();
+    const thread = store.create({ id: 'thread-utc' });
+    const after = Date.now();
+
+    expect(thread.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    const parsed = new Date(thread.createdAt).getTime();
+    expect(parsed).toBeGreaterThanOrEqual(before - 1000);
+    expect(parsed).toBeLessThanOrEqual(after + 1000);
+  });
 });

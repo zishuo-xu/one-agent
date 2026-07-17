@@ -87,6 +87,20 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       if (timeline.verbose) {
         timeline.onInfo(`\n[reflection] ${event.content.slice(0, 120)}\n`);
       }
+    } else if (event.type === 'sub_agent') {
+      // One-line progress for delegated sub-agents; details land in the trace.
+      const taskLabel = event.task.length > 60 ? `${event.task.slice(0, 60)}…` : event.task;
+      if (event.status === 'started') {
+        timeline.progress.setLabel('Sub-agent');
+        timeline.onInfo(`\n[sub-agent] ${taskLabel} … started\n`);
+      } else if (event.status === 'completed') {
+        const meta: string[] = [];
+        if (event.durationMs !== undefined) meta.push(`${(event.durationMs / 1000).toFixed(1)}s`);
+        if (event.tokenUsage) meta.push(`${event.tokenUsage.totalTokens} tokens`);
+        timeline.onInfo(`[sub-agent] ${taskLabel} … done${meta.length ? ` (${meta.join(' · ')})` : ''}\n`);
+      } else {
+        timeline.onInfo(`[sub-agent] ${taskLabel} … FAILED: ${event.error ?? 'unknown'}\n`);
+      }
     } else if (event.type === 'reasoning_delta') {
       // Stream reasoning live as part of the same continuous output -
       // no dimming, no separator, just continuous text like the answer.

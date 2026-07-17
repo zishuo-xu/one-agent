@@ -161,6 +161,65 @@ describe('Fix 1: default final answer streams from a single streaming completion
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('does not replay the reasoning buffer as a message_delta (no double print)', async () => {
+    mockCreate.mockResolvedValueOnce({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { reasoning_content: 'think-' } }] };
+        yield { choices: [{ delta: { reasoning_content: 'ing' } }] };
+      },
+    } as never);
+
+    const agent = new AgentLoop({ enablePlanning: false });
+    const messageDeltas: string[] = [];
+    const reasoningDeltas: string[] = [];
+    agent.on('event', (e: AgentLoopEvent) => {
+      if (e.type === 'message_delta') messageDeltas.push(e.content);
+      if (e.type === 'reasoning_delta') reasoningDeltas.push(e.content);
+    });
+
+    const { reply } = await agent.chat('Hi');
+    expect(reply).toBe('think-ing');
+    // The reasoning streamed once via reasoning_delta; no full-buffer
+    // message_delta replay may follow (that was the double-print bug).
+    expect(reasoningDeltas).toEqual(['think-', 'ing']);
+    expect(messageDeltas).toEqual([]);
+  });
+
+  it('ends a tool-loop at the iteration cap with a graceful wrap-up call instead of throwing', async () => {
+    const echoTool: ToolDefinition = {
+      name: 'echo',
+      description: 'Echo',
+      parameters: z.object({ message: z.string() }),
+      execute: (args: unknown) => ({ success: true, data: args }),
+    };
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'echo', arguments: '{"message":"one"}' } }] } }],
+      } as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'echo', arguments: '{"message":"two"}' } }] } }],
+      } as never)
+      // The wrap-up call (no tools offered) produces the final summary.
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'partial summary of findings' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, enablePlanning: false, maxToolIterations: 1 });
+    const { reply } = await agent.chat('keep using tools');
+
+    expect(reply).toBe('partial summary of findings');
+    // The wrap-up call must offer no tools and instruct the model to stop.
+    const wrapUpParams = mockCreate.mock.calls[2][0] as {
+      tools?: unknown[];
+      messages: unknown;
+    };
+    expect(wrapUpParams.tools).toBeUndefined();
+    expect(JSON.stringify(wrapUpParams.messages)).toContain('tool-call budget');
+  });
+
   it('accumulates fragmented tool-call deltas and executes the tool, then streams a final answer', async () => {
     const echoTool: ToolDefinition = {
       name: 'echo',
@@ -401,9 +460,10 @@ describe('Fix: executeStep without toolExecutor surfaces failure', () => {
     const events: AgentLoopEvent[] = [];
     agent.on('event', (e) => events.push(e));
 
-    // The loop exhausts tool iterations and throws - that is expected. What
-    // matters is that a failed tool_result was emitted along the way.
-    await expect(agent.chat('read something')).rejects.toThrow(/stopped after/);
+    // The loop exhausts its tool budget and ends with a graceful wrap-up
+    // call (no more throwing). What matters is that a failed tool_result
+    // was emitted along the way.
+    await agent.chat('read something');
 
     const toolResults = events.filter((e) => e.type === 'tool_result');
     expect(toolResults.length).toBeGreaterThan(0);

@@ -19,6 +19,17 @@ export interface PlanStep {
   parentId?: string;
   /** Optional nested substeps. */
   children?: PlanStep[];
+  /**
+   * Delegate this step to an isolated sub-agent with its own tool loop.
+   * Suited for self-contained subtasks that benefit from a focused agent.
+   */
+  delegate?: boolean;
+  /**
+   * May run in parallel with other parallel steps in the same wave.
+   * Parallel steps must be read-only (no file writes) and must not depend
+   * on each other's output. Implies delegate.
+   */
+  parallel?: boolean;
 }
 
 export interface Plan {
@@ -65,6 +76,4 @@ export interface JudgeOptions {
   model?: string;
   modelProvider?: ModelProvider;
   timeoutMs?: number;
-  maxReplanAttempts?: number;
-  maxRetryAttempts?: number;
 }

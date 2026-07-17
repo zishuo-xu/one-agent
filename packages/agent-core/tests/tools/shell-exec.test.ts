@@ -69,6 +69,45 @@ describe('run_command tool', () => {
     }
   });
 
+  it('blocks path references that escape the workspace', async () => {
+    const escaping = [
+      'cat ../secret.txt',
+      'cat ../../etc/passwd',
+      'cat dir/../../secret.txt',
+      'cd ..',
+      'ls ..',
+      'cat /etc/passwd',
+      'ls /tmp',
+      'cat ~/secrets.txt',
+      'cat ~',
+      'cat "../secret.txt"',
+      "cat '../secret.txt'",
+      'tar cf /tmp/x.tar .',
+    ];
+    for (const command of escaping) {
+      await expect(tool.execute({ command })).rejects.toThrow(/escapes the workspace/);
+    }
+  });
+
+  it('allows workspace-local path references', async () => {
+    const allowed = [
+      'ls',
+      'ls -la',
+      'cat ./notes.txt',
+      'find . -name "*.ts"',
+      'npm test',
+      'echo hi > out.txt',
+      'echo done 2>/dev/null',
+      `ls ${sandbox.rootPath}`,
+      `cat ${sandbox.rootPath}/notes.txt`,
+    ];
+    for (const command of allowed) {
+      // None of these should raise a containment error; they may fail for
+      // ordinary reasons (missing files), which is fine.
+      await expect(tool.execute({ command })).resolves.toBeDefined();
+    }
+  });
+
   it('truncates very large output', async () => {
     const result = (await tool.execute({ command: 'seq 1 500000' })) as {
       stdout: string;

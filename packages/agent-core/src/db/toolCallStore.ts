@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { PersistedToolCall, CreateToolCallInput } from './types.js';
+import { normalizeUtcDateTime } from './dateTime.js';
 
 interface ToolCallRow {
   id: string;
@@ -20,7 +21,7 @@ function rowToPersistedToolCall(row: ToolCallRow): PersistedToolCall {
     arguments: row.arguments ?? undefined,
     result: row.result ?? undefined,
     success: row.success === 1,
-    createdAt: row.created_at,
+    createdAt: normalizeUtcDateTime(row.created_at),
   };
 }
 

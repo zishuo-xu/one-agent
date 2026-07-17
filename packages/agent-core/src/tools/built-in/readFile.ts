@@ -11,7 +11,7 @@ export function createReadFileTool(sandbox: Sandbox): ToolDefinition {
       'The path is relative to the workspace root. ' +
       'Only allows text files such as .txt, .md, .json, .ts, .js.',
     parameters: z.object({
-      path: z.string().describe('Relative path to the file within the workspace.'),
+      path: z.string().describe('Relative path to the file within the workspace (e.g. "REPORT.md" or "src/index.ts"); never an absolute path.'),
     }),
     execute: (args) => {
       const { path } = args as { path: string };

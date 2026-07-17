@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { Message } from '../agents/types.js';
 import { PersistedMessage, messageToPersisted } from './types.js';
+import { normalizeUtcDateTime } from './dateTime.js';
 
 interface MessageRow {
   id: string;
@@ -22,7 +23,7 @@ function rowToPersistedMessage(row: MessageRow): PersistedMessage {
     content: row.content,
     toolCalls: row.tool_calls ?? undefined,
     toolCallId: row.tool_call_id ?? undefined,
-    createdAt: row.created_at,
+    createdAt: normalizeUtcDateTime(row.created_at),
   };
 }
 

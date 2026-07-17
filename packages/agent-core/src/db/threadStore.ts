@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { CreateThreadInput, Thread } from './types.js';
+import { normalizeUtcDateTime } from './dateTime.js';
 
 interface ThreadRow {
   id: string;
@@ -13,8 +14,8 @@ function rowToThread(row: ThreadRow): Thread {
   return {
     id: row.id,
     title: row.title,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: normalizeUtcDateTime(row.created_at),
+    updatedAt: normalizeUtcDateTime(row.updated_at),
   };
 }
 

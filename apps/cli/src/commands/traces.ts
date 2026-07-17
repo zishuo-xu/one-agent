@@ -45,6 +45,15 @@ export function formatTraceEvent(event: TraceEvent, verbose = false): string {
     case 'message_delta':
       summary = `message_delta: ${truncateWithEllipsis(String(eventData.content ?? ''), 80)}`;
       break;
+    case 'reasoning_delta':
+      summary = `reasoning_delta: ${truncateWithEllipsis(String(eventData.content ?? ''), 80)}`;
+      break;
+    case 'sub_agent': {
+      const status = String(eventData.status ?? '?');
+      const task = truncateWithEllipsis(String(eventData.task ?? ''), 60);
+      summary = `sub_agent ${status}: ${task}`;
+      break;
+    }
     case 'message':
       summary = `message: ${truncateWithEllipsis(String(eventData.content ?? ''), 80)}`;
       break;
@@ -56,7 +65,8 @@ export function formatTraceEvent(event: TraceEvent, verbose = false): string {
 }
 
 export function printTraces(events: TraceEvent[], options?: { limit?: number; verbose?: boolean }): void {
-  const limit = options?.limit ?? 20;
+  // Verbose lifts the default cap entirely; `?? 20` must not re-apply it.
+  const limit = options?.limit ?? (options?.verbose ? Number.MAX_SAFE_INTEGER : 20);
   const verbose = options?.verbose ?? false;
 
   if (events.length === 0) {
@@ -64,14 +74,65 @@ export function printTraces(events: TraceEvent[], options?: { limit?: number; ve
     return;
   }
 
-  const display = events.slice(-limit);
-  if (events.length > limit && !verbose) {
-    console.log(dim(`Showing last ${limit} of ${events.length} traces.`));
+  // Group consecutive same-type delta events first so per-token rows don't
+  // drown out the meaningful events (one row per group, like trace-web).
+  const grouped = groupDeltaEvents(events);
+  const display = grouped.slice(-limit);
+  if (grouped.length > limit) {
+    console.log(dim(`Showing last ${limit} of ${grouped.length} traces.`));
   }
 
-  for (const event of display) {
-    console.log(formatTraceEvent(event, verbose));
+  for (const item of display) {
+    if (isDeltaGroup(item)) {
+      console.log(formatDeltaGroup(item, verbose));
+    } else {
+      console.log(formatTraceEvent(item, verbose));
+    }
   }
+}
+
+interface DeltaGroup {
+  eventType: string;
+  count: number;
+  fullText: string;
+  startAt: string;
+  endAt: string;
+}
+
+function isDeltaGroup(item: TraceEvent | DeltaGroup): item is DeltaGroup {
+  return 'count' in item;
+}
+
+function groupDeltaEvents(events: TraceEvent[]): Array<TraceEvent | DeltaGroup> {
+  const grouped: Array<TraceEvent | DeltaGroup> = [];
+  let i = 0;
+  while (i < events.length) {
+    const event = events[i];
+    if (event.eventType === 'message_delta' || event.eventType === 'reasoning_delta') {
+      const type = event.eventType;
+      let fullText = '';
+      let endAt = event.createdAt;
+      let count = 0;
+      while (i < events.length && events[i].eventType === type) {
+        fullText += String((events[i].eventData as { content?: string }).content ?? '');
+        endAt = events[i].createdAt;
+        count++;
+        i++;
+      }
+      grouped.push({ eventType: type, count, fullText, startAt: event.createdAt, endAt });
+    } else {
+      grouped.push(event);
+      i++;
+    }
+  }
+  return grouped;
+}
+
+function formatDeltaGroup(group: DeltaGroup, verbose: boolean): string {
+  if (verbose) {
+    return `${group.startAt} [${group.eventType}] × ${group.count} chunks: ${group.fullText}`;
+  }
+  return `${dim(group.startAt)} [${cyan(group.eventType)}] × ${group.count}: ${truncateWithEllipsis(group.fullText, 80)}`;
 }
 
 export function printRunSummary(run: {

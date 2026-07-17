@@ -82,4 +82,30 @@ describe('AgentLoop memory integration', () => {
     const { reply: secondReply } = await secondAgent.chat('What language do I prefer?');
     expect(secondReply).toBe('You prefer Chinese.');
   });
+
+  it('recalls Chinese memories across threads (unsegmented query hits via bigrams)', async () => {
+    memoryStore.create({ key: '最喜欢的编程语言', value: 'Rust', source: 'extracted' });
+
+    const secondThread = threadStore.create({ id: 'thread-cjk' }).id;
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: '你最喜欢的编程语言是 Rust。' } }],
+    } as never);
+
+    const agent = new AgentLoop({
+      enablePlanning: false,
+      threadId: secondThread,
+      db,
+      memoryStore,
+    });
+
+    await agent.chat('我最喜欢的编程语言是什么？');
+
+    // The stored Chinese fact must be injected into the model call context.
+    const params = mockCreate.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const contextText = params.messages.map((m) => m.content).join('\n');
+    expect(contextText).toContain('最喜欢的编程语言');
+    expect(contextText).toContain('Rust');
+  });
 });

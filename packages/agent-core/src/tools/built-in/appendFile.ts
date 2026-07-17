@@ -12,7 +12,7 @@ export function createAppendFileTool(sandbox: Sandbox): ToolDefinition {
       'The path is relative to the workspace root. ' +
       'Creates the file and parent directories if they do not exist.',
     parameters: z.object({
-      path: z.string().describe('Relative path to the file within the workspace.'),
+      path: z.string().describe('Relative path to the file within the workspace (e.g. "REPORT.md" or "src/index.ts"); never an absolute path.'),
       content: z.string().describe('Content to append to the file.'),
     }),
     execute: async (args) => {

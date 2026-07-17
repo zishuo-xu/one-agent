@@ -24,6 +24,7 @@ export class MemoryExtractor {
       options.systemPrompt ??
       'You are a memory extractor. Given a user message and an assistant reply, extract concise key facts worth remembering for future conversations. ' +
       'Return ONLY a JSON array in this format, with no markdown, no explanation: [{"key": "fact name", "value": "fact content"}]. ' +
+      'Write keys in the same language as the user message (e.g. Chinese input → Chinese keys), so same-language queries can find them later. ' +
       'If there is nothing notable to remember, return [].';
     this.modelProvider =
       options.modelProvider ??
