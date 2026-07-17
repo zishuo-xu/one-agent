@@ -118,7 +118,8 @@
 
 | 问题 | 现象 | 未解决原因 | 严重程度 | 推荐下一步 |
 |------|------|-----------|----------|-----------|
-| web_search 真实召回率差 | DuckDuckGo 对多数查询返回空 | **外部环境阻塞**：无 Tavily/Brave API key | 🟠 高 | 配 `SEARCH_API_URL`/`SEARCH_API_KEY`；已加防重试指引缓解连锁反应 |
+| web_search 真实召回率差 | DuckDuckGo 对多数查询返回空 | ~~外部环境阻塞~~ **已解决（2026-07-17）**：配置 Tavily（`SEARCH_API_URL`/`SEARCH_API_KEY`）后实测中英查询均返回真实结果；s8 子 Agent 场景复测 224s→73s、4 连败→一次成功 | ✅ | — |
+| （根因补充）IA 兜底端点对 Node 失效 | `api.duckduckgo.com` 对 Node TLS 指纹返回 200 空 body（curl 正常），IA 兜底从未生效 | 外部服务反爬策略 | 🟡 中 | Tavily 已替代该路径；如需保留免费兜底可验证 lite.duckduckgo.com |
 | 波次共享 ReasoningChain 并发竞态 | 并行步骤 thought 互相覆盖、planStepId 归属不定 | 需重构 ambient currentStep 为 per-step builder，改动面较大 | 🟡 中 | 下批结构重构时处理（review P0-3） |
 | TaskQueue 崩溃恢复链路 | `restore()` 无人调用、恢复的 running 任务堵死并发槽 | 需定义恢复策略（requeue vs fail）并接线 API 启动路径 | 🟡 中 | 恢复策略明确后一并修（review P0-7） |
 | shellExec 子进程继承全部环境变量 | `run_command: env` 可读 OPENAI_API_KEY | 容器化已修路径、env scrub 未做 | 🟡 中（安全） | env 白名单 scrub；API 部署 DISABLED_TOOLS |
@@ -143,7 +144,7 @@
 | eval 评估 | ✅ 已验证可用（20/20） |
 | 多模型 failover | ✅ 已验证可用（主端点不可达自动切换） |
 | run_command 安全防护 | ⚠️ 部分可用（路径容器化已修；env 继承未 scrub；演示级 blocklist 立场见 phase13 文档） |
-| web_search | ⚠️ 环境阻塞（机制正常，DuckDuckGo 免费端点召回差，建议配 key） |
+| web_search | ✅ 已验证可用（Tavily 配置后中英查询实测返回真实结果，E2E 复测通过） |
 
 ---
 
