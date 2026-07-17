@@ -11,7 +11,9 @@ one-agent/
 │   ├── cli/        # 交互式 REPL CLI
 │   └── trace-web/  # 运行追踪可视化 Web 界面
 └── packages/
-    └── agent-core/  # Agent 核心：AgentLoop、配置、模型调用
+    └── agent-core/  # Agent 核心：AgentLoop 门面 + ModelCaller/RunRecorder +
+                     #   loops（simple/planning 双策略）、规划、工具、上下文、
+                     #   记忆、模型抽象、SQLite 持久化（详见 docs/architecture-refactor-2026-07.md）
 ```
 
 ## 环境准备
