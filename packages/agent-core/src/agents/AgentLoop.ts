@@ -24,6 +24,7 @@ import type { ModelProvider, ModelResponse, ModelToolCall, TokenUsage } from '..
 import { SubAgentRunner, SubAgentTask, SubAgentResult } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
 import { ModelCaller } from './ModelCaller.js';
+import { RunRecorder } from './RunRecorder.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -106,6 +107,7 @@ export class AgentLoop extends EventEmitter {
   private readonly taskJudge: TaskJudge;
   private readonly modelProvider: ModelProvider;
   private readonly modelCaller: ModelCaller;
+  private readonly recorder: RunRecorder;
   private readonly runStore?: RunStore;
   private readonly toolCallStore?: ToolCallStore;
   private readonly threadStore?: ThreadStore;
@@ -115,13 +117,8 @@ export class AgentLoop extends EventEmitter {
   private readonly awaitMemoryExtraction: boolean;
   private signal?: AbortSignal;
   private readonly taskId?: string;
-  private currentRunId?: string;
   private currentMemoryText?: string;
   private reasoningChain: ReasoningChain;
-  private events: AgentLoopEvent[] = [];
-  private tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-  /** Buffered streaming deltas awaiting one aggregated trace row per stream. */
-  private readonly deltaTraceBuffers = new Map<string, string[]>();
 
   constructor(options: AgentLoopOptions = {}) {
     super();
@@ -203,7 +200,7 @@ export class AgentLoop extends EventEmitter {
     // into the run's token accounting. Their prompts are not part of the
     // conversation context, so they must not anchor its size estimate.
     const trackAuxUsage = (usage?: TokenUsage) =>
-      this.accumulateUsage(usage, { trackPromptSize: false });
+      this.recorder.accumulateUsage(usage, { trackPromptSize: false });
     this.planner.onUsage = trackAuxUsage;
     this.taskJudge.onUsage = trackAuxUsage;
     this.reasoningChain = new ReasoningChain();
@@ -217,8 +214,8 @@ export class AgentLoop extends EventEmitter {
       timeoutMs: this.timeoutMs,
       maxRetries: this.maxRetries,
       signal: () => this.signal,
-      onUsage: (usage) => this.accumulateUsage(usage),
-      onDelta: (type, content) => this.emitEvent({ type, content }),
+      onUsage: (usage) => this.recorder.accumulateUsage(usage),
+      onDelta: (type, content) => this.recorder.record({ type, content }),
     });
 
     this.memoryStore = options.memoryStore;
@@ -232,14 +229,20 @@ export class AgentLoop extends EventEmitter {
       this.threadStore = options.threadStore ?? new ThreadStore(db);
       this.traceEventStore = options.traceEventStore ?? new TraceEventStore(db);
     }
+
+    // Constructed after the persistence stores so trace persistence is wired.
+    this.recorder = new RunRecorder({
+      traceEventStore: this.traceEventStore,
+      onEvent: (event) => this.emit('event', event),
+      onContextTokens: (promptTokens) => this.contextManager.updateLastKnownTokens(promptTokens),
+    });
   }
 
   async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
     this.signal = signal ?? this.signal;
     this.checkSignal();
     this.contextManager.addMessage({ role: 'user', content: message });
-    this.events = [];
-    this.tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    this.recorder.reset();
     this.reasoningChain = new ReasoningChain();
 
     // Recall relevant long-term memories and inject them into the context.
@@ -253,7 +256,6 @@ export class AgentLoop extends EventEmitter {
     }
 
     let runId: string | undefined;
-    this.currentRunId = undefined;
     if (this.threadId && this.runStore) {
       const run = this.runStore.create({
         threadId: this.threadId,
@@ -262,7 +264,7 @@ export class AgentLoop extends EventEmitter {
         status: 'running',
       });
       runId = run.id;
-      this.currentRunId = runId;
+      this.recorder.setRun({ runId, taskId: this.taskId, threadId: this.threadId });
     }
 
     try {
@@ -279,7 +281,7 @@ export class AgentLoop extends EventEmitter {
       }
       this.completeRun(runId);
       await this.persistMemories(message, result.reply);
-      const usage = this.tokenUsage.totalTokens > 0 ? this.tokenUsage : undefined;
+      const usage = this.recorder.getUsage();
       return { ...result, runId, tokenUsage: usage };
     } catch (error) {
       if (runId && this.runStore) {
@@ -288,9 +290,8 @@ export class AgentLoop extends EventEmitter {
       throw error;
     } finally {
       // Flush any buffered streaming deltas as one aggregated trace row per
-      // stream (must happen before currentRunId is cleared).
-      this.flushDeltaTraceBuffers();
-      this.currentRunId = undefined;
+      // stream, and clear run correlation.
+      this.recorder.endRun();
       this.currentMemoryText = undefined;
     }
   }
@@ -329,7 +330,7 @@ export class AgentLoop extends EventEmitter {
   }
 
   getEvents(): AgentLoopEvent[] {
-    return [...this.events];
+    return this.recorder.getEvents();
   }
 
   /**
@@ -358,17 +359,17 @@ export class AgentLoop extends EventEmitter {
         signal: this.signal,
       });
       if (response.usage) {
-        this.accumulateUsage(response.usage, { trackPromptSize: false });
+        this.recorder.accumulateUsage(response.usage, { trackPromptSize: false });
       }
       const verdict = response.content.trim().toLowerCase();
       const plan = verdict.startsWith('plan');
-      this.emitEvent({
+      this.recorder.record({
         type: 'thought',
         content: `Auto planning decision: ${plan ? 'plan' : 'direct'}`,
       });
       return plan;
     } catch {
-      this.emitEvent({
+      this.recorder.record({
         type: 'thought',
         content: 'Auto planning classifier failed; defaulting to plan',
       });
@@ -403,14 +404,14 @@ export class AgentLoop extends EventEmitter {
         });
 
         for (const call of calls) {
-          this.emitEvent({ type: 'tool_call', toolCall: call });
+          this.recorder.record({ type: 'tool_call', toolCall: call });
 
           if (!this.toolExecutor) {
             const result: ToolResult = {
               success: false,
               error: 'No tool executor available',
             };
-            this.emitEvent({ type: 'tool_result', toolResult: result });
+            this.recorder.record({ type: 'tool_result', toolResult: result });
             this.contextManager.addMessage({
               role: 'tool',
               content: JSON.stringify(result),
@@ -422,7 +423,7 @@ export class AgentLoop extends EventEmitter {
           }
 
           const result = await this.toolExecutor.execute(call);
-          this.emitEvent({ type: 'tool_result', toolResult: result });
+          this.recorder.record({ type: 'tool_result', toolResult: result });
           this.contextManager.addMessage({
             role: 'tool',
             content: JSON.stringify(result),
@@ -438,8 +439,8 @@ export class AgentLoop extends EventEmitter {
 
       // No tool calls: the answer was already streamed live above.
       this.contextManager.addMessage({ role: 'assistant', content });
-      this.emitEvent({ type: 'message', content });
-      return { reply: content, events: this.events };
+      this.recorder.record({ type: 'message', content });
+      return { reply: content, events: this.recorder.getEvents() };
     }
 
     // Tool budget exhausted: rather than throwing away everything the loop
@@ -456,13 +457,13 @@ export class AgentLoop extends EventEmitter {
     });
     const { content } = await this.modelCaller.completeStreaming({ includeTools: false });
     this.contextManager.addMessage({ role: 'assistant', content });
-    this.emitEvent({ type: 'message', content });
-    return { reply: content, events: this.events };
+    this.recorder.record({ type: 'message', content });
+    return { reply: content, events: this.recorder.getEvents() };
   }
 
   private async runPlanningLoop(userMessage: string, runId?: string, memories?: string): Promise<{ reply: string; events: AgentLoopEvent[] }> {
     let plan = await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memories);
-    this.emitEvent({ type: 'plan', plan });
+    this.recorder.record({ type: 'plan', plan });
 
     // Execution units: single steps run in the main agent; consecutive
     // delegate+parallel steps are grouped into waves that run concurrently
@@ -798,7 +799,7 @@ export class AgentLoop extends EventEmitter {
     const thought = (response.content.trim() ? response.content : (response.reasoning ?? '')).trim();
     if (thought) {
       this.reasoningChain.addThought(thought);
-      this.emitEvent({ type: 'thought', content: thought });
+      this.recorder.record({ type: 'thought', content: thought });
       this.contextManager.addMessage({ role: 'assistant', content: thought, internal: true });
     }
 
@@ -820,7 +821,7 @@ export class AgentLoop extends EventEmitter {
 
       for (const call of toolCalls) {
         this.reasoningChain.addAction(call);
-        this.emitEvent({ type: 'tool_call', toolCall: call });
+        this.recorder.record({ type: 'tool_call', toolCall: call });
       }
 
       const deviation = this.detectToolDeviation(toolCalls, constraint);
@@ -871,7 +872,7 @@ export class AgentLoop extends EventEmitter {
           result = await this.toolExecutor.execute(call);
         }
         this.reasoningChain.addObservation(result);
-        this.emitEvent({ type: 'tool_result', toolResult: result });
+        this.recorder.record({ type: 'tool_result', toolResult: result });
         this.contextManager.addMessage({
           role: 'tool',
           content: JSON.stringify(result),
@@ -998,9 +999,9 @@ export class AgentLoop extends EventEmitter {
     const { content } = await this.modelCaller.completeStreaming({ includeTools: false });
 
     this.contextManager.addMessage({ role: 'assistant', content });
-    this.emitEvent({ type: 'message', content });
+    this.recorder.record({ type: 'message', content });
 
-    return { reply: content, events: this.events };
+    return { reply: content, events: this.recorder.getEvents() };
   }
 
   private async replan(userMessage: string, currentPlan: Plan, failureAnalysis?: FailureAnalysis): Promise<Plan> {
@@ -1013,7 +1014,7 @@ export class AgentLoop extends EventEmitter {
           .map((s) => s.description)
           .join('; ')}`;
     this.reasoningChain.addReflection(reflection);
-    this.emitEvent({ type: 'reflection', content: reflection });
+    this.recorder.record({ type: 'reflection', content: reflection });
 
     const newPlan = await this.planner.createPlan(
       userMessage,
@@ -1022,7 +1023,7 @@ export class AgentLoop extends EventEmitter {
       currentPlan,
       failureAnalysis
     );
-    this.emitEvent({ type: 'plan', plan: newPlan });
+    this.recorder.record({ type: 'plan', plan: newPlan });
     return newPlan;
   }
 
@@ -1059,19 +1060,6 @@ export class AgentLoop extends EventEmitter {
       .join('\n');
   }
 
-  private accumulateUsage(usage?: TokenUsage, options?: { trackPromptSize?: boolean }): void {
-    if (!usage) return;
-    this.tokenUsage.promptTokens += usage.promptTokens;
-    this.tokenUsage.completionTokens += usage.completionTokens;
-    this.tokenUsage.totalTokens += usage.totalTokens;
-    // Feed the real prompt_tokens back to the context manager so it can use
-    // "last real + delta estimate" for the next compression decision. Only
-    // this loop's own model calls may anchor that estimate — see runSubAgent.
-    if (usage.promptTokens > 0 && options?.trackPromptSize !== false) {
-      this.contextManager.updateLastKnownTokens(usage.promptTokens);
-    }
-  }
-
   private toWireToolCalls(
     toolCalls: ModelToolCall[]
   ): Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> {
@@ -1099,15 +1087,15 @@ export class AgentLoop extends EventEmitter {
       };
     }
 
-    this.emitEvent({ type: 'sub_agent', task: task.task, status: 'started', stepId: task.stepId });
+    this.recorder.record({ type: 'sub_agent', task: task.task, status: 'started', stepId: task.stepId });
     const result = await this.subAgentRunner.run(task);
     if (result.tokenUsage) {
       // Roll the cost into the run totals, but never let the sub-agent's
       // (much smaller) prompt anchor this loop's context-size estimate —
       // that would understate the parent's size and skip summarization.
-      this.accumulateUsage(result.tokenUsage, { trackPromptSize: false });
+      this.recorder.accumulateUsage(result.tokenUsage, { trackPromptSize: false });
     }
-    this.emitEvent({
+    this.recorder.record({
       type: 'sub_agent',
       task: task.task,
       status: result.success ? 'completed' : 'failed',
@@ -1120,55 +1108,6 @@ export class AgentLoop extends EventEmitter {
       events: result.events,
     });
     return result;
-  }
-
-  private emitEvent(event: AgentLoopEvent): void {
-    this.events.push(event);
-    this.emit('event', event);
-
-    if (!this.traceEventStore) {
-      return;
-    }
-    if (event.type === 'message_delta' || event.type === 'reasoning_delta') {
-      // Per-token deltas get one aggregated trace row per stream instead of
-      // one row per token — a long answer would otherwise write thousands of
-      // rows (write amplification) and slow every trace query.
-      const buffer = this.deltaTraceBuffers.get(event.type) ?? [];
-      buffer.push(event.content);
-      this.deltaTraceBuffers.set(event.type, buffer);
-      return;
-    }
-    // Keep persisted order: buffered deltas happened before this event.
-    this.flushDeltaTraceBuffers();
-    this.persistTraceEvent(event);
-  }
-
-  /** Write buffered delta streams as one aggregated trace row each. */
-  private flushDeltaTraceBuffers(): void {
-    if (!this.traceEventStore || this.deltaTraceBuffers.size === 0) {
-      return;
-    }
-    for (const [type, chunks] of this.deltaTraceBuffers) {
-      if (chunks.length > 0) {
-        this.persistTraceEvent({ type, content: chunks.join('') } as AgentLoopEvent);
-      }
-    }
-    this.deltaTraceBuffers.clear();
-  }
-
-  private persistTraceEvent(event: AgentLoopEvent): void {
-    try {
-      this.traceEventStore!.create({
-        runId: this.currentRunId,
-        taskId: this.taskId,
-        threadId: this.threadId,
-        eventType: event.type,
-        eventData: event,
-        model: config.model,
-      });
-    } catch {
-      // Trace persistence should not break the main loop.
-    }
   }
 
   private checkSignal(): void {
