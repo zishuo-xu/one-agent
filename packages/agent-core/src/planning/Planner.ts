@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider } from '../model/types.js';
+import type { ModelProvider, TokenUsage } from '../model/types.js';
 import { ToolDefinition } from '../tools/types.js';
 import { Plan, PlanStep, PlannerOptions, FailureAnalysis } from './types.js';
 import { extractJsonObject } from './extractJson.js';
@@ -11,6 +11,8 @@ interface RawPlanStep {
   description: string;
   toolName?: string;
   expectedOutcome?: string;
+  delegate?: boolean;
+  parallel?: boolean;
   children?: RawPlanStep[];
 }
 
@@ -20,6 +22,8 @@ const planStepSchema: z.ZodType<RawPlanStep, z.ZodTypeDef, RawPlanStep> = z.lazy
     description: z.string(),
     toolName: z.string().optional(),
     expectedOutcome: z.string().optional(),
+    delegate: z.boolean().optional(),
+    parallel: z.boolean().optional(),
     children: z.array(planStepSchema).optional(),
   })
 );
@@ -33,6 +37,12 @@ export class Planner {
   private readonly systemPrompt: string;
   private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
+  /**
+   * Optional usage sink so the caller can roll planning-model spend into the
+   * run's token accounting (wired by AgentLoop; not part of the conversation
+   * context, so it never anchors the context-size estimate).
+   */
+  onUsage?: (usage: TokenUsage) => void;
 
   constructor(options: PlannerOptions = {}) {
     this.systemPrompt =
@@ -86,6 +96,17 @@ export class Planner {
       failureSection +
       '\nAvailable tools:\n' +
       `${toolDescriptions || '(none)'}\n\n` +
+      'Delegation:\n' +
+      '- Set "delegate": true on steps that are self-contained subtasks better executed by an isolated sub-agent with its own tool loop.\n' +
+      '- Set "parallel": true on delegated steps that are independent of each other, so they run in parallel.\n' +
+      '- Parallel steps MUST be read-only (no file writes or side effects) and MUST NOT depend on each other\'s output.\n' +
+      '- Use delegation sparingly; simple sequential steps need neither flag.\n\n' +
+      'Requirements fidelity:\n' +
+      '- If the request explicitly specifies an output file name or location (e.g. "write REPORT.md to the workspace root"), steps MUST use that exact name and location — never invent substitutes.\n' +
+      '- Intermediate results produced by earlier steps are available in the conversation context; do NOT assume they exist as files and do NOT plan steps to "find" them.\n\n' +
+      'Autonomy:\n' +
+      '- Never plan steps that wait for or request user input mid-plan; the plan must run to completion unattended.\n' +
+      '- If required information is missing and cannot be obtained with tools, make a reasonable assumption and note it in the final answer instead of stalling.\n\n' +
       'You must respond ONLY with a JSON object matching this exact format, no markdown, no explanation:\n' +
       '{\n' +
       '  "reasoning": "brief explanation of the plan",\n' +
@@ -95,6 +116,8 @@ export class Planner {
       '      "description": "what to do in this step",\n' +
       '      "toolName": "optional_tool_name",\n' +
       '      "expectedOutcome": "what should happen after this step",\n' +
+      '      "delegate": false,\n' +
+      '      "parallel": false,\n' +
       '      "children": [\n' +
       '        {\n' +
       '          "id": "1.1",\n' +
@@ -143,6 +166,9 @@ export class Planner {
       jsonMode: true,
       timeoutMs: this.timeoutMs,
     });
+    if (response.usage) {
+      this.onUsage?.(response.usage);
+    }
     return response.content || '{}';
   }
 
@@ -171,6 +197,8 @@ export class Planner {
       status: 'pending',
       toolName: step.toolName,
       expectedOutcome: step.expectedOutcome,
+      delegate: step.delegate,
+      parallel: step.parallel,
       parentId,
     };
     if (step.children && step.children.length > 0) {

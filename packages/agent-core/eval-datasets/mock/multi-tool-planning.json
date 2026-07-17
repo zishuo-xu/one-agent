@@ -55,15 +55,6 @@
       "choices": [
         {
           "message": {
-            "content": "{\"complete\":false,\"reasoning\":\"Need to read file.\",\"nextAction\":\"continue\"}"
-          }
-        }
-      ]
-    },
-    {
-      "choices": [
-        {
-          "message": {
             "content": "",
             "tool_calls": [
               {
@@ -75,15 +66,6 @@
                 }
               }
             ]
-          }
-        }
-      ]
-    },
-    {
-      "choices": [
-        {
-          "message": {
-            "content": "{\"complete\":true,\"reasoning\":\"Done.\",\"nextAction\":\"finalize\"}"
           }
         }
       ]

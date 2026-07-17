@@ -118,6 +118,8 @@ export class AgentLoop extends EventEmitter {
   private reasoningChain: ReasoningChain;
   private events: AgentLoopEvent[] = [];
   private tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  /** Buffered streaming deltas awaiting one aggregated trace row per stream. */
+  private readonly deltaTraceBuffers = new Map<string, string[]>();
 
   constructor(options: AgentLoopOptions = {}) {
     super();
@@ -195,6 +197,13 @@ export class AgentLoop extends EventEmitter {
 
     this.planner = options.planner ?? new Planner();
     this.taskJudge = options.taskJudge ?? new TaskJudge();
+    // Roll auxiliary model calls (planner / judge / auto-mode classifier)
+    // into the run's token accounting. Their prompts are not part of the
+    // conversation context, so they must not anchor its size estimate.
+    const trackAuxUsage = (usage?: TokenUsage) =>
+      this.accumulateUsage(usage, { trackPromptSize: false });
+    this.planner.onUsage = trackAuxUsage;
+    this.taskJudge.onUsage = trackAuxUsage;
     this.reasoningChain = new ReasoningChain();
 
     this.memoryStore = options.memoryStore;
@@ -264,6 +273,9 @@ export class AgentLoop extends EventEmitter {
       }
       throw error;
     } finally {
+      // Flush any buffered streaming deltas as one aggregated trace row per
+      // stream (must happen before currentRunId is cleared).
+      this.flushDeltaTraceBuffers();
       this.currentRunId = undefined;
       this.currentMemoryText = undefined;
     }
@@ -331,6 +343,9 @@ export class AgentLoop extends EventEmitter {
         timeoutMs: this.timeoutMs,
         signal: this.signal,
       });
+      if (response.usage) {
+        this.accumulateUsage(response.usage, { trackPromptSize: false });
+      }
       const verdict = response.content.trim().toLowerCase();
       const plan = verdict.startsWith('plan');
       this.emitEvent({
@@ -448,6 +463,12 @@ export class AgentLoop extends EventEmitter {
       const unit = units[currentUnitIndex];
 
       if (!unit) {
+        // All steps completed mechanically: finalize without spending a
+        // full-history judge call. The judge is still consulted for any
+        // incomplete/failed end state.
+        if (this.allStepsCompleted(plan.steps)) {
+          return this.finalizeAnswer();
+        }
         const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
         if (judge.complete || judge.nextAction === 'finalize') {
           return this.finalizeAnswer();
@@ -493,6 +514,16 @@ export class AgentLoop extends EventEmitter {
             }
             return this.finalizeAnswer();
           }
+        }
+
+        // Container step: its children already ran (post-order flatten) and
+        // none failed, so executing the parent as a regular step would just
+        // duplicate their work. Complete it and move on.
+        if (step.children && step.children.length > 0) {
+          step.status = 'completed';
+          retryAttempts = 0;
+          currentUnitIndex++;
+          continue;
         }
 
         step.status = 'running';
@@ -878,6 +909,14 @@ export class AgentLoop extends EventEmitter {
 
     this.reasoningChain.commitStep();
     this.reasoningChain.setCurrentPlanStepId(undefined);
+
+    // A step that satisfied a required-tool constraint was already validated
+    // mechanically (deviation and tool failures are handled above), so skip
+    // the judge call for it. Unconstrained steps still get a semantic check.
+    if (constraint.requiredTool) {
+      return { next: 'continue' };
+    }
+
     const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
 
     if (judge.complete || judge.nextAction === 'finalize') {
@@ -897,6 +936,13 @@ export class AgentLoop extends EventEmitter {
     const requiredTool = step.requiredTool ?? step.toolName;
     const strict = step.strict ?? (requiredTool !== undefined);
     return { requiredTool, allowedTools: step.allowedTools, strict };
+  }
+
+  /** Recursively check whether every step (including nested children) completed. */
+  private allStepsCompleted(steps: PlanStep[]): boolean {
+    return steps.every(
+      (s) => s.status === 'completed' && (!s.children || this.allStepsCompleted(s.children))
+    );
   }
 
   private detectToolDeviation(
@@ -1267,19 +1313,48 @@ export class AgentLoop extends EventEmitter {
     this.events.push(event);
     this.emit('event', event);
 
-    if (this.traceEventStore) {
-      try {
-        this.traceEventStore.create({
-          runId: this.currentRunId,
-          taskId: this.taskId,
-          threadId: this.threadId,
-          eventType: event.type,
-          eventData: event,
-          model: config.model,
-        });
-      } catch {
-        // Trace persistence should not break the main loop.
+    if (!this.traceEventStore) {
+      return;
+    }
+    if (event.type === 'message_delta' || event.type === 'reasoning_delta') {
+      // Per-token deltas get one aggregated trace row per stream instead of
+      // one row per token — a long answer would otherwise write thousands of
+      // rows (write amplification) and slow every trace query.
+      const buffer = this.deltaTraceBuffers.get(event.type) ?? [];
+      buffer.push(event.content);
+      this.deltaTraceBuffers.set(event.type, buffer);
+      return;
+    }
+    // Keep persisted order: buffered deltas happened before this event.
+    this.flushDeltaTraceBuffers();
+    this.persistTraceEvent(event);
+  }
+
+  /** Write buffered delta streams as one aggregated trace row each. */
+  private flushDeltaTraceBuffers(): void {
+    if (!this.traceEventStore || this.deltaTraceBuffers.size === 0) {
+      return;
+    }
+    for (const [type, chunks] of this.deltaTraceBuffers) {
+      if (chunks.length > 0) {
+        this.persistTraceEvent({ type, content: chunks.join('') } as AgentLoopEvent);
       }
+    }
+    this.deltaTraceBuffers.clear();
+  }
+
+  private persistTraceEvent(event: AgentLoopEvent): void {
+    try {
+      this.traceEventStore!.create({
+        runId: this.currentRunId,
+        taskId: this.taskId,
+        threadId: this.threadId,
+        eventType: event.type,
+        eventData: event,
+        model: config.model,
+      });
+    } catch {
+      // Trace persistence should not break the main loop.
     }
   }
 

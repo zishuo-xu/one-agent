@@ -1,9 +1,18 @@
 import { z } from 'zod';
 import { config } from '../config.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelProvider } from '../model/types.js';
+import type { ModelProvider, TokenUsage } from '../model/types.js';
 import { JudgeOptions, JudgeResult, Plan, ReasoningStep } from './types.js';
 import { extractJsonObject } from './extractJson.js';
+
+/** Cap for any single field serialized into the judge prompt. */
+const MAX_JUDGE_FIELD_CHARS = 800;
+
+function truncateForJudge(text: string): string {
+  return text.length > MAX_JUDGE_FIELD_CHARS
+    ? `${text.slice(0, MAX_JUDGE_FIELD_CHARS)}…[truncated]`
+    : text;
+}
 
 const failureAnalysisSchema = z.object({
   category: z.enum(['tool_failure', 'plan_mismatch', 'missing_info', 'wrong_args', 'other']),
@@ -27,6 +36,8 @@ export class TaskJudge {
   private readonly maxRetryAttempts: number;
   private replanAttempts = 0;
   private retryAttempts = 0;
+  /** Same usage-sink contract as Planner.onUsage (wired by AgentLoop). */
+  onUsage?: (usage: TokenUsage) => void;
 
   constructor(options: JudgeOptions = {}) {
     this.systemPrompt =
@@ -57,6 +68,9 @@ export class TaskJudge {
         jsonMode: true,
         timeoutMs: this.timeoutMs,
       });
+      if (response.usage) {
+        this.onUsage?.(response.usage);
+      }
 
       const raw = response.content || '{}';
       return this.parseResult(raw);
@@ -95,13 +109,15 @@ export class TaskJudge {
       .map((step) => `${step.id}. ${step.description} (${step.status})`)
       .join('\n');
 
+    // Judge calls resend the history every time; cap each field so large
+    // tool outputs (e.g. whole file contents) don't make the cost quadratic.
     const historyText = steps
       .map((step, index) => {
         const parts: string[] = [];
-        if (step.thought) parts.push(`Thought: ${step.thought}`);
-        if (step.action) parts.push(`Action: ${step.action.name}(${JSON.stringify(step.action.arguments)})`);
-        if (step.observation) parts.push(`Observation: ${JSON.stringify(step.observation)}`);
-        if (step.reflection) parts.push(`Reflection: ${step.reflection}`);
+        if (step.thought) parts.push(`Thought: ${truncateForJudge(step.thought)}`);
+        if (step.action) parts.push(`Action: ${step.action.name}(${truncateForJudge(JSON.stringify(step.action.arguments))})`);
+        if (step.observation) parts.push(`Observation: ${truncateForJudge(JSON.stringify(step.observation))}`);
+        if (step.reflection) parts.push(`Reflection: ${truncateForJudge(step.reflection)}`);
         return `Step ${index + 1}:\n${parts.join('\n')}`;
       })
       .join('\n\n');
@@ -129,6 +145,8 @@ export class TaskJudge {
         '}\n\n' +
         'Guidelines:\n' +
         '- complete=true when all plan steps are successfully done and the user request is satisfied.\n' +
+        '- The user request is NOT satisfied if its explicitly named final deliverable (e.g. a file it asked to create) was not produced exactly as named; choose replan in that case. Intermediate step results live in the execution history, not in files.\n' +
+        '- Do NOT choose replan just to ask the user for input or wait for clarification; when progress is impossible without it, choose finalize and state what is missing.\n' +
         '- nextAction=continue when more steps are needed.\n' +
         '- nextAction=replan when the current plan is not working.\n' +
         '- nextAction=retry when the last action failed but should be retried.\n' +

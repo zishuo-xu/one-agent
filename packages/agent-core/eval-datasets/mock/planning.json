@@ -53,15 +53,6 @@
       "choices": [
         {
           "message": {
-            "content": "{\"complete\":true,\"reasoning\":\"Done\",\"nextAction\":\"finalize\"}"
-          }
-        }
-      ]
-    },
-    {
-      "choices": [
-        {
-          "message": {
             "content": "Project status is green."
           }
         }

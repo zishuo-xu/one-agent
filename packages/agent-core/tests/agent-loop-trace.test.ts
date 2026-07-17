@@ -89,4 +89,29 @@ describe('AgentLoop trace persistence', () => {
     expect(traces.every((t) => t.taskId === 'task-trace-1')).toBe(true);
     expect(traces.every((t) => t.threadId === threadId)).toBe(true);
   });
+
+  it('persists streaming deltas as one aggregated row per stream instead of one row per token', async () => {
+    const threadId = threadStore.create({ id: 'thread-delta' }).id;
+
+    mockCreate.mockResolvedValueOnce({
+      [Symbol.asyncIterator]: async function* () {
+        yield { choices: [{ delta: { content: 'Hel' } }] };
+        yield { choices: [{ delta: { content: 'lo' } }] };
+        yield { choices: [{ delta: { content: ' world' } }] };
+      },
+    } as never);
+
+    const agent = new AgentLoop({ threadId, db, enablePlanning: false });
+    const { runId, reply } = await agent.chat('Hi');
+
+    expect(reply).toBe('Hello world');
+    const deltaTraces = traceStore
+      .getByRun(runId!)
+      .filter((t) => t.eventType === 'message_delta');
+    expect(deltaTraces).toHaveLength(1);
+    expect(JSON.stringify(deltaTraces[0].eventData)).toContain('Hello world');
+    // Non-delta events still persist individually and in order.
+    const traces = traceStore.getByRun(runId!);
+    expect(traces.some((t) => t.eventType === 'message')).toBe(true);
+  });
 });

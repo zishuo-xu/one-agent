@@ -112,6 +112,9 @@
 7. **推理链持久化** ✅  
    当前 reasoning chain 已随 run 持久化到 `agent_runs.reasoning_chain`。`ReasoningChain` 支持 `planStepId` 绑定，方便后续按 plan step 查询。
 
+8. **Judge 成本优化** ✅（2026-07-17，correctness-fixes 第九节）  
+   已实现。满足 `toolName` 约束且成功的步骤跳过 Judge（机械校验替代 LLM）；计划全部完成时收尾不再做全量历史判定；Judge prompt 各字段截断 800 字符消除二次方成本。planner/judge/分类器 usage 全部计入 `tokenUsage`（此前不记账，成本被低估）。层级计划父步骤容器化：children 完成后自动 completed，不再重复执行。
+
 ---
 
 ## 六、Phase 5 优化点
@@ -169,8 +172,8 @@
 1. **Trace 查询与可视化** ✅  
    已实现。新增 `GET /api/runs/:id/traces`、`GET /api/tasks/:id/traces`、`GET /api/threads/:id/traces` 路由，CLI 支持 `/traces` 与 `/traces <runId>` 命令查看事件流。另新增独立应用 `apps/trace-web`，可通过浏览器可视化展示 trace 时间线。详见 `docs/phase7-trace-evaluation.md`。
 
-2. **Trace 采样与清理**  
-   事件流增长很快。可支持按时间/任务/运行采样，或自动清理旧 trace。
+2. **Trace 采样与清理**（部分完成）  
+   ✅ 2026-07-17：delta 事件聚合写入（每流一行替代每 token 一行，消除写放大）。剩余：按时间/任务/运行采样，或自动清理旧 trace。
 
 3. **Evaluation 数据集扩展** ✅  
    已扩展到 20 个内置场景，覆盖 get_time、工具链(read→write)、规划失败重规划、禁止工具的纯知识回答等边界。数据集已迁移为独立 JSON 文件（`packages/agent-core/eval-datasets/`），支持 `--dataset <dir>` 加载外部数据集，zod 校验。

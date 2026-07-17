@@ -186,3 +186,41 @@
 
 - 新增/更新测试：`planning-agent-loop.test.ts` +3（replan 预算耗尽不伪装成功、偏离路径配对、跳过调用配对）、`ContextManager.test.ts` 改写 1 + 新增 1（失败不存错误串、下轮重试覆盖失败区间）、新增 `tests/db/migration.test.ts`（旧 schema 迁移 + 幂等去重 + 唯一约束生效）
 - `pnpm test` 全套 361 通过（agent-core 265 / cli 27 / api 60 / trace-web 9）；`pnpm eval` 30 通过；CLI eval 20/20（含 replan-scenario）
+
+---
+
+## 九、成本优化 A 区：Judge 调用、usage 记账、trace 写入（2026-07-17）
+
+**背景**：审查与功能测试确认规划模式 token 成本过高（Judge 每步全量历史重发 = 二次方成本；辅助调用不记账；trace 每 token 一行）。本批四项均为纯成本优化，不改变正确性语义。
+
+### 1. Judge 短路（A1）
+
+**修改**：
+- `executeStep`：满足 `toolName` 约束且成功的步骤已被工具约束机械校验，跳过 Judge；无约束步骤保留语义判定。
+- `runPlanningLoop` 计划收尾：全部步骤（递归含 children）completed 时直接 finalize，不再做一次全量历史 Judge 调用。失败/偏离路径的 Judge 全部保留。
+
+**效果**：受约束步骤占多数的规划运行中 Judge 调用归零（此前每步一次）。四个 planning 场景与 planning-agent-loop 测试的 mock 序列按新调用序重写（断言不变或加强）。
+
+### 2. Judge prompt 截断（A1 配套）
+
+**修改**：`TaskJudge.buildPrompt` 对 thought/action/observation/reflection 每个字段截断至 800 字符，消除"整个文件内容随每次判定重发"。
+
+### 3. 辅助调用 usage 全记账（A2）
+
+**修改**：`Planner`/`TaskJudge` 新增 `onUsage` 挂点，`AgentLoop` 构造时统一接线；auto 分类器直接记账。均以 `trackPromptSize: false` 累计（不进上下文估算锚点）。此前 planner/judge/分类器的 token 完全不计入 `tokenUsage`，成本被系统性低估。
+
+**测试**：planning-agent-loop 新增记账用例（110+220+330+440 精确断言总 token）。
+
+### 4. 层级计划父步骤容器化（A4）
+
+**修改**：后序执行中父步骤在 children 完成后自动 completed，不再作为普通步骤重复执行（此前嵌套计划双倍模型调用）。子步骤失败时的既有处理不变。
+
+**测试**：hierarchical 用例改为断言父步骤零工具调用完成（toolCalls 4→3）。
+
+### 5. trace delta 聚合写入（A3）
+
+**修改**：`emitEvent` 对 `message_delta`/`reasoning_delta` 在内存缓冲，遇非 delta 事件或 run 结束（finally）时按流合并为一行落库。此前每个 token 一行 SQLite 写入（长回答数千行），写放大且拖慢全部 trace 查询。实时事件流（emitter）不受影响。
+
+**测试**：agent-loop-trace 新增用例（3 个 token delta → 恰好 1 行聚合记录且内容完整）。
+
+**回归**：全套 381 测试 + eval 30 + build 全绿。

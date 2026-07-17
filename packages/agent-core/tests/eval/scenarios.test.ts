@@ -143,7 +143,7 @@ describe('EvalRunner built-in scenarios', () => {
     mockCreate
       .mockResolvedValueOnce(planResponse as never)
       .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_1', name: 'read_file', arguments: { path: 'data.txt' } }]) as never)
-      .mockResolvedValueOnce(judgeResponse as never)
+      // Successful constrained step: judge skipped; finalize directly.
       .mockResolvedValueOnce(createTextResponse('Project status is green.') as never);
 
     const runner = new EvalRunner();
@@ -286,9 +286,8 @@ describe('EvalRunner built-in scenarios', () => {
     mockCreate
       .mockResolvedValueOnce(planResponse as never)
       .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_1', name: 'list_files', arguments: {} }]) as never)
-      .mockResolvedValueOnce(continueJudge as never)
       .mockResolvedValueOnce(createToolCallResponse([{ id: 'call_2', name: 'read_file', arguments: { path: 'notes.txt' } }]) as never)
-      .mockResolvedValueOnce(finalizeJudge as never)
+      // Both steps constrained+successful: no judge calls this run.
       .mockResolvedValueOnce(createTextResponse('The notes mention finishing evaluation and adding idempotency.') as never);
 
     const runner = new EvalRunner();

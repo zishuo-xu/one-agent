@@ -85,6 +85,14 @@ function expectToolCallsPaired(history: Message[]) {
   }
 }
 
+/** Attach a usage report to a mock completion response. */
+function withUsage(response: unknown, prompt: number, completion: number) {
+  return {
+    ...(response as Record<string, unknown>),
+    usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion },
+  };
+}
+
 describe('AgentLoop with planning', () => {
   beforeEach(() => {
     mockCreate.mockReset();
@@ -115,7 +123,7 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      // Successful constrained step: judge is skipped (mechanically validated).
       .mockResolvedValueOnce({
         choices: [{ message: { content: 'Done: hello' } }],
       } as never);
@@ -223,7 +231,7 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      // Retry succeeded with the required tool: judge skipped, then finalize.
       .mockResolvedValueOnce({
         choices: [{ message: { content: 'Retry succeeded' } }],
       } as never);
@@ -272,7 +280,6 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
       .mockResolvedValueOnce({
         choices: [
           {
@@ -289,7 +296,6 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
       .mockResolvedValueOnce({
         choices: [
           {
@@ -306,7 +312,7 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      // All steps constrained+successful: no judge calls at all this run.
       .mockResolvedValueOnce({
         choices: [{ message: { content: 'Combined A and B' } }],
       } as never);
@@ -368,7 +374,7 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
+      // Retry succeeded with the required tool: judge skipped, then finalize.
       .mockResolvedValueOnce({
         choices: [{ message: { content: 'Echo done' } }],
       } as never);
@@ -418,7 +424,6 @@ describe('AgentLoop with planning', () => {
           },
         ],
       } as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
       .mockResolvedValueOnce({
         choices: [{ message: { content: 'Allowed tool done' } }],
       } as never);
@@ -487,26 +492,53 @@ describe('AgentLoop with planning', () => {
     mockCreate
       .mockResolvedValueOnce(hierarchicalPlan as never)
       .mockResolvedValueOnce(stepExecutionResponse('Searching.', 'echo', 'web') as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
       .mockResolvedValueOnce(stepExecutionResponse('Reading.', 'echo', 'results') as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
-      .mockResolvedValueOnce(stepExecutionResponse('Synthesizing.', 'echo', 'synthesis') as never)
-      .mockResolvedValueOnce(createJudgeResult(false, 'continue') as never)
       .mockResolvedValueOnce(stepExecutionResponse('Writing.', 'echo', 'summary') as never)
-      .mockResolvedValueOnce(createJudgeResult(true, 'finalize') as never)
       .mockResolvedValueOnce({ choices: [{ message: { content: 'Summary done' } }] } as never);
 
     const agent = new AgentLoop({ tools, enablePlanning: true });
     const { reply, events } = await agent.chat('Research and summarize');
 
     expect(reply).toBe('Summary done');
+    // Container steps do not execute: only the two children and step 2 run
+    // tools (the parent 'Research topic' completes once its children did).
     const toolCalls = events.filter((e) => e.type === 'tool_call');
-    expect(toolCalls).toHaveLength(4);
+    expect(toolCalls).toHaveLength(3);
     expect(toolCalls[0].toolCall.name).toBe('echo');
-    expect(toolCalls[3].toolCall.name).toBe('echo');
+    expect(toolCalls[2].toolCall.name).toBe('echo');
 
     const planEvent = events.find((e) => e.type === 'plan');
     expect(planEvent?.plan.steps[0].children).toHaveLength(2);
+    // Parent completed as a container — no redundant execution of its own.
+    expect(planEvent?.plan.steps[0].status).toBe('completed');
+    expect(planEvent?.plan.steps[1].status).toBe('completed');
+  });
+
+  it('rolls planner, judge, and execution usage into the run token accounting', async () => {
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+
+    mockCreate
+      // Planner call (unconstrained step so the judge still runs).
+      .mockResolvedValueOnce(
+        withUsage(createPlanResponse([{ id: '1', description: 'Just answer directly' }]), 100, 10) as never
+      )
+      // Step execution (no tool calls).
+      .mockResolvedValueOnce(
+        withUsage({ choices: [{ message: { content: 'No tools needed.' } }] }, 200, 20) as never
+      )
+      // Judge call (unconstrained step → still consulted).
+      .mockResolvedValueOnce(withUsage(createJudgeResult(true, 'finalize'), 300, 30) as never)
+      // Final answer.
+      .mockResolvedValueOnce(
+        withUsage({ choices: [{ message: { content: 'Done' } }] }, 400, 40) as never
+      );
+
+    const agent = new AgentLoop({ tools, enablePlanning: true });
+    const { tokenUsage } = await agent.chat('Accounting test');
+
+    // Every auxiliary call counts — not just the agent's own completions.
+    expect(tokenUsage?.totalTokens).toBe(110 + 220 + 330 + 440);
   });
 
   it('does not mark a failed step as completed when the replan budget is exhausted', async () => {
