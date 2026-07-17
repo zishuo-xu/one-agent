@@ -185,14 +185,19 @@ export class TaskQueue extends EventEmitter {
 
   restore(task: Task): void {
     if (this.tasks.has(task.id)) return;
+    // A task that was 'running' when the process died never finished:
+    // requeue it as pending rather than leaking its concurrency slot forever
+    // (with maxConcurrency=1 a leaked slot jams the whole queue).
+    if (task.status === 'running') {
+      this.store.setStatus(task.id, 'pending');
+      task = this.store.get(task.id)!;
+    }
     const abortController = new AbortController();
     this.tasks.set(task.id, { task, abortController });
     if (task.status === 'pending') {
       this.pending.push(task.id);
-    } else if (task.status === 'running') {
-      this.running.add(task.id);
+      this.emit('ready');
     }
-    this.emit('ready');
   }
 
   getRunningCount(): number {
