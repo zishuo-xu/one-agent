@@ -13,7 +13,8 @@ import { config } from '../../src/config.js';
 const source = [{ id: 'message-1', content: '以后请用中文回答我。', createdAt: '2026-07-18T10:00:00.000Z' }];
 const candidate = {
   key: '回答语言偏好',
-  value: '用户希望使用中文回答',
+  value: '中文',
+  evidence: '以后请用中文回答我',
   kind: 'user_preference',
   scope: 'global',
   confidence: 0.95,
@@ -36,6 +37,7 @@ describe('MemoryExtractor', () => {
     };
     expect(request.messages[1].content).toContain('message-1');
     expect(request.messages[1].content).toContain('以后请用中文回答我');
+    expect(request.messages[0].content).toContain('A question is not evidence of its answer');
   });
 
   it('accepts an empty array as a successful no-memory result', async () => {
@@ -69,5 +71,42 @@ describe('MemoryExtractor', () => {
       choices: [{ message: { content: JSON.stringify([{ ...candidate, sourceMessageId: 'invented' }]) } }],
     } as never);
     await expect(new MemoryExtractor().extract(source)).rejects.toThrow('Invalid memory candidate');
+  });
+
+  it('drops an inferred answer that is not literally grounded in the cited user message', async () => {
+    const question = [{
+      id: 'question-1',
+      content: '我偏好使用什么语言交流？',
+      createdAt: '2026-07-18T10:00:00.000Z',
+    }];
+    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify([{
+        ...candidate,
+        sourceMessageId: 'question-1',
+        evidence: '我偏好使用什么语言交流？',
+      }]) } }],
+    } as never);
+
+    await expect(new MemoryExtractor().extract(question)).resolves.toEqual([]);
+  });
+
+  it('supplies existing explicit memories so the model can avoid semantic duplicates', async () => {
+    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
+      choices: [{ message: { content: '[]' } }],
+    } as never);
+
+    await new MemoryExtractor().extract(source, [{
+      key: 'language_preference',
+      value: '中文',
+      kind: 'user_preference',
+      scope: 'global',
+      explicit: true,
+    }]);
+
+    const request = vi.mocked(config.openai.chat.completions.create).mock.calls[0][0] as {
+      messages: Array<{ content: string }>;
+    };
+    expect(request.messages[1].content).toContain('language_preference');
+    expect(request.messages[1].content).toContain('existingMemories');
   });
 });

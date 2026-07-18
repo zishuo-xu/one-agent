@@ -56,6 +56,7 @@ export function createManageMemoryTool(options: ManageMemoryToolOptions): ToolDe
       'Manage long-term memory only when the user explicitly asks to remember, correct, forget, ' +
       'or inspect it. Use a concise, stable key so later corrections target the same fact. ' +
       'remember/correct require key and value; forget requires the exact key; inspect may use query. ' +
+      'For remember/correct, keep value to the smallest literal fact stated by the user; do not paraphrase it. ' +
       'Use global for cross-conversation facts and thread only for facts limited to this conversation. ' +
       'Never store passwords, API keys, tokens, secrets, credentials, temporary requests, or tool output.',
     parameters: z.object({

@@ -5,6 +5,7 @@ import { ThreadStore } from '../db/threadStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryExtractor } from './MemoryExtractor.js';
 import type { AgentEvent } from '../agents/events.js';
+import type { Memory } from '../db/types.js';
 
 export interface MemoryConsolidationResult {
   threadId: string;
@@ -26,6 +27,29 @@ export interface MemoryConsolidatorOptions {
 }
 
 const SENSITIVE_PATTERN = /(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|密码|密钥|令牌)/i;
+
+function compact(value: string): string {
+  return value.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function equivalentLiteral(left: string, right: string): boolean {
+  const leftIsIdentifier = /^[a-z0-9]+$/.test(left);
+  const rightIsIdentifier = /^[a-z0-9]+$/.test(right);
+  if (leftIsIdentifier && rightIsIdentifier) return left === right;
+  return left.includes(right) || right.includes(left);
+}
+
+function isCoveredByExplicitMemory(
+  candidate: { value: string; scope: Memory['scope'] },
+  memories: Memory[],
+): boolean {
+  const candidateValue = compact(candidate.value);
+  return memories.some((memory) => {
+    if (!memory.explicit || memory.status !== 'active' || memory.scope !== candidate.scope) return false;
+    const existingValue = compact(memory.value);
+    return candidateValue.length > 0 && equivalentLiteral(existingValue, candidateValue);
+  });
+}
 
 /** Consolidates one complete thread at a time. Failed work stays unextracted. */
 export class MemoryConsolidator {
@@ -84,7 +108,14 @@ export class MemoryConsolidator {
     this.record(threadId, 'started', { messageCount: userMessages.length });
 
     try {
-      const candidates = await this.extractor.extract(userMessages);
+      const activeMemories = this.memoryStore.list({ status: 'active' })
+        .filter((memory) => memory.scope === 'global' || memory.threadId === threadId);
+      const candidates = await this.extractor.extract(
+        userMessages,
+        activeMemories.map(({ key, value, kind, scope, explicit }) => ({
+          key, value, kind, scope, explicit,
+        })),
+      );
       const sources = new Map(userMessages.map((message) => [message.id, message]));
       let writtenCount = 0;
       let rejectedCount = 0;
@@ -94,6 +125,10 @@ export class MemoryConsolidator {
         for (const candidate of candidates) {
           const sourceMessage = sources.get(candidate.sourceMessageId);
           if (!sourceMessage || SENSITIVE_PATTERN.test(`${candidate.key}\n${candidate.value}`)) {
+            rejectedCount++;
+            continue;
+          }
+          if (isCoveredByExplicitMemory(candidate, activeMemories)) {
             rejectedCount++;
             continue;
           }

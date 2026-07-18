@@ -56,7 +56,7 @@ describe('MemoryConsolidator', () => {
     expect(memoryExtractor.extract).toHaveBeenCalledWith([
       expect.objectContaining({ id: first.id, content: '我偏好中文回答' }),
       expect.objectContaining({ id: second.id, content: '项目使用 pnpm' }),
-    ]);
+    ], []);
     expect(threadStore.getById(thread.id)?.memoryExtracted).toBe(true);
     expect(memoryStore.list()).toEqual([
       expect.objectContaining({
@@ -168,5 +168,44 @@ describe('MemoryConsolidator', () => {
 
     expect(result).toMatchObject({ status: 'completed', rejectedCount: 1, writtenCount: 0 });
     expect(memoryStore.list()).toEqual([]);
+  });
+
+  it('does not duplicate an existing explicit memory with a shorter equivalent value', async () => {
+    const thread = threadStore.create({ id: 'thread-explicit-dedup' });
+    const source = messageStore.save(thread.id, {
+      role: 'user',
+      content: '请记住：我偏好使用中文交流。',
+    });
+    threadStore.updateTimestamp(thread.id);
+    memoryStore.remember({
+      key: 'language_preference',
+      value: '用户偏好使用中文交流',
+      kind: 'user_preference',
+      scope: 'global',
+      confidence: 1,
+      explicit: true,
+      source: 'explicit_user',
+    });
+    const memoryExtractor = extractor(async () => [{
+      key: 'communication_language',
+      value: '中文',
+      evidence: '我偏好使用中文交流',
+      kind: 'user_preference',
+      scope: 'global',
+      confidence: 0.95,
+      explicit: true,
+      sourceMessageId: source.id,
+    }]);
+
+    const result = await new MemoryConsolidator(db, {
+      extractor: memoryExtractor,
+    }).consolidateThread(thread.id);
+
+    expect(result).toMatchObject({ writtenCount: 0, rejectedCount: 1, markedExtracted: true });
+    expect(memoryStore.list({ status: 'active' })).toHaveLength(1);
+    expect(memoryExtractor.extract).toHaveBeenCalledWith(
+      expect.any(Array),
+      [expect.objectContaining({ key: 'language_preference', explicit: true })],
+    );
   });
 });

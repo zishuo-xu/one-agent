@@ -149,6 +149,7 @@ export { loadEvalDataset, resolveBundledDatasetDir } from './eval/datasetLoader.
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
 export type {
   ExtractedMemoryCandidate,
+  ExistingMemorySnapshot,
   MemorySourceMessage,
 } from './memory/MemoryExtractor.js';
 export { MemoryConsolidator } from './memory/MemoryConsolidator.js';
