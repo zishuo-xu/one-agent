@@ -220,6 +220,7 @@ function renderViewerPage(): string {
       --run: #f8fafc;
       --model_call: #06b6d4;
       --plan_step: #a78bfa;
+      --strategy_switch: #f59e0b;
       --warning: #f97316;
     }
     * { box-sizing: border-box; }
@@ -334,6 +335,7 @@ function renderViewerPage(): string {
     .event.run { border-left-color: var(--run); }
     .event.model_call { border-left-color: var(--model_call); }
     .event.plan_step { border-left-color: var(--plan_step); }
+    .event.strategy_switch { border-left-color: var(--strategy_switch); }
     .event-header {
       display: flex;
       align-items: center;
@@ -470,6 +472,7 @@ function renderViewerPage(): string {
     .timeline-seg.run { background: var(--run); }
     .timeline-seg.model_call { background: var(--model_call); }
     .timeline-seg.plan_step { background: var(--plan_step); }
+    .timeline-seg.strategy_switch { background: var(--strategy_switch); }
     /* Filter buttons */
     .filters {
       display: flex;
@@ -501,6 +504,7 @@ function renderViewerPage(): string {
     .filter-btn.run { border-color: var(--run); }
     .filter-btn.model_call { border-color: var(--model_call); }
     .filter-btn.plan_step { border-color: var(--plan_step); }
+    .filter-btn.strategy_switch { border-color: var(--strategy_switch); }
     /* Collapsible events */
     .event { cursor: pointer; }
     .event .event-full { display: none; margin-top: 8px; }
@@ -731,6 +735,11 @@ function renderViewerPage(): string {
         }
         case 'plan_step':
           return { label: (d.stepId ?? '?') + ' · ' + (d.status ?? '?'), preview: d.failureAnalysis?.rootCause ?? '' };
+        case 'strategy_switch':
+          return {
+            label: (d.from ?? '?') + ' → ' + (d.to ?? '?'),
+            preview: d.reason ?? '',
+          };
         case 'thought':
           return { label: '', preview: (d.content ?? '').slice(0, 200) };
         case 'reflection':

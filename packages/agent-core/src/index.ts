@@ -4,6 +4,12 @@ export { AgentLoop } from './agents/AgentLoop.js';
 export type { AgentLoopOptions } from './agents/AgentLoop.js';
 export type { AgentEvent, AgentLoopEvent } from './agents/events.js';
 export type { AgentRunResult, RunContext } from './agents/RunContext.js';
+export { StrategyController } from './agents/StrategyController.js';
+export type {
+  StrategyControllerOptions,
+  StrategyDecision,
+  StrategySignal,
+} from './agents/StrategyController.js';
 export { AgentRuntime } from './runtime/AgentRuntime.js';
 export type {
   AgentRuntimeOptions,

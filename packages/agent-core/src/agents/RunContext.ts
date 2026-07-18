@@ -3,6 +3,7 @@ import type { RunCheckpoint } from './checkpoint.js';
 import type { AgentEvent } from './events.js';
 import type { UserInputRequest } from './requestUserInputTool.js';
 import type { ToolResult } from '../tools/types.js';
+import type { StrategyController, StrategySignal } from './StrategyController.js';
 
 export interface AgentRunResult {
   status: 'completed' | 'waiting_for_input';
@@ -17,7 +18,15 @@ export interface AgentRunResult {
   };
 }
 
-export type LoopResult =
+export interface StrategySwitchResult {
+  status: 'switch_strategy';
+  from: 'simple';
+  to: 'planning';
+  reason: string;
+  trigger: StrategySignal;
+}
+
+export type TerminalLoopResult =
   | { status: 'completed'; reply: string }
   | {
       status: 'waiting_for_input';
@@ -25,6 +34,8 @@ export type LoopResult =
       inputRequest: UserInputRequest;
       checkpoint: RunCheckpoint;
     };
+
+export type LoopResult = TerminalLoopResult | StrategySwitchResult;
 
 /**
  * Mutable data that belongs to exactly one user request.
@@ -41,6 +52,10 @@ export interface RunContext {
   signal?: AbortSignal;
   memoryText?: string;
   reasoning: ReasoningChain;
+  strategy?: {
+    controller: StrategyController;
+    switchCount: number;
+  };
   recovery?: {
     checkpoint: RunCheckpoint;
     resumedFromRunId: string;

@@ -36,6 +36,18 @@ export type AgentEvent =
     }
   | { type: 'thought'; content: string }
   | { type: 'reflection'; content: string }
+  | {
+      type: 'strategy_switch';
+      from: 'simple';
+      to: 'planning';
+      reason: string;
+      trigger: {
+        phase: 'before_tool_execution';
+        toolIteration: number;
+        toolCallNames: string[];
+        switchCount: number;
+      };
+    }
   | { type: 'tool_call'; toolCall: ToolCall; stepId?: string; attempt?: number }
   | {
       type: 'tool_policy';

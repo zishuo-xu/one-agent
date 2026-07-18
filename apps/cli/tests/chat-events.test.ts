@@ -99,6 +99,25 @@ describe('createChatEventHandler streaming', () => {
     expect(tlVerbose.infos.join('')).toContain('thinking');
   });
 
+  it('shows an in-run strategy switch without exposing internal reasoning', () => {
+    const tl = makeTimeline();
+    createChatEventHandler(tl).handler({
+      type: 'strategy_switch',
+      from: 'simple',
+      to: 'planning',
+      reason: 'multi-tool batch',
+      trigger: {
+        phase: 'before_tool_execution',
+        toolIteration: 0,
+        toolCallNames: ['read_file', 'write_file'],
+        switchCount: 1,
+      },
+    });
+    expect(tl.labels.at(-1)).toBe('Planning');
+    expect(tl.infos.join('')).toContain('[strategy] simple -> planning');
+    expect(tl.infos.join('')).not.toContain('multi-tool batch');
+  });
+
   it('empty deltas are not printed or counted', () => {
     const tl = makeTimeline();
     const { handler, result } = createChatEventHandler(tl);

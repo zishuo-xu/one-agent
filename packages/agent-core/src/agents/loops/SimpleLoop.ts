@@ -48,6 +48,26 @@ export class SimpleLoop implements LoopStrategy {
           name: tc.function.name,
           arguments: safeParseArgs(tc.function.arguments),
         }));
+        const inputCall = calls.find((call) => call.name === REQUEST_USER_INPUT_TOOL_NAME);
+        if (!inputCall && context.strategy) {
+          const trigger = {
+            phase: 'before_tool_execution' as const,
+            loop: 'simple' as const,
+            toolIteration: toolIterations,
+            toolCallNames: calls.map((call) => call.name),
+            switchCount: context.strategy.switchCount,
+          };
+          const decision = context.strategy.controller.evaluate(trigger);
+          if (decision.action === 'switch_to_planning') {
+            return {
+              status: 'switch_strategy',
+              from: 'simple',
+              to: 'planning',
+              reason: decision.reason,
+              trigger,
+            };
+          }
+        }
 
         this.contextManager.addMessage({
           role: 'assistant',
@@ -57,7 +77,6 @@ export class SimpleLoop implements LoopStrategy {
         });
 
         this.toolRunner.recordCalls(calls, { attempt: toolIterations });
-        const inputCall = calls.find((call) => call.name === REQUEST_USER_INPUT_TOOL_NAME);
         if (inputCall) {
           const result = await this.toolRunner.execute(inputCall, { runId, attempt: toolIterations });
           const inputRequest = readUserInputRequest(result);

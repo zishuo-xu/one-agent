@@ -73,6 +73,9 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       if (timeline.verbose) {
         timeline.onInfo(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
       }
+    } else if (event.type === 'strategy_switch') {
+      timeline.progress.setLabel('Planning');
+      timeline.onInfo(`\n[strategy] ${event.from} -> ${event.to}\n`);
     } else if (event.type === 'tool_call') {
       reasoningVisible = false;
       timeline.progress.setLabel('Working');

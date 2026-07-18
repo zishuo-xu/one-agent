@@ -39,7 +39,7 @@ import {
 } from './checkpoint.js';
 import type { AgentEvent } from './events.js';
 import type { AgentRunResult, RunContext } from './RunContext.js';
-import type { LoopResult } from './RunContext.js';
+import type { LoopResult, TerminalLoopResult } from './RunContext.js';
 import {
   REQUEST_USER_INPUT_SYSTEM_INSTRUCTION,
   REQUEST_USER_INPUT_TOOL_NAME,
@@ -50,6 +50,7 @@ import {
   ToolApprovalRequiredError,
   type ToolPolicy,
 } from '../tools/policy.js';
+import { StrategyController } from './StrategyController.js';
 
 export type { AgentLoopEvent } from './events.js';
 
@@ -84,6 +85,8 @@ export interface AgentLoopOptions {
   maxSubAgentDepth?: number;
   /** Runtime tool authorization policy. Omit to execute registered tools directly. */
   toolPolicy?: ToolPolicy;
+  /** In-run direct-to-planning transition policy. */
+  strategyController?: StrategyController;
 }
 
 interface ExecutionRecovery {
@@ -102,7 +105,7 @@ interface PreparedExecution {
 }
 
 interface ApprovalContinuation {
-  terminalResult?: LoopResult;
+  terminalResult?: TerminalLoopResult;
   approvedToolResult?: { stepId?: string; result: ToolResult };
 }
 
@@ -135,6 +138,7 @@ export class AgentLoop extends EventEmitter {
   private readonly simpleLoop: SimpleLoop;
   private readonly planningLoop: PlanningLoop;
   private readonly toolRunner: ToolRunner;
+  private readonly strategyController: StrategyController;
   private lastReasoningChain: ReasoningChain;
 
   constructor(options: AgentLoopOptions = {}) {
@@ -157,6 +161,7 @@ export class AgentLoop extends EventEmitter {
       options.timeoutMs ?? (typeof config.timeoutMs === 'number' ? config.timeoutMs : 30000);
     this.threadId = options.threadId;
     this.taskId = options.taskId;
+    this.strategyController = options.strategyController ?? new StrategyController();
     this.toolRegistry = options.tools;
     this.toolExecutor = this.toolRegistry ? new ToolExecutor(this.toolRegistry) : undefined;
     this.signal = options.signal;
@@ -485,7 +490,7 @@ export class AgentLoop extends EventEmitter {
     message: string,
     execution: PreparedExecution,
     recovery?: ExecutionRecovery,
-  ): Promise<LoopResult> {
+  ): Promise<TerminalLoopResult> {
     const approval = await this.continueApprovedTool(execution.runId, recovery);
     if (approval.terminalResult) return approval.terminalResult;
 
@@ -507,6 +512,10 @@ export class AgentLoop extends EventEmitter {
       signal: this.signal,
       memoryText,
       reasoning: execution.reasoning,
+      strategy:
+        !recovery && this.enablePlanning === 'auto' && loop === this.simpleLoop
+          ? { controller: this.strategyController, switchCount: 0 }
+          : undefined,
       recovery: recovery
         ? {
             checkpoint: recovery.checkpoint,
@@ -515,13 +524,46 @@ export class AgentLoop extends EventEmitter {
           }
         : undefined,
     };
+    const result = await this.runStrategy(loop, runContext, message, recovery);
+    if (result.status !== 'switch_strategy') return result;
+
+    this.recorder.record({
+      type: 'strategy_switch',
+      from: result.from,
+      to: result.to,
+      reason: result.reason,
+      trigger: {
+        phase: result.trigger.phase,
+        toolIteration: result.trigger.toolIteration,
+        toolCallNames: result.trigger.toolCallNames,
+        switchCount: result.trigger.switchCount + 1,
+      },
+    });
+    const planningResult = await this.runStrategy(
+      this.planningLoop,
+      { ...runContext, strategy: undefined },
+      message,
+      recovery,
+    );
+    if (planningResult.status === 'switch_strategy') {
+      throw new Error('PlanningLoop cannot request another strategy switch.');
+    }
+    return planningResult;
+  }
+
+  private async runStrategy(
+    loop: LoopStrategy,
+    runContext: RunContext,
+    message: string,
+    recovery?: ExecutionRecovery,
+  ): Promise<LoopResult> {
     try {
       return await loop.run(runContext);
     } catch (error) {
       if (!(error instanceof ToolApprovalRequiredError)) throw error;
       const checkpoint = this.createApprovalCheckpoint(
         loop,
-        execution.runId,
+        runContext.runId,
         message,
         recovery,
         error.request,
@@ -536,7 +578,7 @@ export class AgentLoop extends EventEmitter {
   }
 
   /** Phase 3: persist the terminal lifecycle state and build the public result. */
-  private finalizeRun(execution: PreparedExecution, result: LoopResult): AgentRunResult {
+  private finalizeRun(execution: PreparedExecution, result: TerminalLoopResult): AgentRunResult {
     const usage = this.recorder.getUsage();
     if (result.status === 'waiting_for_input') {
       // The model's tool-call message remains internal, but the actual

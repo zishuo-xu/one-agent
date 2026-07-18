@@ -5,6 +5,9 @@ import { TaskJudge } from '../src/planning/TaskJudge.js';
 import { Planner } from '../src/planning/Planner.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
+import { createConnection } from '../src/db/connection.js';
+import { ThreadStore } from '../src/db/threadStore.js';
+import { TraceEventStore } from '../src/db/traceEventStore.js';
 import { z } from 'zod';
 
 vi.mock('../src/config.js', () => ({
@@ -96,6 +99,58 @@ describe('AgentLoop auto planning', () => {
     expect(reply).toBe('Planned answer.');
     expect(createPlan).toHaveBeenCalledTimes(1);
     expect(events.some((e) => e.type === 'plan')).toBe(true);
+  });
+
+  it('upgrades a direct verdict to planning before a multi-tool batch executes', async () => {
+    const db = createConnection({ path: ':memory:' });
+    const threadId = new ThreadStore(db).create({ id: 'adaptive-strategy-thread' }).id;
+    const execute = vi.fn((args: unknown) => args);
+    const tools = new ToolRegistry();
+    tools.register({ ...echoTool, execute });
+    const planner = new Planner();
+    const createPlan = vi.spyOn(planner, 'createPlan').mockResolvedValue({
+      steps: [],
+      reasoning: 'The runtime detected multi-tool coordination.',
+    } as never);
+
+    mockCreate
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'direct' } }] } as never)
+      .mockResolvedValueOnce({ choices: [{ message: {
+        content: '',
+        tool_calls: [
+          { id: 'call-1', function: { name: 'echo', arguments: '{"message":"one"}' } },
+          { id: 'call-2', function: { name: 'echo', arguments: '{"message":"two"}' } },
+        ],
+      } }] } as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'Planned after runtime escalation.' } }] } as never);
+
+    const agent = new AgentLoop({ threadId, db, tools, enablePlanning: 'auto', planner });
+    const result = await agent.chat('Handle both operations');
+
+    expect(result.reply).toBe('Planned after runtime escalation.');
+    expect(execute).not.toHaveBeenCalled();
+    expect(createPlan).toHaveBeenCalledTimes(1);
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'strategy_switch',
+        from: 'simple',
+        to: 'planning',
+        trigger: expect.objectContaining({
+          phase: 'before_tool_execution',
+          toolCallNames: ['echo', 'echo'],
+          switchCount: 1,
+        }),
+      }),
+    ]));
+    const persistedSwitch = new TraceEventStore(db)
+      .getByRun(result.runId!)
+      .find((event) => event.eventType === 'strategy_switch');
+    expect(persistedSwitch?.eventData).toMatchObject({
+      type: 'strategy_switch',
+      from: 'simple',
+      to: 'planning',
+    });
+    db.close();
   });
 
   it('auto mode defaults to planning when the classifier call fails', async () => {
