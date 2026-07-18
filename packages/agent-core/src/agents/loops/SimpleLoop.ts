@@ -5,6 +5,7 @@ import {
   REQUEST_USER_INPUT_TOOL_NAME,
 } from '../requestUserInputTool.js';
 import { safeParseArgs } from './utils.js';
+import { ToolApprovalRequiredError } from '../../tools/policy.js';
 
 /**
  * The direct tool loop: stream a completion, execute any tool calls, loop
@@ -86,6 +87,24 @@ export class SimpleLoop implements LoopStrategy {
           }
           toolIterations++;
           continue;
+        }
+
+        try {
+          this.toolRunner.preflight(calls, { attempt: toolIterations });
+        } catch (error) {
+          if (error instanceof ToolApprovalRequiredError) {
+            this.toolRunner.recordResult(error.call, {
+              success: false,
+              data: { status: 'awaiting_approval', requestId: error.request.id },
+            }, { attempt: toolIterations, status: 'awaiting_approval' });
+            for (const skipped of calls.filter((call) => call.id !== error.call.id)) {
+              this.toolRunner.recordResult(skipped, {
+                success: false,
+                error: 'Skipped: another tool call is waiting for approval.',
+              }, { attempt: toolIterations, status: 'skipped' });
+            }
+          }
+          throw error;
         }
 
         for (const call of calls) {

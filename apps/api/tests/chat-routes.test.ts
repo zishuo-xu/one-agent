@@ -152,6 +152,48 @@ describe('chat routes', () => {
     });
   });
 
+  it('requires runtime approval for a dangerous tool and supports rejection', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: {
+        content: '',
+        tool_calls: [{
+          id: 'delete-api',
+          type: 'function',
+          function: {
+            name: 'delete_file',
+            arguments: JSON.stringify({ path: 'must-not-be-deleted.txt' }),
+          },
+        }],
+      } }],
+    } as never);
+    const server = await buildServer();
+    const first = await server.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { message: 'Delete must-not-be-deleted.txt' },
+    });
+    const waiting = JSON.parse(first.body);
+
+    expect(waiting).toMatchObject({
+      status: 'waiting_for_input',
+      inputRequest: {
+        kind: 'tool_approval',
+        approval: { toolCall: { name: 'delete_file' } },
+      },
+    });
+
+    const rejected = await server.inject({
+      method: 'POST',
+      url: `/api/runs/${waiting.runId}/input`,
+      payload: { answer: 'reject' },
+    });
+    expect(rejected.statusCode).toBe(200);
+    expect(JSON.parse(rejected.body)).toMatchObject({
+      status: 'completed',
+      reply: 'Cancelled delete_file; the tool was not executed.',
+    });
+  });
+
   it('GET /api/threads lists threads', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'Hello' } }],

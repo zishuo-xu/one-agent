@@ -16,6 +16,7 @@ import {
   REQUEST_USER_INPUT_TOOL_NAME,
   type UserInputRequest,
 } from '../requestUserInputTool.js';
+import { ToolApprovalRequiredError } from '../../tools/policy.js';
 import {
   allPlanStepsCompleted,
   buildExecutionUnits,
@@ -81,6 +82,21 @@ export class PlanningLoop implements LoopStrategy {
     const recoveryCount = recoveryCheckpoint
       ? recoveryCheckpoint.recoveryCount + 1
       : 0;
+
+    const approvedTool = context.recovery?.approvedToolResult;
+    if (approvedTool?.stepId) {
+      const approvedStep = findPlanStep(plan.steps, approvedTool.stepId);
+      if (approvedStep) {
+        if (approvedTool.result.success) {
+          approvedStep.status = 'completed';
+          currentUnitIndex++;
+          context.reasoning.addObservation(approvedTool.result, approvedStep.id);
+          context.reasoning.commitStep(approvedStep.id);
+        } else {
+          approvedStep.status = 'pending';
+        }
+      }
+    }
 
     // A read-only tool that was interrupted can be regenerated safely. The
     // preflight in AgentLoop rejects every other active-tool policy.
@@ -514,6 +530,25 @@ export class PlanningLoop implements LoopStrategy {
           return { next: 'replan', failureAnalysis };
         }
         return { next: 'retry', failureAnalysis };
+      }
+
+      try {
+        this.toolRunner.preflight(toolCalls, { stepId: step.id });
+      } catch (error) {
+        if (error instanceof ToolApprovalRequiredError) {
+          this.toolRunner.recordResult(error.call, {
+            success: false,
+            data: { status: 'awaiting_approval', requestId: error.request.id },
+          }, { stepId: step.id, status: 'awaiting_approval' });
+          for (const skipped of toolCalls.filter((call) => call.id !== error.call.id)) {
+            this.toolRunner.recordResult(skipped, {
+              success: false,
+              error: 'Skipped: another tool call is waiting for approval.',
+            }, { stepId: step.id, status: 'skipped' });
+          }
+          this.setStepStatus(state, step, 'pending');
+        }
+        throw error;
       }
 
       for (let i = 0; i < toolCalls.length; i++) {

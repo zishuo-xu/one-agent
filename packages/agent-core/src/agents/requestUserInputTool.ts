@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { ToolDefinition, ToolResult } from '../tools/types.js';
+import type { ToolCall } from '../tools/types.js';
 
 export const REQUEST_USER_INPUT_TOOL_NAME = 'request_user_input';
 
@@ -9,9 +10,17 @@ export const REQUEST_USER_INPUT_SYSTEM_INSTRUCTION =
 
 export interface UserInputRequest {
   id: string;
+  /** Missing on v1 checkpoints; absence is treated as clarification. */
+  kind?: 'clarification' | 'tool_approval';
   question: string;
   options?: string[];
   createdAt: string;
+  approval?: {
+    toolCall: ToolCall;
+    fingerprint: string;
+    stepId?: string;
+    attempt?: number;
+  };
 }
 
 interface UserInputControlSignal {
@@ -35,6 +44,7 @@ export function createRequestUserInputTool(): ToolDefinition {
         control: 'waiting_for_input',
         request: {
           id: crypto.randomUUID(),
+          kind: 'clarification',
           question: input.question.trim(),
           options: input.options?.map((option) => option.trim()),
           createdAt: new Date().toISOString(),

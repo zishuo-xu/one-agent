@@ -43,6 +43,18 @@ export type {
 
 export { ToolRegistry } from './tools/registry.js';
 export { ToolExecutor } from './tools/executor.js';
+export {
+  DefaultToolPolicy,
+  ToolApprovalRequiredError,
+  fingerprintToolCall,
+  parseToolApprovalAnswer,
+} from './tools/policy.js';
+export type {
+  ToolPolicy,
+  ToolPolicyContext,
+  ToolPolicyDecision,
+  DefaultToolPolicyOptions,
+} from './tools/policy.js';
 export { Sandbox } from './tools/sandbox.js';
 export { createBuiltInTools, createGetTimeTool } from './tools/built-in/index.js';
 export type {

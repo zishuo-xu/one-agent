@@ -37,12 +37,22 @@ export type AgentEvent =
   | { type: 'reflection'; content: string }
   | { type: 'tool_call'; toolCall: ToolCall; stepId?: string; attempt?: number }
   | {
+      type: 'tool_policy';
+      toolCallId: string;
+      toolName: string;
+      decision: 'allow' | 'deny' | 'require_confirmation';
+      reason?: string;
+      approved?: boolean;
+      stepId?: string;
+      attempt?: number;
+    }
+  | {
       type: 'tool_result';
       toolResult: ToolResult;
       toolCallId?: string;
       stepId?: string;
       attempt?: number;
-      status?: 'succeeded' | 'failed' | 'rejected' | 'skipped';
+      status?: 'succeeded' | 'failed' | 'rejected' | 'skipped' | 'awaiting_approval';
       durationMs?: number;
     }
   | { type: 'reasoning_delta'; content: string }

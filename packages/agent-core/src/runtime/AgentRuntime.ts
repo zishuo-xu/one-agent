@@ -20,11 +20,13 @@ import {
 import { createBuiltInTools } from '../tools/built-in/index.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { Sandbox } from '../tools/sandbox.js';
+import { DefaultToolPolicy, type ToolPolicy } from '../tools/policy.js';
 
 export interface AgentRuntimeOptions {
   workspaceRoot: string;
   db?: Database.Database;
   tools?: ToolRegistry;
+  toolPolicy?: ToolPolicy;
 }
 
 export interface CreateRuntimeAgentOptions {
@@ -56,10 +58,12 @@ export class AgentRuntime {
     memories: MemoryStore;
   };
   readonly memory: MemoryConsolidator;
+  readonly toolPolicy: ToolPolicy;
 
   constructor(options: AgentRuntimeOptions) {
     this.db = options.db ?? getSharedConnection();
     this.tools = options.tools ?? this.createTools(options.workspaceRoot);
+    this.toolPolicy = options.toolPolicy ?? new DefaultToolPolicy();
     this.stores = {
       threads: new ThreadStore(this.db),
       messages: new MessageStore(this.db),
@@ -107,6 +111,7 @@ export class AgentRuntime {
       toolCallStore: this.stores.toolCalls,
       traceEventStore: this.stores.traces,
       memoryStore: this.stores.memories,
+      toolPolicy: options.userInput === false ? undefined : this.toolPolicy,
     });
   }
 

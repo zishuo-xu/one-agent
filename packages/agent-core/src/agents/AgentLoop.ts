@@ -39,10 +39,17 @@ import {
 } from './checkpoint.js';
 import type { AgentEvent } from './events.js';
 import type { AgentRunResult, RunContext } from './RunContext.js';
+import type { LoopResult } from './RunContext.js';
 import {
   REQUEST_USER_INPUT_SYSTEM_INSTRUCTION,
   REQUEST_USER_INPUT_TOOL_NAME,
 } from './requestUserInputTool.js';
+import type { UserInputRequest } from './requestUserInputTool.js';
+import {
+  parseToolApprovalAnswer,
+  ToolApprovalRequiredError,
+  type ToolPolicy,
+} from '../tools/policy.js';
 
 export type { AgentLoopEvent } from './events.js';
 
@@ -75,6 +82,17 @@ export interface AgentLoopOptions {
   subAgentDepth?: number;
   /** Maximum delegation depth before spawn_agent is withheld (default 1). */
   maxSubAgentDepth?: number;
+  /** Runtime tool authorization policy. Omit to execute registered tools directly. */
+  toolPolicy?: ToolPolicy;
+}
+
+interface ExecutionRecovery {
+  checkpoint: RunCheckpoint;
+  resumedFromRunId: string;
+  addUserMessage: false;
+  inputAnswer?: string;
+  inputRequestId?: string;
+  pendingInput?: UserInputRequest;
 }
 
 export class AgentLoop extends EventEmitter {
@@ -105,6 +123,7 @@ export class AgentLoop extends EventEmitter {
   private readonly taskId?: string;
   private readonly simpleLoop: SimpleLoop;
   private readonly planningLoop: PlanningLoop;
+  private readonly toolRunner: ToolRunner;
   private lastReasoningChain: ReasoningChain;
 
   constructor(options: AgentLoopOptions = {}) {
@@ -243,18 +262,20 @@ export class AgentLoop extends EventEmitter {
 
     // Execution strategies share one infrastructure bundle; adding a new
     // loop mode means a new LoopStrategy implementation, not surgery here.
+    this.toolRunner = new ToolRunner({
+      executor: this.toolExecutor,
+      contextManager: this.contextManager,
+      recorder: this.recorder,
+      checkSignal: () => this.checkSignal(),
+      persist: (runId, toolCall, result) => this.persistToolCall(runId, toolCall, result),
+      policy: options.toolPolicy,
+    });
     const infra: LoopInfrastructure = {
       contextManager: this.contextManager,
       modelCaller: this.modelCaller,
       recorder: this.recorder,
       toolRegistry: this.toolRegistry,
-      toolRunner: new ToolRunner({
-        executor: this.toolExecutor,
-        contextManager: this.contextManager,
-        recorder: this.recorder,
-        checkSignal: () => this.checkSignal(),
-        persist: (runId, toolCall, result) => this.persistToolCall(runId, toolCall, result),
-      }),
+      toolRunner: this.toolRunner,
       planner: this.planner,
       taskJudge: this.taskJudge,
       subAgentRunner: this.subAgentRunner,
@@ -356,15 +377,22 @@ export class AgentLoop extends EventEmitter {
     }
     this.signal = signal ?? this.signal;
     this.checkSignal();
+    const pendingInput = checkpoint.pendingInput;
+    if (pendingInput?.kind === 'tool_approval' && !parseToolApprovalAnswer(normalizedAnswer)) {
+      throw new Error('Tool approval requires an explicit approve or reject answer.');
+    }
     if (!this.runStore.claimWaiting(runId)) {
       throw new Error(`Run ${runId} was already continued or cancelled.`);
     }
+    const continuationCheckpoint = JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint;
+    delete continuationCheckpoint.pendingInput;
     return this.execute(checkpoint.originalMessage, signal, {
-      checkpoint,
+      checkpoint: continuationCheckpoint,
       resumedFromRunId: runId,
       addUserMessage: false,
       inputAnswer: normalizedAnswer,
-      inputRequestId: checkpoint.pendingInput.id,
+      inputRequestId: pendingInput.id,
+      pendingInput,
     });
   }
 
@@ -372,19 +400,14 @@ export class AgentLoop extends EventEmitter {
     if (!this.runStore || !this.threadId) return false;
     const run = this.runStore.getById(runId);
     if (!run || run.threadId !== this.threadId) return false;
-    return this.runStore.cancelWaiting(runId);
+    if (!this.runStore.cancelWaiting(runId)) return false;
+    return true;
   }
 
   private async execute(
     message: string,
     signal?: AbortSignal,
-    recovery?: {
-      checkpoint: RunCheckpoint;
-      resumedFromRunId: string;
-      addUserMessage: false;
-      inputAnswer?: string;
-      inputRequestId?: string;
-    },
+    recovery?: ExecutionRecovery,
   ): Promise<AgentRunResult> {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
@@ -425,6 +448,49 @@ export class AgentLoop extends EventEmitter {
     }
 
     try {
+      let approvedToolResult: { stepId?: string; result: ToolResult } | undefined;
+      const approval = recovery?.pendingInput?.approval;
+      if (recovery?.pendingInput?.kind === 'tool_approval' && approval) {
+        const decision = parseToolApprovalAnswer(recovery.inputAnswer ?? '');
+        if (decision === 'reject') {
+          const rejected: ToolResult = { success: false, error: 'Tool execution rejected by user.' };
+          this.toolRunner.recordResult(approval.toolCall, rejected, {
+            runId,
+            stepId: approval.stepId,
+            attempt: approval.attempt,
+            status: 'rejected',
+            persist: true,
+            contextMode: 'observation',
+          });
+          const reply = `Cancelled ${approval.toolCall.name}; the tool was not executed.`;
+          this.contextManager.addMessage({ role: 'assistant', content: reply });
+          this.recorder.record({ type: 'message', content: reply });
+          this.recorder.record({ type: 'run', phase: 'completed', durationMs: Date.now() - startedMs });
+          this.recorder.endRun();
+          this.completeRun(runId);
+          return {
+            status: 'completed', reply, events: this.recorder.getEvents(), runId,
+            tokenUsage: this.recorder.getUsage(),
+          };
+        }
+        const approvedCall: ToolCall = {
+          ...approval.toolCall,
+          id: `${approval.toolCall.id}:approved:${crypto.randomUUID()}`,
+        };
+        this.toolRunner.recordCalls([approvedCall], {
+          stepId: approval.stepId,
+          attempt: approval.attempt,
+        });
+        const result = await this.toolRunner.execute(approvedCall, {
+          runId,
+          stepId: approval.stepId,
+          attempt: approval.attempt,
+          approvedFingerprint: approval.fingerprint,
+          contextMode: 'observation',
+        });
+        approvedToolResult = { stepId: approval.stepId, result };
+      }
+
       // Recall after run correlation is established so the complete decision,
       // including an empty result, is inspectable in this run's Trace.
       let memoryText: string | undefined;
@@ -480,10 +546,32 @@ export class AgentLoop extends EventEmitter {
         memoryText,
         reasoning,
         recovery: recovery
-          ? { checkpoint: recovery.checkpoint, resumedFromRunId: recovery.resumedFromRunId }
+          ? {
+              checkpoint: recovery.checkpoint,
+              resumedFromRunId: recovery.resumedFromRunId,
+              approvedToolResult,
+            }
           : undefined,
       };
-      const result = await loop.run(runContext);
+      let result: LoopResult;
+      try {
+        result = await loop.run(runContext);
+      } catch (error) {
+        if (!(error instanceof ToolApprovalRequiredError)) throw error;
+        const checkpoint = this.createApprovalCheckpoint(
+          loop,
+          runId,
+          message,
+          recovery,
+          error.request,
+        );
+        result = {
+          status: 'waiting_for_input',
+          reply: error.request.question,
+          inputRequest: error.request,
+          checkpoint,
+        };
+      }
       const usage = this.recorder.getUsage();
       if (result.status === 'waiting_for_input') {
         // The model's tool-call message remains internal, but the actual
@@ -711,6 +799,32 @@ export class AgentLoop extends EventEmitter {
 
   private formatMemories(memories: Memory[]): string {
     return memories.map((m) => `${m.key}: ${m.value}`).join('\n');
+  }
+
+  private createApprovalCheckpoint(
+    loop: LoopStrategy,
+    runId: string | undefined,
+    message: string,
+    recovery: ExecutionRecovery | undefined,
+    request: UserInputRequest,
+  ): RunCheckpoint {
+    if (loop === this.planningLoop) {
+      const persisted = runId ? this.runStore?.getById(runId)?.checkpoint : undefined;
+      if (!persisted || persisted.loopMode !== 'planning') {
+        throw new Error('PlanningLoop approval requires a persisted planning checkpoint.');
+      }
+      persisted.pendingInput = request;
+      return persisted;
+    }
+    return {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      originalMessage: message,
+      loopMode: 'simple',
+      recoveryCount: recovery ? recovery.checkpoint.recoveryCount + 1 : 0,
+      resumedFromRunId: recovery?.resumedFromRunId,
+      pendingInput: request,
+    };
   }
 
 }

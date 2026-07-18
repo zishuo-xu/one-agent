@@ -2,6 +2,7 @@ import type { ReasoningChain } from '../planning/ReasoningChain.js';
 import type { RunCheckpoint } from './checkpoint.js';
 import type { AgentEvent } from './events.js';
 import type { UserInputRequest } from './requestUserInputTool.js';
+import type { ToolResult } from '../tools/types.js';
 
 export interface AgentRunResult {
   status: 'completed' | 'waiting_for_input';
@@ -43,5 +44,9 @@ export interface RunContext {
   recovery?: {
     checkpoint: RunCheckpoint;
     resumedFromRunId: string;
+    approvedToolResult?: {
+      stepId?: string;
+      result: ToolResult;
+    };
   };
 }
