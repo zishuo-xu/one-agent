@@ -7,7 +7,15 @@ import type {
   ModelToolCall,
   TokenUsage,
   ToolCallDelta,
+  ModelCapabilities,
 } from './types.js';
+
+const DEFAULT_CAPABILITIES: ModelCapabilities = {
+  streaming: 'emulated',
+  toolCalling: 'native',
+  structuredOutput: 'best_effort',
+  reasoning: 'best_effort',
+};
 
 /**
  * Provider for OpenAI-compatible chat-completions endpoints (OpenAI,
@@ -17,11 +25,15 @@ import type {
  */
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = 'openai-compatible';
+  readonly capabilities: Readonly<ModelCapabilities>;
 
   constructor(
     private readonly client: OpenAI,
     readonly model: string,
-  ) {}
+    capabilities: Partial<ModelCapabilities> = {},
+  ) {
+    this.capabilities = Object.freeze({ ...DEFAULT_CAPABILITIES, ...capabilities });
+  }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const { messages, tools, jsonMode, timeoutMs, signal } = request;

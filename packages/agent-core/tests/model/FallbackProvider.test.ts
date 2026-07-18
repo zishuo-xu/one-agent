@@ -1,6 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import { FallbackProvider, defaultShouldFallback } from '../../src/model/FallbackProvider.js';
-import type { ModelChunk, ModelProvider, ModelRequest, ModelResponse } from '../../src/model/types.js';
+import type {
+  ModelCapabilities,
+  ModelChunk,
+  ModelProvider,
+  ModelRequest,
+  ModelResponse,
+} from '../../src/model/types.js';
+
+const FULL_CAPABILITIES: ModelCapabilities = {
+  streaming: 'native',
+  toolCalling: 'native',
+  structuredOutput: 'native',
+  reasoning: 'native',
+  contextWindow: 128_000,
+};
 
 function makeProvider(
   name: string,
@@ -8,10 +22,12 @@ function makeProvider(
     complete?: (req: ModelRequest) => Promise<ModelResponse>;
     stream?: (req: ModelRequest) => AsyncIterable<ModelChunk>;
   } = {},
+  capabilities: ModelCapabilities = FULL_CAPABILITIES,
 ): ModelProvider {
   return {
     name,
     model: `${name}-model`,
+    capabilities,
     complete: behavior.complete ?? (async () => ({ content: `ok:${name}` })),
     stream:
       behavior.stream ??
@@ -57,6 +73,26 @@ describe('FallbackProvider', () => {
     const provider = new FallbackProvider([makeProvider('primary'), makeProvider('fallback')]);
     expect(provider.model).toBe('primary-model');
     expect(provider.name).toBe('fallback');
+  });
+
+  it('exposes only capabilities guaranteed by every fallback provider', () => {
+    const primary = makeProvider('primary');
+    const fallback = makeProvider('fallback', {}, {
+      ...FULL_CAPABILITIES,
+      streaming: 'emulated',
+      toolCalling: 'unsupported',
+      contextWindow: 32_000,
+    });
+
+    const provider = new FallbackProvider([primary, fallback]);
+
+    expect(provider.capabilities).toEqual({
+      streaming: 'emulated',
+      toolCalling: 'unsupported',
+      structuredOutput: 'native',
+      reasoning: 'native',
+      contextWindow: 32_000,
+    });
   });
 
   describe('complete', () => {

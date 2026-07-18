@@ -21,12 +21,18 @@ import { createBuiltInTools } from '../tools/built-in/index.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { Sandbox } from '../tools/sandbox.js';
 import { DefaultToolPolicy, type ToolPolicy } from '../tools/policy.js';
+import { config } from '../config.js';
+import type { ModelProvider, RequiredModelCapability } from '../model/types.js';
+import { assertModelCapabilities } from '../model/capabilities.js';
+import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 
 export interface AgentRuntimeOptions {
   workspaceRoot: string;
   db?: Database.Database;
   tools?: ToolRegistry;
   toolPolicy?: ToolPolicy;
+  /** Optional pinned Provider; otherwise the configured provider chain is used. */
+  modelProvider?: ModelProvider;
 }
 
 export interface CreateRuntimeAgentOptions {
@@ -59,11 +65,13 @@ export class AgentRuntime {
   };
   readonly memory: MemoryConsolidator;
   readonly toolPolicy: ToolPolicy;
+  private readonly modelProvider?: ModelProvider;
 
   constructor(options: AgentRuntimeOptions) {
     this.db = options.db ?? getSharedConnection();
     this.tools = options.tools ?? this.createTools(options.workspaceRoot);
     this.toolPolicy = options.toolPolicy ?? new DefaultToolPolicy();
+    this.modelProvider = options.modelProvider;
     this.stores = {
       threads: new ThreadStore(this.db),
       messages: new MessageStore(this.db),
@@ -99,6 +107,19 @@ export class AgentRuntime {
     if (options.userInput !== false && !inputToolDisabled && !tools.has(REQUEST_USER_INPUT_TOOL_NAME)) {
       tools.register(createRequestUserInputTool());
     }
+    // Keep preflight resolution aligned with AgentLoop's compatibility path:
+    // older embedders may provide only openai + model in their config.
+    const provider =
+      this.modelProvider ??
+      config.modelProvider ??
+      new OpenAICompatibleProvider(config.openai, config.model);
+    const required: RequiredModelCapability[] = ['streaming'];
+    if (tools.list().length > 0) required.push('toolCalling');
+    assertModelCapabilities(
+      provider,
+      required,
+      `AgentRuntime with ${tools.list().length} registered tools`,
+    );
     return new AgentLoop({
       db: this.db,
       tools,
@@ -112,6 +133,7 @@ export class AgentRuntime {
       traceEventStore: this.stores.traces,
       memoryStore: this.stores.memories,
       toolPolicy: options.userInput === false ? undefined : this.toolPolicy,
+      modelProvider: this.modelProvider,
     });
   }
 

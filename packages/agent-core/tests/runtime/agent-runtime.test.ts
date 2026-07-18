@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { AgentRuntime } from '../../src/runtime/AgentRuntime.js';
 import { createConnection } from '../../src/db/connection.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
+import type { ModelCapabilities, ModelProvider } from '../../src/model/types.js';
+
+function provider(capabilities: ModelCapabilities): ModelProvider {
+  return {
+    name: 'runtime-test',
+    model: 'runtime-test-model',
+    capabilities,
+    complete: async () => ({ content: 'ok' }),
+    stream: async function* () { yield { content: 'ok' }; },
+  };
+}
+
+const FULL_CAPABILITIES: ModelCapabilities = {
+  streaming: 'native',
+  toolCalling: 'native',
+  structuredOutput: 'native',
+  reasoning: 'native',
+};
 
 describe('AgentRuntime', () => {
   it('provides one composition root for stores, memory and agent creation', () => {
@@ -22,6 +40,52 @@ describe('AgentRuntime', () => {
       .toBe(true);
     expect(runtime.tools.has('manage_memory')).toBe(false);
     expect(runtime.memory).toBeDefined();
+    db.close();
+  });
+
+  it('fails before creating an agent when registered tools are not supported', () => {
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-capability-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: provider({ ...FULL_CAPABILITIES, toolCalling: 'unsupported' }),
+    });
+
+    expect(() => runtime.createAgent({ planning: false })).toThrowError(
+      /required capabilities not guaranteed: toolCalling/,
+    );
+    db.close();
+  });
+
+  it('rejects best-effort support for a hard runtime requirement', () => {
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-stream-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: provider({ ...FULL_CAPABILITIES, streaming: 'best_effort' }),
+    });
+
+    expect(() => runtime.createAgent({ planning: false })).toThrowError(
+      /required capabilities not guaranteed: streaming/,
+    );
+    db.close();
+  });
+
+  it('passes a capability-compatible pinned Provider into the AgentLoop', () => {
+    const db = createConnection({ path: ':memory:' });
+    const pinned = provider(FULL_CAPABILITIES);
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-provider-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: pinned,
+    });
+
+    const agent = runtime.createAgent({ planning: false });
+
+    expect((agent as unknown as { modelProvider: ModelProvider }).modelProvider).toBe(pinned);
     db.close();
   });
 });

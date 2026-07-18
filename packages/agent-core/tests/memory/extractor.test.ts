@@ -59,6 +59,12 @@ describe('MemoryExtractor', () => {
       modelProvider: {
         name: 'failing',
         model: 'failing-model',
+        capabilities: {
+          streaming: 'native',
+          toolCalling: 'native',
+          structuredOutput: 'native',
+          reasoning: 'native',
+        },
         complete: async () => { throw new Error('timeout'); },
         stream: async function* () { yield {}; },
       },

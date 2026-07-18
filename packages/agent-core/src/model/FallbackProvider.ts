@@ -1,4 +1,5 @@
 import type { ModelChunk, ModelProvider, ModelRequest, ModelResponse } from './types.js';
+import { intersectModelCapabilities } from './capabilities.js';
 
 export type FallbackPredicate = (error: unknown) => boolean;
 
@@ -25,6 +26,7 @@ export function defaultShouldFallback(error: unknown): boolean {
 export class FallbackProvider implements ModelProvider {
   readonly name = 'fallback';
   readonly model: string;
+  readonly capabilities;
 
   constructor(
     private readonly providers: ModelProvider[],
@@ -34,6 +36,7 @@ export class FallbackProvider implements ModelProvider {
       throw new Error('FallbackProvider requires at least one provider');
     }
     this.model = providers[0].model;
+    this.capabilities = Object.freeze(intersectModelCapabilities(providers));
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {

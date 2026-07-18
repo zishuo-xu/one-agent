@@ -5,6 +5,7 @@ import type {
   ModelResponse,
   ModelToolCall,
   TokenUsage,
+  ModelCapabilities,
 } from './types.js';
 
 interface MockMessage {
@@ -26,6 +27,12 @@ interface MockMessage {
 export class MockProvider implements ModelProvider {
   readonly name = 'mock';
   readonly model = 'mock-model';
+  readonly capabilities: Readonly<ModelCapabilities> = Object.freeze({
+    streaming: 'emulated',
+    toolCalling: 'native',
+    structuredOutput: 'emulated',
+    reasoning: 'native',
+  });
   private index = 0;
 
   constructor(private readonly responses: unknown[]) {}

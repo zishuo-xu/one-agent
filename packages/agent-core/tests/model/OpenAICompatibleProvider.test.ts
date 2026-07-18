@@ -22,6 +22,27 @@ async function collect(stream: AsyncIterable<ModelChunk>): Promise<ModelChunk[]>
 }
 
 describe('OpenAICompatibleProvider', () => {
+  it('declares normalized Provider guarantees and accepts adapter overrides', () => {
+    const create = vi.fn();
+    const defaults = new OpenAICompatibleProvider(makeClient(create), 'default-model');
+    const limited = new OpenAICompatibleProvider(makeClient(create), 'limited-model', {
+      toolCalling: 'unsupported',
+      structuredOutput: 'native',
+      contextWindow: 16_000,
+    });
+
+    expect(defaults.capabilities).toMatchObject({
+      streaming: 'emulated',
+      toolCalling: 'native',
+      structuredOutput: 'best_effort',
+    });
+    expect(limited.capabilities).toMatchObject({
+      toolCalling: 'unsupported',
+      structuredOutput: 'native',
+      contextWindow: 16_000,
+    });
+  });
+
   describe('complete', () => {
     it('normalizes content, reasoning, toolCalls and usage', async () => {
       const create = vi.fn().mockResolvedValue({

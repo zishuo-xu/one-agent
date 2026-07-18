@@ -35,9 +35,15 @@ cp .env.example .env
 # 编辑 .env，填入 OPENAI_API_KEY
 ```
 
-支持任意 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）。
+支持实现所需能力的 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）。
 可选配置备用模型：设置 `OPENAI_FALLBACK_BASE_URL` / `OPENAI_FALLBACK_API_KEY` /
 `OPENAI_FALLBACK_MODEL` 后，主模型出现 5xx / 429 / 网络错误时自动 failover。
+
+`ModelProvider` 不只统一请求与响应，还必须声明 `streaming`、`toolCalling`、
+`structuredOutput`、`reasoning` 和可选上下文窗口。能力分为 `native`、`emulated`、
+`best_effort`、`unsupported`：AgentRuntime 的硬要求只接受有保证的 native/emulated，
+并在创建 Agent 前报告缺失能力。Fallback Provider 只暴露整条主备链共同保证的最弱能力，
+避免主模型支持工具、备用模型不支持工具时发生静默能力退化。
 
 ## 快速开始
 
@@ -236,7 +242,7 @@ Detected 1 interrupted planning run(s).
 - [x] Phase 9：任务持久化（SQLite TaskStore + 重启恢复）
 - [x] Phase 10：长期记忆检索（跨 thread 记忆共享）
 - [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
-- [x] Phase 12：多模型抽象层（ModelProvider 接口 + 主备 failover）
+- [x] Phase 12：多模型抽象层（ModelProvider 能力契约 + 主备 failover）
 - [x] Phase 13：工具生态扩展（run_command + 文件工具补齐）
 - [x] Phase 14：Eval+Trace 联动（失败案例可观测闭环 + JSON 数据集）
 - [x] Phase 15：子 Agent（spawn_agent 工具 + delegate/parallel 波次并行委派）

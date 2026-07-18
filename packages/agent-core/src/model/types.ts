@@ -1,5 +1,23 @@
 import type { Message } from '../agents/types.js';
 
+export type ModelCapabilitySupport =
+  | 'native'
+  | 'emulated'
+  | 'best_effort'
+  | 'unsupported';
+
+/** Capabilities guaranteed by a Provider at its normalized boundary. */
+export interface ModelCapabilities {
+  streaming: ModelCapabilitySupport;
+  toolCalling: ModelCapabilitySupport;
+  structuredOutput: ModelCapabilitySupport;
+  reasoning: ModelCapabilitySupport;
+  /** Declared context window. Undefined means the Provider cannot guarantee it. */
+  contextWindow?: number;
+}
+
+export type RequiredModelCapability = 'streaming' | 'toolCalling' | 'structuredOutput';
+
 /** Normalized token accounting, independent of provider wire format. */
 export interface TokenUsage {
   promptTokens: number;
@@ -73,6 +91,7 @@ export interface ModelRequest {
 export interface ModelProvider {
   readonly name: string;
   readonly model: string;
+  readonly capabilities: Readonly<ModelCapabilities>;
   complete(request: ModelRequest): Promise<ModelResponse>;
   stream(request: ModelRequest): AsyncIterable<ModelChunk>;
 }
