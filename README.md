@@ -93,6 +93,7 @@ pnpm --filter cli eval -- --real             # 真实模型 benchmark
 pnpm --filter cli eval -- --real --concurrency 4 # 任务级并发（默认 4；遇到限流可调低）
 pnpm --filter cli eval -- --trace            # 持久化 trace，失败可在 trace-web 查看
 pnpm --filter cli eval -- --dataset <dir>    # 加载外部 JSON 数据集
+pnpm eval:recovery                           # 真实子进程崩溃与断点恢复评测
 ```
 
 ## 内置工具
@@ -162,6 +163,10 @@ Detected 1 interrupted planning run(s).
 `read_file`、`list_files`、`search_files`、`web_search` 和 `get_time` 可以安全重试。
 写入、追加、删除、命令执行等副作用工具如果中断状态不确定，会标记为 `recovery_required`，
 不会自动重复执行。每个任务最多自动恢复三次。
+
+`pnpm eval:recovery` 会启动真实 Node 子进程，在步骤模型调用、只读工具执行和写入工具完成后
+注入 `SIGKILL`，再启动新进程执行恢复。评测会检查 Run 状态、恢复来源、Trace 连续性、
+孤立 tool-call 修复以及副作用工具是否被重复执行。
 
 ## 阶段
 

@@ -12,7 +12,8 @@
     "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build && pnpm --filter trace-web build",
     "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test && pnpm --filter cli test && pnpm --filter trace-web test",
     "test:watch": "pnpm --filter agent-core test:watch",
-    "eval": "pnpm build:core && pnpm --filter agent-core eval"
+    "eval": "pnpm build:core && pnpm --filter agent-core eval",
+    "eval:recovery": "pnpm build:core && pnpm --filter agent-core test:recovery"
   },
   "devDependencies": {
     "concurrently": "^10.0.3",

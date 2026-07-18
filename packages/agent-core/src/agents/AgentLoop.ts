@@ -353,6 +353,20 @@ export class AgentLoop extends EventEmitter {
       traceStatus: interruptedRun.traceStatus === 'recording' ? 'partial' : interruptedRun.traceStatus,
       error: 'Execution was interrupted and resumed by a new run.',
     });
+    if (checkpoint.activeToolCall) {
+      // The previous process persisted the assistant tool_call before it
+      // entered the tool. Pair that orphaned call before the next model
+      // request; strict providers reject histories with an unmatched call.
+      this.contextManager.addMessage({
+        role: 'tool',
+        tool_call_id: checkpoint.activeToolCall.id,
+        content: JSON.stringify({
+          success: false,
+          error: 'Interrupted before the tool result was durably recorded; retrying safely.',
+        }),
+        internal: true,
+      });
+    }
     return this.execute(checkpoint.originalMessage, signal, {
       checkpoint,
       resumedFromRunId: runId,

@@ -20,7 +20,8 @@
     "dev": "tsc -b --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "eval": "vitest run tests/eval"
+    "eval": "vitest run tests/eval",
+    "test:recovery": "vitest run tests/checkpoint-recovery.test.ts tests/process-crash-recovery.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
