@@ -19,7 +19,7 @@ import { WORKSPACE_ROOT } from './load-env.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
 import { formatMemoryDetail, formatMemoryList, resolveMemory } from './commands/memory.js';
-import { sanitizeTerminalText } from './output.js';
+import { formatHistoryContent, sanitizeTerminalText } from './output.js';
 import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
 import { categorizeError, printError } from './errors.js';
@@ -421,6 +421,7 @@ async function main() {
 
   let abortController: AbortController | null = null;
   let sigintCount = 0;
+  let closeNoticePrinted = false;
   process.on('SIGINT', () => {
     sigintCount++;
     if (abortController && sigintCount === 1) {
@@ -429,6 +430,7 @@ async function main() {
       abortController = null;
     } else if (!abortController && sigintCount === 1) {
       console.log('\nClosing session and consolidating memory...');
+      closeNoticePrinted = true;
       rl.close();
       if (traceProcess) traceProcess.kill();
     } else {
@@ -446,7 +448,8 @@ async function main() {
     if (!trimmed) continue;
 
     if (trimmed === '/exit' || trimmed === '/quit') {
-      console.log('Goodbye.');
+      console.log('正在整理会话记忆，请稍候...');
+      closeNoticePrinted = true;
       rl.close();
       if (traceProcess) traceProcess.kill();
       break;
@@ -464,7 +467,7 @@ async function main() {
       } else {
         for (const message of history) {
           const prefix = message.role === 'user' ? 'You' : 'Assistant';
-          console.log(`${prefix}: ${message.content.slice(0, 400)}`);
+          console.log(`${prefix}: ${formatHistoryContent(message.content)}`);
         }
       }
       continue;
@@ -872,7 +875,14 @@ async function main() {
     }
   }
 
-  await memoryConsolidator.consolidateThread(threadId);
+  const consolidation = await memoryConsolidator.consolidateThread(threadId);
+  if (closeNoticePrinted) {
+    if (consolidation.status === 'failed') {
+      console.log('记忆整理暂未完成，将在下次启动时重试。');
+    } else {
+      console.log('记忆整理完成，已退出。');
+    }
+  }
   if (traceProcess) traceProcess.kill();
 }
 

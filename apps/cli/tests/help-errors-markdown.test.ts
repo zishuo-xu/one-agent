@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { printStartup, HELP_TEXT } from '../src/help.js';
+import { printStartup, printVersion, HELP_TEXT } from '../src/help.js';
 import { categorizeError } from '../src/errors.js';
 import { renderMarkdown } from '../src/markdown.js';
 import { supportsColor, formatRelativeTime, formatDuration, shortId } from '../src/format.js';
@@ -27,6 +27,11 @@ describe('startup banner', () => {
   it('defaults to created mode', () => {
     printStartup('abcdef12');
     expect(logSpy.mock.calls[0][0]).toContain('已创建会话');
+  });
+
+  it('prints the CLI package version', () => {
+    printVersion();
+    expect(logSpy.mock.calls[0][0]).toBe('one-agent 0.1.0');
   });
 });
 

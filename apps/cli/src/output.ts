@@ -15,3 +15,8 @@ export function shouldPrintFinalReply(reply: string, streamedContent: string): b
   const cleanStream = sanitizeTerminalText(streamedContent).trim();
   return cleanReply.length > 0 && cleanReply !== cleanStream;
 }
+
+export function formatHistoryContent(content: string, maxLength = 400): string {
+  if (content.length <= maxLength) return content;
+  return `${content.slice(0, maxLength)}…（已截断）`;
+}

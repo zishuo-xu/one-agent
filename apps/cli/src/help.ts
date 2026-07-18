@@ -1,4 +1,7 @@
 import { bold, dim, cyan } from './format.js';
+import { createRequire } from 'node:module';
+
+const cliPackage = createRequire(import.meta.url)('../package.json') as { version: string };
 
 export const HELP_TEXT = `
 ${bold('Usage')}:
@@ -54,7 +57,7 @@ export function printHelp(): void {
 }
 
 export function printVersion(): void {
-  console.log('one-agent 0.0.1');
+  console.log(`one-agent ${cliPackage.version}`);
 }
 
 export function printStartup(threadId: string, mode: 'created' | 'resumed' = 'created'): void {

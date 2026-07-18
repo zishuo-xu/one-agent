@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isRenderableMessageDelta,
+  formatHistoryContent,
   sanitizeTerminalText,
   shouldPrintFinalReply,
 } from '../src/output.js';
@@ -25,5 +26,10 @@ describe('CLI streamed output', () => {
     const value = '\u001b[2J\u001b[H你好\u001b[0m';
     expect(sanitizeTerminalText(value)).toBe('你好');
     expect(isRenderableMessageDelta('\u001b[2J\u001b[H')).toBe(false);
+  });
+
+  it('marks long history entries as truncated', () => {
+    expect(formatHistoryContent('short', 10)).toBe('short');
+    expect(formatHistoryContent('12345678901', 10)).toBe('1234567890…（已截断）');
   });
 });
