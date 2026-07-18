@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3';
 import { AgentLoop } from '../agents/AgentLoop.js';
+import {
+  createRequestUserInputTool,
+  REQUEST_USER_INPUT_TOOL_NAME,
+} from '../agents/requestUserInputTool.js';
 import { getSharedConnection } from '../db/connection.js';
 import { MemoryStore } from '../db/memoryStore.js';
 import { MessageStore } from '../db/messageStore.js';
@@ -29,6 +33,8 @@ export interface CreateRuntimeAgentOptions {
   signal?: AbortSignal;
   planning?: boolean | 'auto';
   subAgents?: boolean;
+  /** Offer durable clarification. Disable for non-interactive workers. */
+  userInput?: boolean;
 }
 
 /**
@@ -82,6 +88,12 @@ export class AgentRuntime {
         memoryStore: this.stores.memories,
         threadId: options.threadId,
       }));
+    }
+    const inputToolDisabled = (process.env.DISABLED_TOOLS ?? '')
+      .split(',')
+      .some((name) => name.trim() === REQUEST_USER_INPUT_TOOL_NAME);
+    if (options.userInput !== false && !inputToolDisabled && !tools.has(REQUEST_USER_INPUT_TOOL_NAME)) {
+      tools.register(createRequestUserInputTool());
     }
     return new AgentLoop({
       db: this.db,

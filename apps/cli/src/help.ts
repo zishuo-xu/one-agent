@@ -40,6 +40,7 @@ ${bold('REPL commands')}:
   /traces <run-id>    Show traces for a specific run
   /traces <run-id> --verbose  Show full trace JSON
   /resume <run-id>    Resume an interrupted PlanningLoop run
+  /cancel             Cancel the task currently waiting for your answer
   /thread <id>        Switch to another thread
   /exit, /quit        Exit the CLI
 

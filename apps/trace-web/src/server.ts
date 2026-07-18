@@ -251,7 +251,7 @@ function renderViewerPage(): string {
     .item.failed {
       border-left: 3px solid var(--failed);
     }
-    .item.interrupted, .item.recovery_required { border-left: 3px solid var(--warning); }
+    .item.interrupted, .item.recovery_required, .item.waiting_for_input { border-left: 3px solid var(--warning); }
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -267,7 +267,7 @@ function renderViewerPage(): string {
     .status-badge.completed { color: #6ee7b7; background: #064e3b; }
     .status-badge.failed { color: #fca5a5; background: #7f1d1d; }
     .status-badge.running, .status-badge.pending { color: #67e8f9; background: #164e63; }
-    .status-badge.interrupted, .status-badge.recovery_required { color: #fdba74; background: #7c2d12; }
+    .status-badge.interrupted, .status-badge.recovery_required, .status-badge.waiting_for_input { color: #fdba74; background: #7c2d12; }
     .item-error {
       font-size: 12px;
       color: var(--failed);

@@ -1,5 +1,9 @@
 import type { LoopInfrastructure, LoopStrategy } from './types.js';
-import type { RunContext } from '../RunContext.js';
+import type { LoopResult, RunContext } from '../RunContext.js';
+import {
+  readUserInputRequest,
+  REQUEST_USER_INPUT_TOOL_NAME,
+} from '../requestUserInputTool.js';
 import { safeParseArgs } from './utils.js';
 
 /**
@@ -24,7 +28,7 @@ export class SimpleLoop implements LoopStrategy {
     this.checkSignal = infra.checkSignal;
   }
 
-  async run(context: RunContext): Promise<{ reply: string }> {
+  async run(context: RunContext): Promise<LoopResult> {
     const { runId } = context;
     let toolIterations = 0;
 
@@ -51,8 +55,40 @@ export class SimpleLoop implements LoopStrategy {
           internal: true,
         });
 
+        this.toolRunner.recordCalls(calls, { attempt: toolIterations });
+        const inputCall = calls.find((call) => call.name === REQUEST_USER_INPUT_TOOL_NAME);
+        if (inputCall) {
+          const result = await this.toolRunner.execute(inputCall, { runId, attempt: toolIterations });
+          const inputRequest = readUserInputRequest(result);
+          for (const skipped of calls.filter((call) => call.id !== inputCall.id)) {
+            this.toolRunner.recordResult(skipped, {
+              success: false,
+              error: 'Skipped: the run is waiting for user input.',
+            }, { attempt: toolIterations, status: 'skipped' });
+          }
+          if (inputRequest) {
+            return {
+              status: 'waiting_for_input',
+              reply: inputRequest.question,
+              inputRequest,
+              checkpoint: {
+                version: 1,
+                updatedAt: new Date().toISOString(),
+                originalMessage: context.message,
+                loopMode: 'simple',
+                recoveryCount: context.recovery
+                  ? context.recovery.checkpoint.recoveryCount + 1
+                  : 0,
+                resumedFromRunId: context.recovery?.resumedFromRunId,
+                pendingInput: inputRequest,
+              },
+            };
+          }
+          toolIterations++;
+          continue;
+        }
+
         for (const call of calls) {
-          this.toolRunner.recordCalls([call], { attempt: toolIterations });
           await this.toolRunner.execute(call, { runId, attempt: toolIterations });
         }
 
@@ -63,7 +99,7 @@ export class SimpleLoop implements LoopStrategy {
       // No tool calls: the answer was already streamed live above.
       this.contextManager.addMessage({ role: 'assistant', content });
       this.recorder.record({ type: 'message', content });
-      return { reply: content };
+      return { status: 'completed', reply: content };
     }
 
     // Tool budget exhausted: rather than throwing away everything the loop
@@ -81,7 +117,7 @@ export class SimpleLoop implements LoopStrategy {
     const { content } = await this.modelCaller.completeStreaming({ includeTools: false });
     this.contextManager.addMessage({ role: 'assistant', content });
     this.recorder.record({ type: 'message', content });
-    return { reply: content };
+    return { status: 'completed', reply: content };
   }
 
 }

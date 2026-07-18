@@ -18,6 +18,8 @@ describe('AgentRuntime', () => {
     expect(agent.getHistory()[0]).toMatchObject({ role: 'system' });
     expect((agent as unknown as { toolRegistry: ToolRegistry }).toolRegistry.has('manage_memory'))
       .toBe(true);
+    expect((agent as unknown as { toolRegistry: ToolRegistry }).toolRegistry.has('request_user_input'))
+      .toBe(true);
     expect(runtime.tools.has('manage_memory')).toBe(false);
     expect(runtime.memory).toBeDefined();
     db.close();

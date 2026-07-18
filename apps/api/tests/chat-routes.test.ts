@@ -107,6 +107,51 @@ describe('chat routes', () => {
     expect(body.threadId).toBe(threadId);
   });
 
+  it('persists a clarification and accepts the answer through the run endpoint', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: {
+        content: '',
+        tool_calls: [{
+          id: 'ask-target',
+          type: 'function',
+          function: {
+            name: 'request_user_input',
+            arguments: JSON.stringify({ question: 'Which target?' }),
+          },
+        }],
+      } }],
+    } as never);
+
+    const server = await buildServer();
+    const first = await server.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { message: 'Deploy it' },
+    });
+    const waiting = JSON.parse(first.body);
+    expect(waiting).toMatchObject({
+      status: 'waiting_for_input',
+      reply: 'Which target?',
+      inputRequest: { question: 'Which target?' },
+    });
+
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'Using staging.' } }],
+    } as never);
+    const continued = await server.inject({
+      method: 'POST',
+      url: `/api/runs/${waiting.runId}/input`,
+      payload: { answer: 'staging' },
+    });
+
+    expect(continued.statusCode).toBe(200);
+    expect(JSON.parse(continued.body)).toMatchObject({
+      status: 'completed',
+      reply: 'Using staging.',
+      threadId: waiting.threadId,
+    });
+  });
+
   it('GET /api/threads lists threads', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'Hello' } }],

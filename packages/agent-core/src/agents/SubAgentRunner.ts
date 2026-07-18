@@ -2,6 +2,7 @@ import type { ModelProvider, TokenUsage } from '../model/types.js';
 import type { ToolCall } from '../tools/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { MANAGE_MEMORY_TOOL_NAME } from '../memory/manageMemoryTool.js';
+import { REQUEST_USER_INPUT_TOOL_NAME } from './requestUserInputTool.js';
 import { AgentLoop } from './AgentLoop.js';
 import type { AgentEvent } from './events.js';
 
@@ -77,6 +78,7 @@ export class SubAgentRunner {
     const registry = new ToolRegistry();
     const inherited = this.tools.list().filter((tool) =>
       tool.name !== MANAGE_MEMORY_TOOL_NAME &&
+      tool.name !== REQUEST_USER_INPUT_TOOL_NAME &&
       (!task.allowedTools || task.allowedTools.includes(tool.name)),
     );
     registry.registerMany(inherited);

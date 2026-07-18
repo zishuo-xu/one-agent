@@ -36,7 +36,7 @@ export interface AgentRun {
   model: string;
   startTime: string;
   endTime: string | null;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'recovery_required';
+  status: 'pending' | 'running' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'recovery_required';
   error: string | null;
   reasoningChain?: ReasoningStep[];
   traceStatus?: 'recording' | 'complete' | 'partial' | 'failed';

@@ -3,6 +3,7 @@ import {
   AgentRuntime,
   config,
 } from '@one-agent/agent-core';
+import type { UserInputRequest } from '@one-agent/agent-core';
 
 export interface ChatBody {
   message: string;
@@ -10,10 +11,17 @@ export interface ChatBody {
 }
 
 export interface ChatReply {
+  status?: 'completed' | 'waiting_for_input';
   reply?: string;
   events?: unknown[];
   threadId?: string;
+  runId?: string;
+  inputRequest?: UserInputRequest;
   error?: string;
+}
+
+export interface ContinueRunBody {
+  answer: string;
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -54,14 +62,58 @@ export async function chatRoutes(
       }
 
       const agent = runtime.createAgent({ threadId });
-      const { reply: response, events } = await agent.chat(message);
-      return { reply: response, events, threadId };
+      const result = await agent.chat(message);
+      return {
+        status: result.status,
+        reply: result.reply,
+        events: result.events,
+        threadId,
+        runId: result.runId,
+        inputRequest: result.inputRequest,
+      };
     } catch (error) {
       fastify.log.error(error);
       const errMessage =
         error instanceof Error ? error.message : 'An unexpected error occurred';
       return reply.status(500).send({ error: errMessage });
     }
+  });
+
+  fastify.post<{
+    Params: { id: string };
+    Body: ContinueRunBody;
+    Reply: ChatReply;
+  }>('/api/runs/:id/input', async (request, reply) => {
+    const run = runStore.getById(request.params.id);
+    if (!run) return reply.status(404).send({ error: `Run not found: ${request.params.id}` });
+    if (!request.body?.answer || typeof request.body.answer !== 'string') {
+      return reply.status(400).send({ error: 'answer is required and must be a string' });
+    }
+    try {
+      const agent = runtime.createAgent({ threadId: run.threadId });
+      const result = await agent.continueRun(run.id, request.body.answer);
+      return {
+        status: result.status,
+        reply: result.reply,
+        events: result.events,
+        threadId: run.threadId,
+        runId: result.runId,
+        inputRequest: result.inputRequest,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to continue run';
+      return reply.status(409).send({ error: message });
+    }
+  });
+
+  fastify.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (request, reply) => {
+    const run = runStore.getById(request.params.id);
+    if (!run) return reply.status(404).send({ error: `Run not found: ${request.params.id}` });
+    const agent = runtime.createAgent({ threadId: run.threadId });
+    if (!agent.cancelWaitingRun(run.id)) {
+      return reply.status(409).send({ error: `Run ${run.id} is not waiting for input` });
+    }
+    return { runId: run.id, status: 'cancelled' };
   });
 
   fastify.get('/api/health', async () => {

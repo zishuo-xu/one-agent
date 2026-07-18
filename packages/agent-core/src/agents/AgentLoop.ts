@@ -39,6 +39,10 @@ import {
 } from './checkpoint.js';
 import type { AgentEvent } from './events.js';
 import type { AgentRunResult, RunContext } from './RunContext.js';
+import {
+  REQUEST_USER_INPUT_SYSTEM_INSTRUCTION,
+  REQUEST_USER_INPUT_TOOL_NAME,
+} from './requestUserInputTool.js';
 
 export type { AgentLoopEvent } from './events.js';
 
@@ -106,9 +110,14 @@ export class AgentLoop extends EventEmitter {
   constructor(options: AgentLoopOptions = {}) {
     super();
     const baseSystemPrompt = options.systemPrompt ?? config.systemPrompt;
-    this.systemPrompt = options.tools?.has(MANAGE_MEMORY_TOOL_NAME)
-      ? `${baseSystemPrompt} ${MANAGE_MEMORY_SYSTEM_INSTRUCTION}`
-      : baseSystemPrompt;
+    const systemInstructions = [baseSystemPrompt];
+    if (options.tools?.has(MANAGE_MEMORY_TOOL_NAME)) {
+      systemInstructions.push(MANAGE_MEMORY_SYSTEM_INSTRUCTION);
+    }
+    if (options.tools?.has(REQUEST_USER_INPUT_TOOL_NAME)) {
+      systemInstructions.push(REQUEST_USER_INPUT_SYSTEM_INSTRUCTION);
+    }
+    this.systemPrompt = systemInstructions.join(' ');
     this.maxRetries = options.maxRetries ?? 2;
     this.maxToolIterations = options.maxToolIterations ?? 5;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
@@ -260,6 +269,10 @@ export class AgentLoop extends EventEmitter {
   }
 
   async chat(message: string, signal?: AbortSignal): Promise<AgentRunResult> {
+    const waiting = this.threadId && this.runStore?.getWaitingByThread(this.threadId);
+    if (waiting) {
+      throw new Error(`Thread is waiting for user input on run ${waiting.id}. Continue or cancel it first.`);
+    }
     return this.execute(message, signal);
   }
 
@@ -277,6 +290,9 @@ export class AgentLoop extends EventEmitter {
     const checkpoint = interruptedRun.checkpoint;
     if (!checkpoint) {
       throw new Error(`Run ${runId} has no checkpoint and cannot be resumed.`);
+    }
+    if (checkpoint.loopMode !== 'planning') {
+      throw new Error(`Run ${runId} is not an interrupted planning run.`);
     }
     if (checkpoint.recoveryCount >= 3) {
       const reason = 'Maximum recovery count (3) reached.';
@@ -324,16 +340,60 @@ export class AgentLoop extends EventEmitter {
     });
   }
 
+  async continueRun(runId: string, answer: string, signal?: AbortSignal): Promise<AgentRunResult> {
+    if (!this.runStore || !this.threadId) {
+      throw new Error('Run continuation requires a persisted thread and RunStore.');
+    }
+    const normalizedAnswer = answer.trim();
+    if (!normalizedAnswer) throw new Error('A non-empty answer is required.');
+    const waitingRun = this.runStore.getById(runId);
+    if (!waitingRun || waitingRun.threadId !== this.threadId) {
+      throw new Error(`Waiting run not found in this thread: ${runId}`);
+    }
+    const checkpoint = waitingRun.checkpoint;
+    if (waitingRun.status !== 'waiting_for_input' || !checkpoint?.pendingInput) {
+      throw new Error(`Run ${runId} is not waiting for user input.`);
+    }
+    this.signal = signal ?? this.signal;
+    this.checkSignal();
+    if (!this.runStore.claimWaiting(runId)) {
+      throw new Error(`Run ${runId} was already continued or cancelled.`);
+    }
+    return this.execute(checkpoint.originalMessage, signal, {
+      checkpoint,
+      resumedFromRunId: runId,
+      addUserMessage: false,
+      inputAnswer: normalizedAnswer,
+      inputRequestId: checkpoint.pendingInput.id,
+    });
+  }
+
+  cancelWaitingRun(runId: string): boolean {
+    if (!this.runStore || !this.threadId) return false;
+    const run = this.runStore.getById(runId);
+    if (!run || run.threadId !== this.threadId) return false;
+    return this.runStore.cancelWaiting(runId);
+  }
+
   private async execute(
     message: string,
     signal?: AbortSignal,
-    recovery?: { checkpoint: RunCheckpoint; resumedFromRunId: string; addUserMessage: false },
+    recovery?: {
+      checkpoint: RunCheckpoint;
+      resumedFromRunId: string;
+      addUserMessage: false;
+      inputAnswer?: string;
+      inputRequestId?: string;
+    },
   ): Promise<AgentRunResult> {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
     this.checkSignal();
     if (recovery?.addUserMessage !== false) {
       this.contextManager.addMessage({ role: 'user', content: message });
+    }
+    if (recovery?.inputAnswer) {
+      this.contextManager.addMessage({ role: 'user', content: recovery.inputAnswer });
     }
     this.recorder.reset();
     const reasoning = new ReasoningChain();
@@ -360,6 +420,9 @@ export class AgentLoop extends EventEmitter {
       enabledTools: this.toolRegistry?.list().map((tool) => tool.name) ?? [],
       resumedFromRunId: recovery?.resumedFromRunId,
     });
+    if (recovery?.inputRequestId) {
+      this.recorder.record({ type: 'input_received', requestId: recovery.inputRequestId });
+    }
 
     try {
       // Recall after run correlation is established so the complete decision,
@@ -368,7 +431,10 @@ export class AgentLoop extends EventEmitter {
       this.contextManager.clearMemoryContext();
       if (this.memoryStore) {
         try {
-          const recall = this.memoryStore.recallRelevantMemories(message, { threadId: this.threadId });
+          const recall = this.memoryStore.recallRelevantMemories(
+            recovery?.inputAnswer ?? message,
+            { threadId: this.threadId },
+          );
           if (recall.memories.length > 0) {
             memoryText = this.formatMemories(recall.memories);
             this.contextManager.setMemoryContext(memoryText);
@@ -400,8 +466,9 @@ export class AgentLoop extends EventEmitter {
       // Planning requires both the opt-in and a tool registry; in 'auto' mode
       // a cheap classifier decides per message whether planning is worth it.
       const planningEnabled = (recovery || this.enablePlanning !== false) && this.toolRegistry;
-      const loop: LoopStrategy =
-        planningEnabled && (recovery || await this.resolvePlanningMode(message))
+      const loop: LoopStrategy = recovery
+        ? recovery.checkpoint.loopMode === 'planning' ? this.planningLoop : this.simpleLoop
+        : planningEnabled && await this.resolvePlanningMode(message)
           ? this.planningLoop
           : this.simpleLoop;
       const runContext: RunContext = {
@@ -418,6 +485,29 @@ export class AgentLoop extends EventEmitter {
       };
       const result = await loop.run(runContext);
       const usage = this.recorder.getUsage();
+      if (result.status === 'waiting_for_input') {
+        // The model's tool-call message remains internal, but the actual
+        // question is part of the user-visible conversation and survives
+        // /history plus process restarts like any normal assistant message.
+        this.contextManager.addMessage({ role: 'assistant', content: result.inputRequest.question });
+        this.saveCheckpoint(runId, result.checkpoint);
+        this.recorder.record({ type: 'input_required', request: result.inputRequest });
+        this.recorder.record({
+          type: 'run',
+          phase: 'waiting_for_input',
+          durationMs: Date.now() - startedMs,
+        });
+        this.recorder.endRun();
+        this.waitRun(runId);
+        return {
+          status: 'waiting_for_input',
+          reply: result.reply,
+          inputRequest: result.inputRequest,
+          events: this.recorder.getEvents(),
+          runId,
+          tokenUsage: usage,
+        };
+      }
       this.recorder.record({
         type: 'run',
         phase: 'completed',
@@ -425,7 +515,13 @@ export class AgentLoop extends EventEmitter {
       });
       this.recorder.endRun();
       this.completeRun(runId);
-      return { reply: result.reply, events: this.recorder.getEvents(), runId, tokenUsage: usage };
+      return {
+        status: 'completed',
+        reply: result.reply,
+        events: this.recorder.getEvents(),
+        runId,
+        tokenUsage: usage,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.recorder.record({
@@ -576,6 +672,19 @@ export class AgentLoop extends EventEmitter {
       status: this.signal?.aborted ? 'cancelled' : 'failed',
       endTime: new Date().toISOString(),
       error,
+      reasoningChain: this.lastReasoningChain.getSteps(),
+      traceStatus: trace.status,
+      droppedTraceEvents: trace.droppedEventCount,
+      traceError: trace.error,
+    });
+  }
+
+  private waitRun(runId: string | undefined): void {
+    if (!runId || !this.runStore) return;
+    const trace = this.recorder.getTraceHealth();
+    this.runStore.update(runId, {
+      status: 'waiting_for_input',
+      endTime: new Date().toISOString(),
       reasoningChain: this.lastReasoningChain.getSteps(),
       traceStatus: trace.status,
       droppedTraceEvents: trace.droppedEventCount,

@@ -2,6 +2,7 @@ import type { MemoryRecallCandidate } from '../db/memoryStore.js';
 import type { ModelCallTraceEvent, TokenUsage } from '../model/types.js';
 import type { FailureAnalysis, Plan } from '../planning/types.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
+import type { UserInputRequest } from './requestUserInputTool.js';
 
 /**
  * Public facts emitted while an agent runs.
@@ -13,7 +14,7 @@ import type { ToolCall, ToolResult } from '../tools/types.js';
 export type AgentEvent =
   | {
       type: 'run';
-      phase: 'started' | 'completed' | 'failed' | 'cancelled';
+      phase: 'started' | 'waiting_for_input' | 'completed' | 'failed' | 'cancelled';
       loopMode?: 'simple' | 'planning' | 'auto';
       model?: string;
       provider?: string;
@@ -82,7 +83,9 @@ export type AgentEvent =
       estimatedTokens: number;
       error?: string;
     }
-  | { type: 'message'; content: string };
+  | { type: 'message'; content: string }
+  | { type: 'input_required'; request: UserInputRequest }
+  | { type: 'input_received'; requestId: string };
 
 /** Backward-compatible public name retained for existing integrations. */
 export type AgentLoopEvent = AgentEvent;

@@ -3,13 +3,19 @@ import type { ModelToolCall } from '../../model/types.js';
 import { Plan, PlanStep, FailureAnalysis } from '../../planning/types.js';
 import type { SubAgentTask, SubAgentResult } from '../SubAgentRunner.js';
 import type { LoopInfrastructure, LoopStrategy } from './types.js';
-import type { RunContext } from '../RunContext.js';
+import type { LoopResult, RunContext } from '../RunContext.js';
 import { safeParseArgs } from './utils.js';
 import {
   recoveryPolicyForTool,
   type ActiveToolCheckpoint,
+  type PlanningRunCheckpoint,
   type RunCheckpoint,
 } from '../checkpoint.js';
+import {
+  readUserInputRequest,
+  REQUEST_USER_INPUT_TOOL_NAME,
+  type UserInputRequest,
+} from '../requestUserInputTool.js';
 import {
   allPlanStepsCompleted,
   buildExecutionUnits,
@@ -20,8 +26,12 @@ import {
 
 interface PlanningRunState {
   context: RunContext;
-  checkpoint: RunCheckpoint & { runId?: string };
+  checkpoint: PlanningRunCheckpoint & { runId?: string };
 }
+
+type StepExecutionResult =
+  | { next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }
+  | { next: 'waiting_for_input'; inputRequest: UserInputRequest };
 
 /**
  * The planning loop: plan -> execute steps/waves -> judge -> retry/replan ->
@@ -56,22 +66,26 @@ export class PlanningLoop implements LoopStrategy {
     this.persistCheckpoint = infra.saveCheckpoint;
   }
 
-  async run(context: RunContext): Promise<{ reply: string }> {
+  async run(context: RunContext): Promise<LoopResult> {
+    if (context.recovery && context.recovery.checkpoint.loopMode !== 'planning') {
+      throw new Error('A simple-loop checkpoint cannot be resumed by PlanningLoop.');
+    }
     const { message: userMessage, runId, memoryText } = context;
-    let plan = context.recovery
-      ? JSON.parse(JSON.stringify(context.recovery.checkpoint.plan)) as Plan
+    const recoveryCheckpoint = context.recovery?.checkpoint as PlanningRunCheckpoint | undefined;
+    let plan = recoveryCheckpoint
+      ? JSON.parse(JSON.stringify(recoveryCheckpoint.plan)) as Plan
       : await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memoryText);
-    let currentUnitIndex = context.recovery?.checkpoint.currentUnitIndex ?? 0;
-    let replanAttempts = context.recovery?.checkpoint.replanAttempts ?? 0;
-    let retryAttempts = context.recovery?.checkpoint.retryAttempts ?? 0;
-    const recoveryCount = context.recovery
-      ? context.recovery.checkpoint.recoveryCount + 1
+    let currentUnitIndex = recoveryCheckpoint?.currentUnitIndex ?? 0;
+    let replanAttempts = recoveryCheckpoint?.replanAttempts ?? 0;
+    let retryAttempts = recoveryCheckpoint?.retryAttempts ?? 0;
+    const recoveryCount = recoveryCheckpoint
+      ? recoveryCheckpoint.recoveryCount + 1
       : 0;
 
     // A read-only tool that was interrupted can be regenerated safely. The
     // preflight in AgentLoop rejects every other active-tool policy.
-    if (context.recovery?.checkpoint.activeToolCall) {
-      const interruptedStep = findPlanStep(plan.steps, context.recovery.checkpoint.activeToolCall.stepId);
+    if (recoveryCheckpoint?.activeToolCall) {
+      const interruptedStep = findPlanStep(plan.steps, recoveryCheckpoint.activeToolCall.stepId);
       if (interruptedStep) interruptedStep.status = 'pending';
     }
 
@@ -126,7 +140,7 @@ export class PlanningLoop implements LoopStrategy {
         return this.finalizeAnswer();
       }
 
-      let executionResult: { next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis };
+      let executionResult: StepExecutionResult;
 
       if (unit.type === 'single') {
         const step = unit.step;
@@ -183,6 +197,19 @@ export class PlanningLoop implements LoopStrategy {
           }
         }
         executionResult = await this.executeWave(state, unit.steps, plan);
+      }
+
+      if (executionResult.next === 'waiting_for_input') {
+        if (unit.type === 'single') this.setStepStatus(state, unit.step, 'pending');
+        state.checkpoint.pendingInput = executionResult.inputRequest;
+        this.saveCheckpoint(state);
+        const { runId: _runId, ...checkpoint } = state.checkpoint;
+        return {
+          status: 'waiting_for_input',
+          reply: executionResult.inputRequest.question,
+          inputRequest: executionResult.inputRequest,
+          checkpoint: JSON.parse(JSON.stringify(checkpoint)) as PlanningRunCheckpoint,
+        };
       }
 
       if (executionResult.next === 'final') {
@@ -252,7 +279,7 @@ export class PlanningLoop implements LoopStrategy {
     state: PlanningRunState,
     step: PlanStep,
     plan: Plan,
-  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+  ): Promise<StepExecutionResult> {
     const result = await this.executeDelegatedStep(state, step, plan);
     if (result.success) {
       return { next: 'continue' };
@@ -287,7 +314,7 @@ export class PlanningLoop implements LoopStrategy {
     state: PlanningRunState,
     steps: PlanStep[],
     plan: Plan,
-  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+  ): Promise<StepExecutionResult> {
     // Completed steps from a previous pass are not re-executed (retry only
     // re-runs what failed); their results are already in the reasoning chain.
     const toRun = steps.filter((step) => step.status !== 'completed');
@@ -385,13 +412,20 @@ export class PlanningLoop implements LoopStrategy {
     step: PlanStep,
     plan: Plan,
     runId?: string
-  ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
+  ): Promise<StepExecutionResult> {
 
 
     const constraint = this.resolveStepToolConstraint(step);
-    const allowedToolNames = constraint.requiredTool
+    const constrainedToolNames = constraint.requiredTool
       ? [constraint.requiredTool]
       : constraint.allowedTools;
+    const inputToolAvailable = this.toolRegistry?.has(REQUEST_USER_INPUT_TOOL_NAME) ?? false;
+    const allowedToolNames = constrainedToolNames
+      ? Array.from(new Set([
+          ...constrainedToolNames,
+          ...(inputToolAvailable ? [REQUEST_USER_INPUT_TOOL_NAME] : []),
+        ]))
+      : undefined;
 
     this.contextManager.addMessage({
       role: 'user',
@@ -431,6 +465,19 @@ export class PlanningLoop implements LoopStrategy {
         state.context.reasoning.addAction(call, step.id);
       }
       this.toolRunner.recordCalls(toolCalls, { stepId: step.id });
+
+      const inputCall = toolCalls.find((call) => call.name === REQUEST_USER_INPUT_TOOL_NAME);
+      if (inputCall) {
+        const result = await this.toolRunner.execute(inputCall, { runId, stepId: step.id });
+        const inputRequest = readUserInputRequest(result);
+        for (const skipped of toolCalls.filter((call) => call.id !== inputCall.id)) {
+          this.toolRunner.recordResult(skipped, {
+            success: false,
+            error: 'Skipped: the run is waiting for user input.',
+          }, { stepId: step.id, status: 'skipped' });
+        }
+        if (inputRequest) return { next: 'waiting_for_input', inputRequest };
+      }
 
       const deviation = this.detectToolDeviation(toolCalls, constraint);
       if (deviation) {
@@ -584,7 +631,7 @@ export class PlanningLoop implements LoopStrategy {
     return 'any available tool';
   }
 
-  private async finalizeAnswer(): Promise<{ reply: string }> {
+  private async finalizeAnswer(): Promise<LoopResult> {
     this.contextManager.addMessage({
       role: 'user',
       content: 'Based on the above execution, provide a final answer to the user.',
@@ -597,7 +644,7 @@ export class PlanningLoop implements LoopStrategy {
     this.contextManager.addMessage({ role: 'assistant', content });
     this.recorder.record({ type: 'message', content });
 
-    return { reply: content };
+    return { status: 'completed', reply: content };
   }
 
   private async replan(

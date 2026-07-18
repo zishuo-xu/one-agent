@@ -7,7 +7,7 @@ import type { RunRecorder } from '../RunRecorder.js';
 import type { SubAgentRunner } from '../SubAgentRunner.js';
 import type { ToolRunner } from '../ToolRunner.js';
 import type { RunCheckpoint } from '../checkpoint.js';
-import type { RunContext } from '../RunContext.js';
+import type { LoopResult, RunContext } from '../RunContext.js';
 
 /** Collaborators every loop strategy shares (assembled once by AgentLoop). */
 export interface LoopInfrastructure {
@@ -28,5 +28,5 @@ export interface LoopInfrastructure {
 
 /** One execution strategy. Add a new loop mode by implementing this interface. */
 export interface LoopStrategy {
-  run(context: RunContext): Promise<{ reply: string }>;
+  run(context: RunContext): Promise<LoopResult>;
 }

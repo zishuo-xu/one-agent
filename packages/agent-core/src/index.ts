@@ -12,8 +12,21 @@ export type {
 export { SubAgentRunner } from './agents/SubAgentRunner.js';
 export type { SubAgentTask, SubAgentResult, SubAgentRunnerOptions } from './agents/SubAgentRunner.js';
 export { createSpawnAgentTool } from './agents/spawnAgentTool.js';
+export {
+  createRequestUserInputTool,
+  readUserInputRequest,
+  REQUEST_USER_INPUT_SYSTEM_INSTRUCTION,
+  REQUEST_USER_INPUT_TOOL_NAME,
+} from './agents/requestUserInputTool.js';
+export type { UserInputRequest } from './agents/requestUserInputTool.js';
 export { assessCheckpointRecovery, recoveryPolicyForTool } from './agents/checkpoint.js';
-export type { RunCheckpoint, ActiveToolCheckpoint, ToolRecoveryPolicy } from './agents/checkpoint.js';
+export type {
+  RunCheckpoint,
+  PlanningRunCheckpoint,
+  SimpleRunCheckpoint,
+  ActiveToolCheckpoint,
+  ToolRecoveryPolicy,
+} from './agents/checkpoint.js';
 export type { Message, MessageRole } from './agents/types.js';
 
 export { OpenAICompatibleProvider, FallbackProvider, defaultShouldFallback, createProviderFromEnv } from './model/index.js';

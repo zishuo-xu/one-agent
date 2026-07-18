@@ -1,5 +1,6 @@
 import type { Plan } from '../planning/types.js';
 import type { ToolCall } from '../tools/types.js';
+import type { UserInputRequest } from './requestUserInputTool.js';
 
 export type ToolRecoveryPolicy = 'safe_retry' | 'verify_before_retry' | 'manual';
 
@@ -13,7 +14,7 @@ export interface ActiveToolCheckpoint {
 }
 
 /** Mutable latest-state snapshot. Trace events remain the immutable history. */
-export interface RunCheckpoint {
+export interface PlanningRunCheckpoint {
   version: 1;
   updatedAt: string;
   originalMessage: string;
@@ -25,7 +26,20 @@ export interface RunCheckpoint {
   recoveryCount: number;
   resumedFromRunId?: string;
   activeToolCall?: ActiveToolCheckpoint;
+  pendingInput?: UserInputRequest;
 }
+
+export interface SimpleRunCheckpoint {
+  version: 1;
+  updatedAt: string;
+  originalMessage: string;
+  loopMode: 'simple';
+  recoveryCount: number;
+  resumedFromRunId?: string;
+  pendingInput: UserInputRequest;
+}
+
+export type RunCheckpoint = PlanningRunCheckpoint | SimpleRunCheckpoint;
 
 const SAFE_RETRY_TOOLS = new Set([
   'read_file',
@@ -47,6 +61,7 @@ export function assessCheckpointRecovery(checkpoint: RunCheckpoint): {
   resumable: boolean;
   reason?: string;
 } {
+  if (checkpoint.loopMode === 'simple') return { resumable: true };
   const active = checkpoint.activeToolCall;
   if (!active || active.recoveryPolicy === 'safe_retry') return { resumable: true };
   return {

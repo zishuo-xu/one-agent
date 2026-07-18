@@ -13,6 +13,7 @@ import {
   MessageStore,
   getSharedConnection,
 } from '@one-agent/agent-core';
+import type { AgentRunResult } from '@one-agent/agent-core';
 import { WORKSPACE_ROOT } from './load-env.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
@@ -51,6 +52,7 @@ const COMMANDS = [
   '/traces <run-id>',
   '/traces <run-id> --verbose',
   '/resume <run-id>',
+  '/cancel',
   '/thread <id>',
   '/exit',
   '/quit',
@@ -120,8 +122,21 @@ function printRecoveryHint(runStore: RunStore, threadId: string): void {
   if (recoverable.length === 0) return;
   console.log(cyan(`Detected ${recoverable.length} interrupted planning run(s).`));
   for (const run of recoverable) {
-    console.log(dim(`  /resume ${shortId(run.id)}  (${run.checkpoint?.plan.steps.length ?? 0} plan steps)`));
+    const stepCount = run.checkpoint?.loopMode === 'planning' ? run.checkpoint.plan.steps.length : 0;
+    console.log(dim(`  /resume ${shortId(run.id)}  (${stepCount} plan steps)`));
   }
+}
+
+function printWaitingHint(runStore: RunStore, threadId: string, includeQuestion = true): void {
+  const waiting = runStore.getWaitingByThread(threadId);
+  const request = waiting?.checkpoint?.pendingInput;
+  if (!waiting || !request) return;
+  console.log(cyan(`This thread is waiting for your answer (${shortId(waiting.id)}):`));
+  if (includeQuestion) console.log(request.question);
+  if (request.options?.length) {
+    request.options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
+  }
+  console.log(dim('Type your answer to continue, or /cancel to cancel this task.'));
 }
 
 async function findAvailablePort(startPort = 3001, attempts = 20): Promise<number> {
@@ -323,6 +338,7 @@ async function main() {
 
   let agent = runtime.createAgent({ threadId, planning });
   printRecoveryHint(runStore, threadId);
+  printWaitingHint(runStore, threadId);
   void memoryConsolidator.recoverUnextracted();
 
   // Optionally start the trace web viewer in the background.
@@ -608,6 +624,7 @@ async function main() {
       void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       printRecoveryHint(runStore, threadId);
+      printWaitingHint(runStore, threadId);
       continue;
     }
 
@@ -659,6 +676,56 @@ async function main() {
       continue;
     }
 
+    if (trimmed === '/cancel') {
+      const waiting = runStore.getWaitingByThread(threadId);
+      if (!waiting) {
+        console.log('No task is waiting for input in this thread.');
+      } else if (agent.cancelWaitingRun(waiting.id)) {
+        console.log(`Cancelled waiting run ${shortId(waiting.id)}.`);
+      } else {
+        console.log('The waiting task was already continued or cancelled.');
+      }
+      continue;
+    }
+
+    const waiting = runStore.getWaitingByThread(threadId);
+    if (waiting) {
+      printSeparator();
+      sigintCount = 0;
+      abortController = new AbortController();
+      const progress = createProgressIndicator(`正在继续 ${shortId(waiting.id)}…`);
+      progress.start();
+      const { handler: onEvent, result: timeline } = createChatEventHandler({
+        onDelta: (text) => process.stdout.write(text),
+        onReasoning: (text) => process.stdout.write(dim(text)),
+        onInfo: (text) => process.stdout.write(text),
+        progress,
+        verbose,
+      });
+      agent.on('event', onEvent);
+      try {
+        const result = await agent.continueRun(waiting.id, trimmed, abortController.signal);
+        const renderable = sanitizeTerminalText(result.reply).trim();
+        process.stdout.write('\n');
+        if (!timeline.hasStreamedLive && renderable) {
+          console.log(`\n${renderMarkdown(renderable)}`);
+        }
+        if (result.status === 'waiting_for_input') {
+          printWaitingHint(runStore, threadId);
+        } else {
+          console.log(dim(`Continued as run ${shortId(result.runId ?? '')}.`));
+        }
+      } catch (error) {
+        printError(categorizeError(error, waiting.id, verbose), verbose);
+      } finally {
+        agent.off('event', onEvent);
+        progress.stop();
+        abortController = null;
+      }
+      printSeparator();
+      continue;
+    }
+
     if (trimmed.startsWith('/')) {
       console.log(`Unknown command. Available: ${COMMANDS.join(', ')}`);
       console.log('Run "one-agent --help" for details.');
@@ -692,7 +759,7 @@ async function main() {
       });
 
       agent.on('event', onEvent);
-      let runResult: { reply: string; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } };
+      let runResult: AgentRunResult;
       try {
         runResult = await agent.chat(trimmed, abortController.signal);
       } catch (error) {
@@ -735,6 +802,9 @@ async function main() {
         console.log(`\n${rendered}`);
       } else if (timeline.streamedContent.trim().length === 0) {
         console.log('\n[Model returned an empty response]');
+      }
+      if (runResult.status === 'waiting_for_input') {
+        printWaitingHint(runStore, threadId, false);
       }
 
       const parts: string[] = [];

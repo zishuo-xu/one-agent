@@ -29,6 +29,7 @@ export async function taskRoutes(
       threadId: options.threadId,
       taskId: options.taskId,
       signal: options.signal,
+      userInput: false,
     });
   }
 

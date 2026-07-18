@@ -156,6 +156,40 @@ export class RunStore {
     return rows.map(rowToAgentRun);
   }
 
+  getWaitingByThread(threadId: string): AgentRun | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM agent_runs
+         WHERE thread_id = ? AND status = 'waiting_for_input' AND checkpoint IS NOT NULL
+         ORDER BY start_time DESC LIMIT 1`
+      )
+      .get(threadId) as RunRow | undefined;
+    return row ? rowToAgentRun(row) : undefined;
+  }
+
+  /** Atomically claim a waiting run so the same answer cannot resume it twice. */
+  claimWaiting(id: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE agent_runs
+         SET status = 'interrupted', end_time = ?, error = ?
+         WHERE id = ? AND status = 'waiting_for_input'`
+      )
+      .run(new Date().toISOString(), 'User input received; continuation started.', id);
+    return result.changes === 1;
+  }
+
+  cancelWaiting(id: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE agent_runs
+         SET status = 'cancelled', end_time = ?, error = ?
+         WHERE id = ? AND status = 'waiting_for_input'`
+      )
+      .run(new Date().toISOString(), 'Waiting task cancelled by user.', id);
+    return result.changes === 1;
+  }
+
   deleteByThread(threadId: string): void {
     this.db.prepare('DELETE FROM agent_runs WHERE thread_id = ?').run(threadId);
   }
