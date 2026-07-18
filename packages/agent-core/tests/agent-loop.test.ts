@@ -22,6 +22,9 @@ import { AgentLoop } from '../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
 import type { MemoryStore } from '../src/db/memoryStore.js';
+import { MemoryStore as SqliteMemoryStore } from '../src/db/memoryStore.js';
+import { createConnection } from '../src/db/connection.js';
+import { createManageMemoryTool } from '../src/memory/manageMemoryTool.js';
 import { ContextManager } from '../src/context/ContextManager.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
@@ -130,6 +133,49 @@ describe('AgentLoop', () => {
 
     expect(result.reply).toBe('Reply now');
     expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies an explicit natural-language memory request through the tool loop', async () => {
+    const db = createConnection({ path: ':memory:' });
+    const memoryStore = new SqliteMemoryStore(db);
+    const tools = new ToolRegistry();
+    tools.register(createManageMemoryTool({ memoryStore, threadId: 'thread-1' }));
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: 'memory-call-1',
+              type: 'function',
+              function: {
+                name: 'manage_memory',
+                arguments: JSON.stringify({
+                  action: 'remember',
+                  key: 'package manager',
+                  value: 'pnpm',
+                  kind: 'project_rule',
+                }),
+              },
+            }],
+          },
+        }],
+      } as never)
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: '我已经记住这个项目使用 pnpm。' } }],
+      } as never);
+
+    const agent = new AgentLoop({ tools, memoryStore, enablePlanning: false });
+    const result = await agent.chat('记住这个项目使用 pnpm');
+
+    expect(result.reply).toBe('我已经记住这个项目使用 pnpm。');
+    expect(memoryStore.list({ status: 'active' })[0]).toMatchObject({
+      key: 'package manager',
+      value: 'pnpm',
+      explicit: true,
+    });
+    expect(agent.getHistory()[0].content).toContain('explicitly asks you to remember');
+    db.close();
   });
 
   it('uses custom system prompt', async () => {

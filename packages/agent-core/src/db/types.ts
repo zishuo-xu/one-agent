@@ -135,7 +135,7 @@ export interface Memory {
   scope: 'global' | 'thread';
   sourceRunId: string | null;
   confidence: number;
-  status: 'active' | 'superseded' | 'expired';
+  status: 'active' | 'superseded' | 'expired' | 'forgotten';
   expiresAt: string | null;
   lastUsedAt: string | null;
   supersededById: string | null;

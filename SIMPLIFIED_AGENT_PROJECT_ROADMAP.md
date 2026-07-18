@@ -150,11 +150,13 @@ running 任务重置为 pending 后重新执行
 memories 表保存全局事实
 切换/退出时整理当前 Thread，启动时恢复未提取 Thread
 只以用户消息为证据，并按原始消息时间解决冲突
+显式“记住 / 修正 / 忘记 / 查询”通过 manage_memory 当前轮立即执行
+遗忘墓碑阻止旧会话延迟提取后复活已撤销事实
 新提问按关键词召回并注入上下文
 ```
 
 产出：`MemoryStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、跨 thread 记忆共享、记忆管理 API、
-召回决策 Trace 与 `memory-recall-v1` 离线评测基线。
+`manage_memory` 显式控制工具、召回决策 Trace 与 `memory-recall-v1` 离线评测基线。
 
 ## 最终架构
 

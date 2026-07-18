@@ -18,6 +18,10 @@ import { RunStore } from '../db/runStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryStore } from '../db/memoryStore.js';
+import {
+  MANAGE_MEMORY_SYSTEM_INSTRUCTION,
+  MANAGE_MEMORY_TOOL_NAME,
+} from '../memory/manageMemoryTool.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
@@ -101,7 +105,10 @@ export class AgentLoop extends EventEmitter {
 
   constructor(options: AgentLoopOptions = {}) {
     super();
-    this.systemPrompt = options.systemPrompt ?? config.systemPrompt;
+    const baseSystemPrompt = options.systemPrompt ?? config.systemPrompt;
+    this.systemPrompt = options.tools?.has(MANAGE_MEMORY_TOOL_NAME)
+      ? `${baseSystemPrompt} ${MANAGE_MEMORY_SYSTEM_INSTRUCTION}`
+      : baseSystemPrompt;
     this.maxRetries = options.maxRetries ?? 2;
     this.maxToolIterations = options.maxToolIterations ?? 5;
     this.maxReplanAttempts = options.maxReplanAttempts ?? 3;

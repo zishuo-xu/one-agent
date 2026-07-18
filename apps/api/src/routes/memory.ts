@@ -75,7 +75,7 @@ export async function memoryRoutes(
   fastify.get('/api/memories', async (request) => {
     const { query, status, scope, threadId } = request.query as {
       query?: string;
-      status?: 'active' | 'superseded' | 'expired';
+      status?: 'active' | 'superseded' | 'expired' | 'forgotten';
       scope?: 'global' | 'thread';
       threadId?: string;
     };

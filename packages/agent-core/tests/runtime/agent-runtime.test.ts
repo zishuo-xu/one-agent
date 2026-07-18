@@ -16,6 +16,9 @@ describe('AgentRuntime', () => {
 
     expect(runtime.stores.threads.getById(thread.id)?.title).toBe('runtime test');
     expect(agent.getHistory()[0]).toMatchObject({ role: 'system' });
+    expect((agent as unknown as { toolRegistry: ToolRegistry }).toolRegistry.has('manage_memory'))
+      .toBe(true);
+    expect(runtime.tools.has('manage_memory')).toBe(false);
     expect(runtime.memory).toBeDefined();
     db.close();
   });

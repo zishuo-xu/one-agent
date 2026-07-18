@@ -9,6 +9,10 @@ import { ThreadStore } from '../db/threadStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryConsolidator } from '../memory/MemoryConsolidator.js';
+import {
+  createManageMemoryTool,
+  MANAGE_MEMORY_TOOL_NAME,
+} from '../memory/manageMemoryTool.js';
 import { createBuiltInTools } from '../tools/built-in/index.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { Sandbox } from '../tools/sandbox.js';
@@ -68,9 +72,20 @@ export class AgentRuntime {
   }
 
   createAgent(options: CreateRuntimeAgentOptions = {}): AgentLoop {
+    const tools = new ToolRegistry();
+    tools.registerMany(this.tools.list());
+    const memoryToolDisabled = (process.env.DISABLED_TOOLS ?? '')
+      .split(',')
+      .some((name) => name.trim() === MANAGE_MEMORY_TOOL_NAME);
+    if (!memoryToolDisabled && !tools.has(MANAGE_MEMORY_TOOL_NAME)) {
+      tools.register(createManageMemoryTool({
+        memoryStore: this.stores.memories,
+        threadId: options.threadId,
+      }));
+    }
     return new AgentLoop({
       db: this.db,
-      tools: this.tools,
+      tools,
       threadId: options.threadId,
       taskId: options.taskId,
       signal: options.signal,

@@ -57,12 +57,20 @@ export { TraceEventStore } from './db/traceEventStore.js';
 export { SqliteTaskStore } from './db/taskStore.js';
 export { MemoryStore } from './db/memoryStore.js';
 export type {
+  ForgetMemoryInput,
+  ForgetMemoryResult,
   MemoryRecallCandidate,
   MemoryRecallOutcome,
   MemoryRecallReport,
   MemoryRecallResult,
   RelevantMemoryOptions,
 } from './db/memoryStore.js';
+export {
+  createManageMemoryTool,
+  MANAGE_MEMORY_SYSTEM_INSTRUCTION,
+  MANAGE_MEMORY_TOOL_NAME,
+} from './memory/manageMemoryTool.js';
+export type { ManageMemoryToolOptions } from './memory/manageMemoryTool.js';
 export type {
   Thread,
   PersistedMessage,

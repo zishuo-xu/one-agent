@@ -96,6 +96,20 @@ export interface RememberResult {
   previousMemoryId?: string;
 }
 
+export interface ForgetMemoryInput {
+  key: string;
+  scope?: Memory['scope'];
+  threadId?: string;
+  source?: string;
+  sourceRunId?: string;
+  observedAt?: string;
+}
+
+export interface ForgetMemoryResult {
+  action: 'forgotten' | 'already_forgotten' | 'not_found';
+  memory?: Memory;
+}
+
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
@@ -236,13 +250,16 @@ export class MemoryStore {
       const confidence = normalizeConfidence(input.confidence);
       const observedAt = normalizeObservedAt(input.observedAt);
       const governedInput = { ...input, key, value, scope, confidence, observedAt };
-      const existing = this.findActiveByKey(key, scope, input.threadId);
+      const existing = this.findGoverningByKey(key, scope, input.threadId);
 
       if (!existing) {
         return { memory: this.create(governedInput), action: 'created' };
       }
 
-      if (normalizeText(existing.value).toLocaleLowerCase() === value.toLocaleLowerCase()) {
+      if (
+        existing.status === 'active' &&
+        normalizeText(existing.value).toLocaleLowerCase() === value.toLocaleLowerCase()
+      ) {
         const newer = comparePrecedence(governedInput, existing) >= 0;
         const memory = newer
           ? this.update(existing.id, {
@@ -271,7 +288,10 @@ export class MemoryStore {
       }
 
       const memory = this.create(governedInput);
-      this.update(existing.id, { status: 'superseded', supersededById: memory.id });
+      this.update(existing.id, {
+        status: existing.status === 'forgotten' ? 'forgotten' : 'superseded',
+        supersededById: memory.id,
+      });
       return { memory, action: 'superseded', previousMemoryId: existing.id };
     });
     return transaction();
@@ -498,7 +518,47 @@ export class MemoryStore {
     this.db.prepare('DELETE FROM memories WHERE thread_id = ?').run(threadId);
   }
 
-  private findActiveByKey(
+  /**
+   * Soft-forget an exact memory key and keep a value-free tombstone.
+   * The tombstone participates in precedence checks, so delayed extraction
+   * from an older conversation cannot silently recreate forgotten content.
+   */
+  forget(input: ForgetMemoryInput): ForgetMemoryResult {
+    const key = normalizeText(input.key);
+    if (!key) throw new TypeError('memory key cannot be empty');
+    const scope = input.scope ?? 'global';
+    const observedAt = normalizeObservedAt(input.observedAt);
+    const existing = this.findGoverningByKey(key, scope, input.threadId);
+    if (!existing) return { action: 'not_found' };
+    if (existing.status === 'forgotten') {
+      if (Date.parse(observedAt) > Date.parse(existing.observedAt)) {
+        return {
+          action: 'already_forgotten',
+          memory: this.update(existing.id, {
+            observedAt,
+            explicit: true,
+            source: input.source ?? existing.source,
+            sourceRunId: input.sourceRunId ?? existing.sourceRunId,
+          }),
+        };
+      }
+      return { action: 'already_forgotten', memory: existing };
+    }
+    return {
+      action: 'forgotten',
+      memory: this.update(existing.id, {
+        value: '[forgotten]',
+        status: 'forgotten',
+        explicit: true,
+        confidence: 1,
+        source: input.source ?? existing.source,
+        sourceRunId: input.sourceRunId ?? existing.sourceRunId,
+        observedAt,
+      }),
+    };
+  }
+
+  private findGoverningByKey(
     key: string,
     scope: Memory['scope'],
     threadId?: string,
@@ -509,13 +569,15 @@ export class MemoryStore {
     const row = scope === 'global'
       ? this.db.prepare(
           `SELECT * FROM memories
-           WHERE status = 'active' AND scope = 'global' AND lower(trim(key)) = lower(?)
-           ORDER BY updated_at DESC LIMIT 1`,
+           WHERE status IN ('active', 'forgotten')
+             AND scope = 'global' AND lower(trim(key)) = lower(?)
+           ORDER BY observed_at DESC, updated_at DESC LIMIT 1`,
         ).get(key)
       : this.db.prepare(
           `SELECT * FROM memories
-           WHERE status = 'active' AND scope = 'thread' AND thread_id = ? AND lower(trim(key)) = lower(?)
-           ORDER BY updated_at DESC LIMIT 1`,
+           WHERE status IN ('active', 'forgotten')
+             AND scope = 'thread' AND thread_id = ? AND lower(trim(key)) = lower(?)
+           ORDER BY observed_at DESC, updated_at DESC LIMIT 1`,
         ).get(threadId, key);
     return row ? rowToMemory(row as MemoryRow) : undefined;
   }

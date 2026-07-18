@@ -221,4 +221,58 @@ describe('MemoryStore', () => {
     const memory = store.create({ key: 'language', value: 'Chinese', threadId: 'thread-1' });
     expect(memory.threadId).toBe('thread-1');
   });
+
+  it('keeps a forgotten tombstone so delayed older extraction cannot recreate the fact', () => {
+    const original = store.remember({
+      key: 'database',
+      value: 'MySQL',
+      observedAt: '2026-07-10T00:00:00.000Z',
+    });
+    const forgotten = store.forget({
+      key: 'database',
+      observedAt: '2026-07-20T00:00:00.000Z',
+      source: 'explicit_user',
+    });
+
+    expect(forgotten.action).toBe('forgotten');
+    expect(store.getById(original.memory.id)).toMatchObject({
+      status: 'forgotten',
+      value: '[forgotten]',
+      explicit: true,
+    });
+
+    const delayed = store.remember({
+      key: 'database',
+      value: 'MySQL',
+      observedAt: '2026-07-15T00:00:00.000Z',
+      source: 'memory_agent',
+    });
+    expect(delayed.action).toBe('rejected');
+    expect(store.list({ status: 'active' })).toEqual([]);
+  });
+
+  it('allows a newer explicit instruction to restore a forgotten key', () => {
+    store.remember({
+      key: 'database',
+      value: 'MySQL',
+      observedAt: '2026-07-10T00:00:00.000Z',
+    });
+    const tombstone = store.forget({
+      key: 'database',
+      observedAt: '2026-07-20T00:00:00.000Z',
+    }).memory!;
+    const restored = store.remember({
+      key: 'database',
+      value: 'SQLite',
+      explicit: true,
+      observedAt: '2026-07-21T00:00:00.000Z',
+    });
+
+    expect(restored.action).toBe('superseded');
+    expect(restored.memory).toMatchObject({ status: 'active', value: 'SQLite' });
+    expect(store.getById(tombstone.id)).toMatchObject({
+      status: 'forgotten',
+      supersededById: restored.memory.id,
+    });
+  });
 });

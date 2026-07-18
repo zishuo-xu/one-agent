@@ -1,6 +1,7 @@
 import type { ModelProvider, TokenUsage } from '../model/types.js';
 import type { ToolCall } from '../tools/types.js';
 import { ToolRegistry } from '../tools/registry.js';
+import { MANAGE_MEMORY_TOOL_NAME } from '../memory/manageMemoryTool.js';
 import { AgentLoop } from './AgentLoop.js';
 import type { AgentEvent } from './events.js';
 
@@ -74,9 +75,10 @@ export class SubAgentRunner {
   async run(task: SubAgentTask): Promise<SubAgentResult> {
     const startedAt = Date.now();
     const registry = new ToolRegistry();
-    const inherited = task.allowedTools
-      ? this.tools.list().filter((tool) => task.allowedTools!.includes(tool.name))
-      : this.tools.list();
+    const inherited = this.tools.list().filter((tool) =>
+      tool.name !== MANAGE_MEMORY_TOOL_NAME &&
+      (!task.allowedTools || task.allowedTools.includes(tool.name)),
+    );
     registry.registerMany(inherited);
 
     const subAgent = new AgentLoop({
