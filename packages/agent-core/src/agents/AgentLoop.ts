@@ -95,6 +95,17 @@ interface ExecutionRecovery {
   pendingInput?: UserInputRequest;
 }
 
+interface PreparedExecution {
+  startedMs: number;
+  runId?: string;
+  reasoning: ReasoningChain;
+}
+
+interface ApprovalContinuation {
+  terminalResult?: LoopResult;
+  approvedToolResult?: { stepId?: string; result: ToolResult };
+}
+
 export class AgentLoop extends EventEmitter {
   private readonly systemPrompt: string;
   private readonly maxRetries: number;
@@ -409,6 +420,26 @@ export class AgentLoop extends EventEmitter {
     signal?: AbortSignal,
     recovery?: ExecutionRecovery,
   ): Promise<AgentRunResult> {
+    const execution = this.prepareRun(message, signal, recovery);
+    try {
+      const result = await this.executeStrategy(message, execution, recovery);
+      return this.finalizeRun(execution, result);
+    } catch (error) {
+      this.failExecution(execution, error);
+      throw error;
+    } finally {
+      // Flush any buffered streaming deltas as one aggregated trace row per
+      // stream, and clear run correlation.
+      this.recorder.endRun();
+    }
+  }
+
+  /** Phase 1: establish request context, Run correlation and opening Trace. */
+  private prepareRun(
+    message: string,
+    signal?: AbortSignal,
+    recovery?: ExecutionRecovery,
+  ): PreparedExecution {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
     this.checkSignal();
@@ -446,186 +477,192 @@ export class AgentLoop extends EventEmitter {
     if (recovery?.inputRequestId) {
       this.recorder.record({ type: 'input_received', requestId: recovery.inputRequestId });
     }
+    return { startedMs, runId, reasoning };
+  }
 
-    try {
-      let approvedToolResult: { stepId?: string; result: ToolResult } | undefined;
-      const approval = recovery?.pendingInput?.approval;
-      if (recovery?.pendingInput?.kind === 'tool_approval' && approval) {
-        const decision = parseToolApprovalAnswer(recovery.inputAnswer ?? '');
-        if (decision === 'reject') {
-          const rejected: ToolResult = { success: false, error: 'Tool execution rejected by user.' };
-          this.toolRunner.recordResult(approval.toolCall, rejected, {
-            runId,
-            stepId: approval.stepId,
-            attempt: approval.attempt,
-            status: 'rejected',
-            persist: true,
-            contextMode: 'observation',
-          });
-          const reply = `Cancelled ${approval.toolCall.name}; the tool was not executed.`;
-          this.contextManager.addMessage({ role: 'assistant', content: reply });
-          this.recorder.record({ type: 'message', content: reply });
-          this.recorder.record({ type: 'run', phase: 'completed', durationMs: Date.now() - startedMs });
-          this.recorder.endRun();
-          this.completeRun(runId);
-          return {
-            status: 'completed', reply, events: this.recorder.getEvents(), runId,
-            tokenUsage: this.recorder.getUsage(),
-          };
-        }
-        const approvedCall: ToolCall = {
-          ...approval.toolCall,
-          id: `${approval.toolCall.id}:approved:${crypto.randomUUID()}`,
-        };
-        this.toolRunner.recordCalls([approvedCall], {
-          stepId: approval.stepId,
-          attempt: approval.attempt,
-        });
-        const result = await this.toolRunner.execute(approvedCall, {
-          runId,
-          stepId: approval.stepId,
-          attempt: approval.attempt,
-          approvedFingerprint: approval.fingerprint,
-          contextMode: 'observation',
-        });
-        approvedToolResult = { stepId: approval.stepId, result };
-      }
+  /** Phase 2: resolve continuation, recall memory, select and run one strategy. */
+  private async executeStrategy(
+    message: string,
+    execution: PreparedExecution,
+    recovery?: ExecutionRecovery,
+  ): Promise<LoopResult> {
+    const approval = await this.continueApprovedTool(execution.runId, recovery);
+    if (approval.terminalResult) return approval.terminalResult;
 
-      // Recall after run correlation is established so the complete decision,
-      // including an empty result, is inspectable in this run's Trace.
-      let memoryText: string | undefined;
-      this.contextManager.clearMemoryContext();
-      if (this.memoryStore) {
-        try {
-          const recall = this.memoryStore.recallRelevantMemories(
-            recovery?.inputAnswer ?? message,
-            { threadId: this.threadId },
-          );
-          if (recall.memories.length > 0) {
-            memoryText = this.formatMemories(recall.memories);
-            this.contextManager.setMemoryContext(memoryText);
+    const memoryText = this.recallMemory(recovery?.inputAnswer ?? message);
+
+    // Planning requires both the opt-in and a tool registry; in 'auto' mode
+    // a cheap classifier decides per message whether planning is worth it.
+    const planningEnabled = (recovery || this.enablePlanning !== false) && this.toolRegistry;
+    const loop: LoopStrategy = recovery
+      ? recovery.checkpoint.loopMode === 'planning' ? this.planningLoop : this.simpleLoop
+      : planningEnabled && await this.resolvePlanningMode(message)
+        ? this.planningLoop
+        : this.simpleLoop;
+    const runContext: RunContext = {
+      message,
+      runId: execution.runId,
+      taskId: this.taskId,
+      threadId: this.threadId,
+      signal: this.signal,
+      memoryText,
+      reasoning: execution.reasoning,
+      recovery: recovery
+        ? {
+            checkpoint: recovery.checkpoint,
+            resumedFromRunId: recovery.resumedFromRunId,
+            approvedToolResult: approval.approvedToolResult,
           }
-          this.recorder.record({
-            type: 'memory_recall',
-            ...recall.report,
-            injectedMemoryIds: recall.memories.map((memory) => memory.id),
-            injectedCharacters: memoryText?.length ?? 0,
-            estimatedTokens: estimateTokens(memoryText ?? ''),
-          });
-        } catch (error) {
-          // Memory is optional context. A retrieval/storage failure is visible
-          // in Trace but must never change the main task result.
-          this.recorder.record({
-            type: 'memory_recall',
-            keywords: [],
-            candidateCount: 0,
-            selectedCount: 0,
-            candidates: [],
-            injectedMemoryIds: [],
-            injectedCharacters: 0,
-            estimatedTokens: 0,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-
-      // Planning requires both the opt-in and a tool registry; in 'auto' mode
-      // a cheap classifier decides per message whether planning is worth it.
-      const planningEnabled = (recovery || this.enablePlanning !== false) && this.toolRegistry;
-      const loop: LoopStrategy = recovery
-        ? recovery.checkpoint.loopMode === 'planning' ? this.planningLoop : this.simpleLoop
-        : planningEnabled && await this.resolvePlanningMode(message)
-          ? this.planningLoop
-          : this.simpleLoop;
-      const runContext: RunContext = {
+        : undefined,
+    };
+    try {
+      return await loop.run(runContext);
+    } catch (error) {
+      if (!(error instanceof ToolApprovalRequiredError)) throw error;
+      const checkpoint = this.createApprovalCheckpoint(
+        loop,
+        execution.runId,
         message,
-        runId,
-        taskId: this.taskId,
-        threadId: this.threadId,
-        signal: this.signal,
-        memoryText,
-        reasoning,
-        recovery: recovery
-          ? {
-              checkpoint: recovery.checkpoint,
-              resumedFromRunId: recovery.resumedFromRunId,
-              approvedToolResult,
-            }
-          : undefined,
+        recovery,
+        error.request,
+      );
+      return {
+        status: 'waiting_for_input',
+        reply: error.request.question,
+        inputRequest: error.request,
+        checkpoint,
       };
-      let result: LoopResult;
-      try {
-        result = await loop.run(runContext);
-      } catch (error) {
-        if (!(error instanceof ToolApprovalRequiredError)) throw error;
-        const checkpoint = this.createApprovalCheckpoint(
-          loop,
-          runId,
-          message,
-          recovery,
-          error.request,
-        );
-        result = {
-          status: 'waiting_for_input',
-          reply: error.request.question,
-          inputRequest: error.request,
-          checkpoint,
-        };
-      }
-      const usage = this.recorder.getUsage();
-      if (result.status === 'waiting_for_input') {
-        // The model's tool-call message remains internal, but the actual
-        // question is part of the user-visible conversation and survives
-        // /history plus process restarts like any normal assistant message.
-        this.contextManager.addMessage({ role: 'assistant', content: result.inputRequest.question });
-        this.recordRecoveryPoint(runId, result.checkpoint);
-        this.recorder.record({ type: 'input_required', request: result.inputRequest });
-        this.recorder.record({
-          type: 'run',
-          phase: 'waiting_for_input',
-          durationMs: Date.now() - startedMs,
-        });
-        this.recorder.endRun();
-        this.waitRun(runId);
-        return {
-          status: 'waiting_for_input',
-          reply: result.reply,
-          inputRequest: result.inputRequest,
-          events: this.recorder.getEvents(),
-          runId,
-          tokenUsage: usage,
-        };
-      }
+    }
+  }
+
+  /** Phase 3: persist the terminal lifecycle state and build the public result. */
+  private finalizeRun(execution: PreparedExecution, result: LoopResult): AgentRunResult {
+    const usage = this.recorder.getUsage();
+    if (result.status === 'waiting_for_input') {
+      // The model's tool-call message remains internal, but the actual
+      // question is part of the user-visible conversation and survives
+      // /history plus process restarts like any normal assistant message.
+      this.contextManager.addMessage({ role: 'assistant', content: result.inputRequest.question });
+      this.recordRecoveryPoint(execution.runId, result.checkpoint);
+      this.recorder.record({ type: 'input_required', request: result.inputRequest });
       this.recorder.record({
         type: 'run',
-        phase: 'completed',
-        durationMs: Date.now() - startedMs,
+        phase: 'waiting_for_input',
+        durationMs: Date.now() - execution.startedMs,
       });
       this.recorder.endRun();
-      this.completeRun(runId);
+      this.waitRun(execution.runId);
       return {
-        status: 'completed',
+        status: 'waiting_for_input',
         reply: result.reply,
+        inputRequest: result.inputRequest,
         events: this.recorder.getEvents(),
-        runId,
+        runId: execution.runId,
         tokenUsage: usage,
       };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.recorder.record({
-        type: 'run',
-        phase: this.signal?.aborted ? 'cancelled' : 'failed',
-        durationMs: Date.now() - startedMs,
-        error: message,
-      });
-      this.recorder.endRun();
-      this.failRun(runId, message);
-      throw error;
-    } finally {
-      // Flush any buffered streaming deltas as one aggregated trace row per
-      // stream, and clear run correlation.
-      this.recorder.endRun();
     }
+    this.recorder.record({
+      type: 'run',
+      phase: 'completed',
+      durationMs: Date.now() - execution.startedMs,
+    });
+    this.recorder.endRun();
+    this.completeRun(execution.runId);
+    return {
+      status: 'completed',
+      reply: result.reply,
+      events: this.recorder.getEvents(),
+      runId: execution.runId,
+      tokenUsage: usage,
+    };
+  }
+
+  private failExecution(execution: PreparedExecution, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.recorder.record({
+      type: 'run',
+      phase: this.signal?.aborted ? 'cancelled' : 'failed',
+      durationMs: Date.now() - execution.startedMs,
+      error: message,
+    });
+    this.recorder.endRun();
+    this.failRun(execution.runId, message);
+  }
+
+  private async continueApprovedTool(
+    runId: string | undefined,
+    recovery?: ExecutionRecovery,
+  ): Promise<ApprovalContinuation> {
+    const approval = recovery?.pendingInput?.approval;
+    if (recovery?.pendingInput?.kind !== 'tool_approval' || !approval) return {};
+
+    const decision = parseToolApprovalAnswer(recovery.inputAnswer ?? '');
+    if (decision === 'reject') {
+      const rejected: ToolResult = { success: false, error: 'Tool execution rejected by user.' };
+      this.toolRunner.recordResult(approval.toolCall, rejected, {
+        runId,
+        stepId: approval.stepId,
+        attempt: approval.attempt,
+        status: 'rejected',
+        persist: true,
+        contextMode: 'observation',
+      });
+      const reply = `Cancelled ${approval.toolCall.name}; the tool was not executed.`;
+      this.contextManager.addMessage({ role: 'assistant', content: reply });
+      this.recorder.record({ type: 'message', content: reply });
+      return { terminalResult: { status: 'completed', reply } };
+    }
+
+    const approvedCall: ToolCall = {
+      ...approval.toolCall,
+      id: `${approval.toolCall.id}:approved:${crypto.randomUUID()}`,
+    };
+    this.toolRunner.recordCalls([approvedCall], {
+      stepId: approval.stepId,
+      attempt: approval.attempt,
+    });
+    const result = await this.toolRunner.execute(approvedCall, {
+      runId,
+      stepId: approval.stepId,
+      attempt: approval.attempt,
+      approvedFingerprint: approval.fingerprint,
+      contextMode: 'observation',
+    });
+    return { approvedToolResult: { stepId: approval.stepId, result } };
+  }
+
+  /** Recall is optional context; its failure remains visible but non-fatal. */
+  private recallMemory(query: string): string | undefined {
+    let memoryText: string | undefined;
+    this.contextManager.clearMemoryContext();
+    if (!this.memoryStore) return memoryText;
+    try {
+      const recall = this.memoryStore.recallRelevantMemories(query, { threadId: this.threadId });
+      if (recall.memories.length > 0) {
+        memoryText = this.formatMemories(recall.memories);
+        this.contextManager.setMemoryContext(memoryText);
+      }
+      this.recorder.record({
+        type: 'memory_recall',
+        ...recall.report,
+        injectedMemoryIds: recall.memories.map((memory) => memory.id),
+        injectedCharacters: memoryText?.length ?? 0,
+        estimatedTokens: estimateTokens(memoryText ?? ''),
+      });
+    } catch (error) {
+      this.recorder.record({
+        type: 'memory_recall',
+        keywords: [],
+        candidateCount: 0,
+        selectedCount: 0,
+        candidates: [],
+        injectedMemoryIds: [],
+        injectedCharacters: 0,
+        estimatedTokens: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return memoryText;
   }
 
   getHistory(): Message[] {

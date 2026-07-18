@@ -87,6 +87,17 @@ RunContext（一次请求的 runId、signal、memory、reasoning、recovery）
 不是新的服务层。`AgentEvent` 是独立于 `AgentLoop` 的公共事实协议，因此 Memory、TaskQueue、Eval 和 UI
 不需要反向依赖运行时门面。
 
+`AgentLoop` 内部按一次 Run 的生命周期分为三个私有阶段，不增加新的服务层：
+
+```text
+prepareRun       → 请求上下文、Run 关联、起始 Trace
+executeStrategy  → 审批继续、记忆召回、Loop 选择与执行
+finalizeRun      → waiting/completed、Trace 收尾、Run 状态落库
+```
+
+异常统一由执行入口记录 `failed/cancelled` 并完成收尾。三个阶段共享同一个局部
+`PreparedExecution` 数据对象，不持有跨 Run 状态，也不改变 SimpleLoop、PlanningLoop 或持久化层职责。
+
 ## 5. 正常执行流程
 
 ```text
