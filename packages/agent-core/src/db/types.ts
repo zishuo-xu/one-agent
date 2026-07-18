@@ -131,6 +131,13 @@ export interface Memory {
   value: string;
   source: string | null;
   threadId: string | null;
+  scope: 'global' | 'thread';
+  sourceRunId: string | null;
+  confidence: number;
+  status: 'active' | 'superseded' | 'expired';
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  supersededById: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -141,6 +148,12 @@ export interface CreateMemoryInput {
   value: string;
   source?: string;
   threadId?: string;
+  scope?: Memory['scope'];
+  sourceRunId?: string;
+  confidence?: number;
+  status?: Memory['status'];
+  expiresAt?: string;
+  supersededById?: string;
 }
 
 export function messageToPersisted(message: Message): Pick<

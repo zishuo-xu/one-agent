@@ -391,7 +391,7 @@ export class AgentLoop extends EventEmitter {
     // Recall relevant long-term memories and inject them into the context.
     this.currentMemoryText = undefined;
     if (this.memoryStore) {
-      const memories = this.memoryStore.getRelevantMemories(message);
+      const memories = this.memoryStore.getRelevantMemories(message, { threadId: this.threadId });
       if (memories.length > 0) {
         this.currentMemoryText = this.formatMemories(memories);
         this.contextManager.setMemoryContext(this.currentMemoryText);
@@ -444,7 +444,7 @@ export class AgentLoop extends EventEmitter {
       });
       this.recorder.endRun();
       this.completeRun(runId);
-      const memoryPersistence = this.persistMemories(message, result.reply);
+      const memoryPersistence = this.persistMemories(message, result.reply, runId);
       if (this.awaitMemoryExtraction) await memoryPersistence;
       else void memoryPersistence;
       return { reply: result.reply, events: this.recorder.getEvents(), runId, tokenUsage: usage };
@@ -627,7 +627,11 @@ export class AgentLoop extends EventEmitter {
     return memories.map((m) => `${m.key}: ${m.value}`).join('\n');
   }
 
-  private async extractAndStoreMemories(userMessage: string, assistantReply: string): Promise<void> {
+  private async extractAndStoreMemories(
+    userMessage: string,
+    assistantReply: string,
+    sourceRunId?: string,
+  ): Promise<void> {
     if (!this.memoryStore || !this.memoryExtractor) {
       return;
     }
@@ -635,11 +639,14 @@ export class AgentLoop extends EventEmitter {
     try {
       const facts = await this.memoryExtractor.extract(userMessage, assistantReply);
       for (const fact of facts) {
-        this.memoryStore.create({
+        this.memoryStore.remember({
           key: fact.key,
           value: fact.value,
           source: 'extracted',
           threadId: this.threadId,
+          sourceRunId,
+          scope: 'global',
+          confidence: 0.7,
         });
       }
     } catch {
@@ -647,8 +654,12 @@ export class AgentLoop extends EventEmitter {
     }
   }
 
-  private async persistMemories(userMessage: string, assistantReply: string): Promise<void> {
-    const extraction = this.extractAndStoreMemories(userMessage, assistantReply);
+  private async persistMemories(
+    userMessage: string,
+    assistantReply: string,
+    sourceRunId?: string,
+  ): Promise<void> {
+    const extraction = this.extractAndStoreMemories(userMessage, assistantReply, sourceRunId);
     if (this.awaitMemoryExtraction) {
       await extraction;
     }

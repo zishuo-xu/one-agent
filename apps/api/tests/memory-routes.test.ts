@@ -36,6 +36,12 @@ describe('memory routes', () => {
     expect(body.key).toBe('language');
     expect(body.value).toBe('Chinese');
     expect(body.source).toBe('test');
+    expect(body).toMatchObject({
+      scope: 'global',
+      confidence: 0.7,
+      status: 'active',
+      governanceAction: 'created',
+    });
   });
 
   it('POST /api/memories validates key and value', async () => {
@@ -97,6 +103,74 @@ describe('memory routes', () => {
     const body = JSON.parse(response.body);
     expect(body).toHaveLength(1);
     expect(body[0].id).toBe(memoryId);
+  });
+
+  it('governs conflicts and exposes lifecycle filters', async () => {
+    const server = await buildServer();
+    const first = await server.inject({
+      method: 'POST',
+      url: '/api/memories',
+      payload: { key: 'timezone', value: 'Shanghai', confidence: 0.9 },
+    });
+    const firstBody = JSON.parse(first.body);
+    const conflict = await server.inject({
+      method: 'POST',
+      url: '/api/memories',
+      payload: { key: 'timezone', value: 'Tokyo', confidence: 0.4 },
+    });
+    expect(conflict.statusCode).toBe(200);
+    expect(JSON.parse(conflict.body)).toMatchObject({
+      status: 'superseded',
+      governanceAction: 'rejected',
+      supersededById: firstBody.id,
+    });
+
+    const active = await server.inject({ method: 'GET', url: '/api/memories?status=active' });
+    expect(JSON.parse(active.body).map((memory: { id: string }) => memory.id)).toEqual([firstBody.id]);
+    const historical = await server.inject({ method: 'GET', url: '/api/memories?status=superseded' });
+    expect(JSON.parse(historical.body)).toHaveLength(1);
+  });
+
+  it('isolates thread-scoped query recall', async () => {
+    const server = await buildServer();
+    await server.inject({
+      method: 'POST',
+      url: '/api/memories',
+      payload: { key: 'project language', value: 'Rust', scope: 'thread', threadId: 'thread-1' },
+    });
+
+    const visible = await server.inject({
+      method: 'GET',
+      url: '/api/memories?query=language&threadId=thread-1',
+    });
+    expect(JSON.parse(visible.body)).toHaveLength(1);
+    const hidden = await server.inject({
+      method: 'GET',
+      url: '/api/memories?query=language&threadId=thread-2',
+    });
+    expect(JSON.parse(hidden.body)).toEqual([]);
+  });
+
+  it('PATCH /api/memories/:id updates governance metadata', async () => {
+    const server = await buildServer();
+    const created = await server.inject({
+      method: 'POST',
+      url: '/api/memories',
+      payload: { key: 'language', value: 'Chinese' },
+    });
+    const { id } = JSON.parse(created.body);
+
+    const response = await server.inject({
+      method: 'PATCH',
+      url: `/api/memories/${id}`,
+      payload: { confidence: 0.95, status: 'expired', value: 'Simplified Chinese' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      confidence: 0.95,
+      status: 'expired',
+      value: 'Simplified Chinese',
+    });
   });
 
   it('GET /api/memories/:id returns a single memory', async () => {

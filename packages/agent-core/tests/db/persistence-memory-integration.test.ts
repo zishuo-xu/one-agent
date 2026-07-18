@@ -58,7 +58,7 @@ describe('AgentLoop memory integration', () => {
       awaitMemoryExtraction: true,
     });
 
-    const { reply: firstReply } = await firstAgent.chat('I prefer Chinese.');
+    const { reply: firstReply, runId: firstRunId } = await firstAgent.chat('I prefer Chinese.');
     expect(firstReply).toBe('Got it.');
     expect(memoryExtractor.extract).toHaveBeenCalledWith('I prefer Chinese.', 'Got it.');
 
@@ -66,6 +66,13 @@ describe('AgentLoop memory integration', () => {
     expect(memories).toHaveLength(1);
     expect(memories[0].key).toBe('preferred language');
     expect(memories[0].value).toBe('Chinese');
+    expect(memories[0]).toMatchObject({
+      scope: 'global',
+      confidence: 0.7,
+      status: 'active',
+      sourceRunId: firstRunId,
+      threadId: firstThread,
+    });
 
     // New thread should still recall the globally stored memory.
     const secondThread = threadStore.create({ id: 'thread-2' }).id;

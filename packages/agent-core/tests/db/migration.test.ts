@@ -26,6 +26,15 @@ describe('migrate', () => {
         tool_call_id TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE memories (
+        id TEXT PRIMARY KEY,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source TEXT,
+        thread_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
       INSERT INTO trace_events (id, run_id, event_type, event_data)
       VALUES ('trace-1', 'run-1', 'message', '{}');
     `);
@@ -43,6 +52,13 @@ describe('migrate', () => {
     expect(runColumns.some((column) => column.name === 'checkpoint')).toBe(true);
     const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
     expect(messageColumns.some((column) => column.name === 'internal')).toBe(true);
+    const memoryColumns = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
+    expect(memoryColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'scope', 'source_run_id', 'confidence', 'status', 'expires_at', 'last_used_at',
+      'superseded_by_id',
+    ]));
+    const memoryIndexes = db.prepare('PRAGMA index_list(memories)').all() as Array<{ name: string }>;
+    expect(memoryIndexes.some((index) => index.name === 'idx_memories_status_scope')).toBe(true);
   });
 
   it('adds idempotency_key to pre-existing tasks tables', () => {

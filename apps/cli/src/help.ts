@@ -22,6 +22,9 @@ ${bold('REPL commands')}:
   /context            Show a summary of the current conversation context
   /context --verbose  Include recent internal tool/context messages
   /reasoning          Show PlanningLoop reasoning for the last turn
+  /memory             List active long-term memories
+  /memory <id>        Show memory source, scope, confidence, and lifecycle
+  /memory delete <id> Permanently delete a memory
   /threads            List all threads
   /runs               List runs in the current thread
   /runs <run-id>      Show details for a specific run

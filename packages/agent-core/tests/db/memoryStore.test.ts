@@ -17,6 +17,9 @@ describe('MemoryStore', () => {
     expect(memory.key).toBe('language');
     expect(memory.value).toBe('Chinese');
     expect(memory.source).toBe('test');
+    expect(memory.scope).toBe('global');
+    expect(memory.confidence).toBe(0.7);
+    expect(memory.status).toBe('active');
 
     const found = store.getById(memory.id);
     expect(found).toEqual(memory);
@@ -72,6 +75,84 @@ describe('MemoryStore', () => {
     const found = store.getById(memory.id)!;
     expect(found.value).toBe('Mandarin');
     expect(found.key).toBe('language');
+  });
+
+  it('reinforces the same fact instead of creating a duplicate', () => {
+    const first = store.remember({ key: ' language ', value: 'Chinese', confidence: 0.6 });
+    const second = store.remember({
+      key: 'language',
+      value: ' chinese ',
+      confidence: 0.9,
+      sourceRunId: 'run-2',
+    });
+
+    expect(second.action).toBe('reinforced');
+    expect(second.memory.id).toBe(first.memory.id);
+    expect(second.memory.confidence).toBe(0.9);
+    expect(second.memory.sourceRunId).toBe('run-2');
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('supersedes an active fact with an equally or more confident conflict', () => {
+    const oldFact = store.remember({ key: 'timezone', value: 'Shanghai', confidence: 0.7 });
+    const result = store.remember({ key: 'timezone', value: 'Tokyo', confidence: 0.8 });
+
+    expect(result.action).toBe('superseded');
+    expect(result.memory.status).toBe('active');
+    expect(store.getById(oldFact.memory.id)).toMatchObject({
+      status: 'superseded',
+      supersededById: result.memory.id,
+    });
+    expect(store.list({ status: 'active' })).toHaveLength(1);
+  });
+
+  it('keeps the stronger active fact when a lower-confidence conflict arrives', () => {
+    const strong = store.remember({ key: 'timezone', value: 'Shanghai', confidence: 0.9 });
+    const weak = store.remember({ key: 'timezone', value: 'Tokyo', confidence: 0.4 });
+
+    expect(weak.action).toBe('rejected');
+    expect(weak.memory).toMatchObject({ status: 'superseded', supersededById: strong.memory.id });
+    expect(store.list({ status: 'active' }).map((memory) => memory.id)).toEqual([strong.memory.id]);
+  });
+
+  it('expires due memories before conflict checks and retrieval', () => {
+    const expired = store.create({
+      key: 'timezone',
+      value: 'Shanghai',
+      confidence: 1,
+      expiresAt: '2000-01-01T00:00:00.000Z',
+    });
+    const replacement = store.remember({ key: 'timezone', value: 'Tokyo', confidence: 0.2 });
+
+    expect(replacement.action).toBe('created');
+    expect(store.getById(expired.id)?.status).toBe('expired');
+    expect(store.getRelevantMemories('timezone').map((memory) => memory.id)).toEqual([
+      replacement.memory.id,
+    ]);
+  });
+
+  it('isolates thread-scoped recall while keeping global recall cross-thread', () => {
+    const global = store.create({ key: 'preferred language', value: 'Chinese' });
+    const local = store.create({
+      key: 'project language',
+      value: 'Rust',
+      scope: 'thread',
+      threadId: 'thread-1',
+    });
+
+    const sameThread = store.getRelevantMemories('language', { threadId: 'thread-1' });
+    expect(sameThread.map((memory) => memory.id)).toEqual(expect.arrayContaining([global.id, local.id]));
+    expect(store.getRelevantMemories('language', { threadId: 'thread-2' }).map((memory) => memory.id))
+      .toEqual([global.id]);
+    expect(store.getRelevantMemories('language').map((memory) => memory.id)).toEqual([global.id]);
+    expect(store.getById(global.id)?.lastUsedAt).not.toBeNull();
+  });
+
+  it('normalizes updates and rejects empty content', () => {
+    const memory = store.create({ key: 'language', value: 'Chinese' });
+    expect(store.update(memory.id, { value: '  Simplified   Chinese  ' }).value)
+      .toBe('Simplified Chinese');
+    expect(() => store.update(memory.id, { key: '   ' })).toThrow('cannot be empty');
   });
 
   it('deletes a memory by id', () => {

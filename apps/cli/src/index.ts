@@ -21,6 +21,7 @@ import {
 import { WORKSPACE_ROOT } from './load-env.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
+import { formatMemoryDetail, formatMemoryList, resolveMemory } from './commands/memory.js';
 import { sanitizeTerminalText } from './output.js';
 import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
@@ -45,6 +46,9 @@ const COMMANDS = [
   '/context',
   '/context --verbose',
   '/reasoning',
+  '/memory',
+  '/memory <id>',
+  '/memory delete <id>',
   '/threads',
   '/runs',
   '/runs <run-id>',
@@ -413,6 +417,36 @@ async function main() {
             console.log(`  failure: ${step.failureAnalysis.category} - ${step.failureAnalysis.rootCause?.slice(0, 120)}`);
           }
         }
+      }
+      continue;
+    }
+
+    if (trimmed === '/memory') {
+      for (const line of formatMemoryList(memoryStore.list({ status: 'active' }))) {
+        console.log(line);
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('/memory delete ')) {
+      const id = trimmed.slice('/memory delete '.length).trim();
+      const memory = resolveMemory(memoryStore.list(), id);
+      if (!memory) {
+        console.log(`Memory not found or prefix is ambiguous: ${id}`);
+      } else {
+        memoryStore.deleteById(memory.id);
+        console.log(`Deleted memory ${shortId(memory.id)}.`);
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('/memory ')) {
+      const id = trimmed.slice('/memory '.length).trim();
+      const memory = resolveMemory(memoryStore.list(), id);
+      if (!memory) {
+        console.log(`Memory not found or prefix is ambiguous: ${id}`);
+      } else {
+        for (const line of formatMemoryDetail(memory)) console.log(line);
       }
       continue;
     }
