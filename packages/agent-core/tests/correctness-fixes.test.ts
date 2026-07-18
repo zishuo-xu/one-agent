@@ -39,6 +39,7 @@ function createDb() {
     CREATE TABLE threads (
       id TEXT PRIMARY KEY,
       title TEXT,
+      memory_extracted INTEGER NOT NULL DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );

@@ -94,7 +94,15 @@ export { EvalRunner } from './eval/runner.js';
 export { builtInEvalTasks, realModelPlanningTask, realModelBenchmarkTasks } from './eval/scenarios/index.js';
 export { loadEvalDataset, resolveBundledDatasetDir } from './eval/datasetLoader.js';
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
-export type { ExtractedFact } from './memory/MemoryExtractor.js';
+export type {
+  ExtractedMemoryCandidate,
+  MemorySourceMessage,
+} from './memory/MemoryExtractor.js';
+export { MemoryConsolidator } from './memory/MemoryConsolidator.js';
+export type {
+  MemoryConsolidationResult,
+  MemoryConsolidatorOptions,
+} from './memory/MemoryConsolidator.js';
 export { EvidenceCompletionVerifier } from './verification/EvidenceCompletionVerifier.js';
 export type { EvidenceCompletionVerifierOptions } from './verification/EvidenceCompletionVerifier.js';
 export type {

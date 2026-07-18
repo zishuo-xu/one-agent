@@ -16,6 +16,7 @@ describe('ThreadStore', () => {
     const thread = store.create();
     expect(thread.id).toBeDefined();
     expect(thread.title).toBeNull();
+    expect(thread.memoryExtracted).toBe(true);
     expect(thread.createdAt).toBeDefined();
     expect(thread.updatedAt).toBeDefined();
   });
@@ -52,6 +53,14 @@ describe('ThreadStore', () => {
     store.updateTitle(thread.id, 'Updated title');
     const found = store.getById(thread.id);
     expect(found?.title).toBe('Updated title');
+  });
+
+  it('lists and marks threads that need memory extraction', () => {
+    const thread = store.create({ id: 'thread-memory' });
+    store.markMemoryUnextracted(thread.id);
+    expect(store.listUnextracted().map((item) => item.id)).toEqual([thread.id]);
+    store.markMemoryExtracted(thread.id);
+    expect(store.getById(thread.id)?.memoryExtracted).toBe(true);
   });
 
   it('deletes a thread', () => {

@@ -56,9 +56,12 @@ describe('migrate', () => {
     expect(memoryColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
       'scope', 'source_run_id', 'confidence', 'status', 'expires_at', 'last_used_at',
       'superseded_by_id',
+      'kind', 'explicit', 'source_message_id', 'observed_at',
     ]));
     const memoryIndexes = db.prepare('PRAGMA index_list(memories)').all() as Array<{ name: string }>;
     expect(memoryIndexes.some((index) => index.name === 'idx_memories_status_scope')).toBe(true);
+    const threadColumns = db.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>;
+    expect(threadColumns.some((column) => column.name === 'memory_extracted')).toBe(true);
   });
 
   it('adds idempotency_key to pre-existing tasks tables', () => {

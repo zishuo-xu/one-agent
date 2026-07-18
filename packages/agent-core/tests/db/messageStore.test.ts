@@ -26,6 +26,13 @@ describe('MessageStore', () => {
 
     const found = store.getById(saved.id);
     expect(found).toEqual(saved);
+    expect(threadStore.getById(threadId)?.memoryExtracted).toBe(false);
+  });
+
+  it('does not mark a thread unextracted for assistant or internal user messages', () => {
+    store.save(threadId, { role: 'assistant', content: 'Hello' });
+    store.save(threadId, { role: 'user', content: 'internal', internal: true });
+    expect(threadStore.getById(threadId)?.memoryExtracted).toBe(true);
   });
 
   it('saves a message with tool calls', () => {

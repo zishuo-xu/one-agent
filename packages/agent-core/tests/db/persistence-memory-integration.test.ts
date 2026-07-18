@@ -4,6 +4,7 @@ import { createConnection } from '../../src/db/connection.js';
 import { ThreadStore } from '../../src/db/threadStore.js';
 import { MemoryStore } from '../../src/db/memoryStore.js';
 import { MemoryExtractor } from '../../src/memory/MemoryExtractor.js';
+import { MemoryConsolidator } from '../../src/memory/MemoryConsolidator.js';
 import { AgentLoop } from '../../src/agents/AgentLoop.js';
 
 vi.mock('../../src/config.js', () => ({
@@ -40,9 +41,15 @@ describe('AgentLoop memory integration', () => {
 
   it('extracts and recalls memories across different threads', async () => {
     const memoryExtractor = new MemoryExtractor();
-    vi.spyOn(memoryExtractor, 'extract').mockResolvedValue([
-      { key: 'preferred language', value: 'Chinese' },
-    ]);
+    vi.spyOn(memoryExtractor, 'extract').mockImplementation(async (messages) => [{
+      key: 'preferred language',
+      value: 'Chinese',
+      kind: 'user_preference',
+      scope: 'global',
+      confidence: 0.95,
+      explicit: true,
+      sourceMessageId: messages[0].id,
+    }]);
 
     const firstThread = threadStore.create({ id: 'thread-1' }).id;
     mockCreate.mockResolvedValueOnce({
@@ -54,13 +61,18 @@ describe('AgentLoop memory integration', () => {
       threadId: firstThread,
       db,
       memoryStore,
-      memoryExtractor,
-      awaitMemoryExtraction: true,
     });
 
-    const { reply: firstReply, runId: firstRunId } = await firstAgent.chat('I prefer Chinese.');
+    const { reply: firstReply } = await firstAgent.chat('I prefer Chinese.');
     expect(firstReply).toBe('Got it.');
-    expect(memoryExtractor.extract).toHaveBeenCalledWith('I prefer Chinese.', 'Got it.');
+    expect(memoryExtractor.extract).not.toHaveBeenCalled();
+
+    const consolidation = await new MemoryConsolidator(db, {
+      extractor: memoryExtractor,
+      memoryStore,
+    }).consolidateThread(firstThread);
+    expect(consolidation.status).toBe('completed');
+    expect(memoryExtractor.extract).toHaveBeenCalledTimes(1);
 
     const memories = memoryStore.list();
     expect(memories).toHaveLength(1);
@@ -68,11 +80,13 @@ describe('AgentLoop memory integration', () => {
     expect(memories[0].value).toBe('Chinese');
     expect(memories[0]).toMatchObject({
       scope: 'global',
-      confidence: 0.7,
+      confidence: 0.95,
       status: 'active',
-      sourceRunId: firstRunId,
       threadId: firstThread,
+      kind: 'user_preference',
+      explicit: true,
     });
+    expect(memories[0].sourceMessageId).toBeTruthy();
 
     // New thread should still recall the globally stored memory.
     const secondThread = threadStore.create({ id: 'thread-2' }).id;

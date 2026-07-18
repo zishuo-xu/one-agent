@@ -11,7 +11,7 @@ import {
   RunStore,
   ToolCallStore,
   MemoryStore,
-  MemoryExtractor,
+  MemoryConsolidator,
   getSharedConnection,
 } from '@one-agent/agent-core';
 import path from 'node:path';
@@ -54,7 +54,8 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
   const runStore = new RunStore(db);
   const toolCallStore = new ToolCallStore(db);
   const memoryStore = new MemoryStore(db);
-  const memoryExtractor = new MemoryExtractor();
+  const memoryConsolidator = new MemoryConsolidator(db, { memoryStore });
+  void memoryConsolidator.recoverUnextracted();
 
   fastify.post<{ Body: ChatBody; Reply: ChatReply }>('/api/chat', async (request, reply) => {
     const { message, threadId: bodyThreadId } = request.body;
@@ -80,7 +81,6 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         tools,
         threadId,
         memoryStore,
-        memoryExtractor,
       });
       const { reply: response, events } = await agent.chat(message);
       return { reply: response, events, threadId };

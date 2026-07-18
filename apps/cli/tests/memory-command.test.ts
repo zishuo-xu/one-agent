@@ -7,7 +7,7 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     id: 'abcdef12-3456-7890',
     key: 'preferred language',
     value: 'Chinese',
-    source: 'extracted',
+    source: 'memory_agent',
     threadId: 'thread-1',
     scope: 'global',
     sourceRunId: 'run-1',
@@ -16,6 +16,10 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     expiresAt: null,
     lastUsedAt: null,
     supersededById: null,
+    kind: 'user_preference',
+    explicit: true,
+    sourceMessageId: 'message-1',
+    observedAt: '2026-07-18T00:00:00.000Z',
     createdAt: '2026-07-18T00:00:00.000Z',
     updatedAt: '2026-07-18T00:00:00.000Z',
     ...overrides,
@@ -34,6 +38,8 @@ describe('memory CLI formatting', () => {
   it('shows governance metadata in memory detail', () => {
     const output = formatMemoryDetail(memory()).join('\n');
     expect(output).toContain('sourceRunId: run-1');
+    expect(output).toContain('sourceMessageId: message-1');
+    expect(output).toContain('kind: user_preference');
     expect(output).toContain('status: active');
     expect(output).toContain('confidence: 70%');
   });

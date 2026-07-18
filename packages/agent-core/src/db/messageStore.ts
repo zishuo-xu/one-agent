@@ -45,12 +45,12 @@ export class MessageStore {
       .get(threadId) as { max_seq: number } | undefined;
     const sequence = (row?.max_seq ?? -1) + 1;
 
-    this.db
-      .prepare(
+    const now = new Date().toISOString();
+    const transaction = this.db.transaction(() => {
+      this.db.prepare(
         `INSERT INTO messages (id, thread_id, role, content, tool_calls, tool_call_id, internal, sequence, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-      )
-      .run(
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
         id,
         threadId,
         persisted.role,
@@ -58,8 +58,19 @@ export class MessageStore {
         persisted.toolCalls ?? null,
         persisted.toolCallId ?? null,
         persisted.internal ? 1 : 0,
-        sequence
+        sequence,
+        now,
       );
+      if (message.role === 'user' && !message.internal) {
+        // The timestamp is the thread revision used by MemoryConsolidator.
+        // Update both fields atomically with the message so an in-flight
+        // consolidation cannot mark a thread complete after newer input.
+        this.db
+          .prepare('UPDATE threads SET memory_extracted = 0, updated_at = ? WHERE id = ?')
+          .run(now, threadId);
+      }
+    });
+    transaction();
 
     return this.getById(id)!;
   }

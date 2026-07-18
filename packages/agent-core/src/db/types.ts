@@ -8,6 +8,7 @@ import type { RunCheckpoint } from '../agents/checkpoint.js';
 export interface Thread {
   id: string;
   title: string | null;
+  memoryExtracted: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -138,6 +139,10 @@ export interface Memory {
   expiresAt: string | null;
   lastUsedAt: string | null;
   supersededById: string | null;
+  kind: 'user_profile' | 'user_preference' | 'project_rule' | 'durable_goal' | 'fact';
+  explicit: boolean;
+  sourceMessageId: string | null;
+  observedAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -154,6 +159,10 @@ export interface CreateMemoryInput {
   status?: Memory['status'];
   expiresAt?: string;
   supersededById?: string;
+  kind?: Memory['kind'];
+  explicit?: boolean;
+  sourceMessageId?: string;
+  observedAt?: string;
 }
 
 export function messageToPersisted(message: Message): Pick<

@@ -72,6 +72,10 @@ describe('chat routes', () => {
     const body = JSON.parse(response.body);
     expect(body.reply).toBe('Hello');
     expect(body.threadId).toBeDefined();
+
+    const threadsResponse = await server.inject({ method: 'GET', url: '/api/threads' });
+    const thread = JSON.parse(threadsResponse.body).find((item: { id: string }) => item.id === body.threadId);
+    expect(thread.memoryExtracted).toBe(false);
   });
 
   it('POST /api/chat continues an existing thread', async () => {

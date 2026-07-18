@@ -15,6 +15,10 @@ interface MemoryRow {
   expires_at: string | null;
   last_used_at: string | null;
   superseded_by_id: string | null;
+  kind: Memory['kind'];
+  explicit: number;
+  source_message_id: string | null;
+  observed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -33,6 +37,10 @@ function rowToMemory(row: MemoryRow): Memory {
     expiresAt: row.expires_at,
     lastUsedAt: row.last_used_at,
     supersededById: row.superseded_by_id,
+    kind: row.kind,
+    explicit: row.explicit === 1,
+    sourceMessageId: row.source_message_id,
+    observedAt: row.observed_at ?? row.created_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -72,6 +80,23 @@ function normalizeOptionalDate(value?: string | null): string | null | undefined
   const time = Date.parse(value);
   if (!Number.isFinite(time)) throw new TypeError('expiresAt must be a valid date');
   return new Date(time).toISOString();
+}
+
+function normalizeObservedAt(value?: string): string {
+  if (value === undefined) return new Date().toISOString();
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) throw new TypeError('observedAt must be a valid date');
+  return new Date(time).toISOString();
+}
+
+function comparePrecedence(candidate: CreateMemoryInput, existing: Memory): number {
+  const observedDifference = Date.parse(normalizeObservedAt(candidate.observedAt)) - Date.parse(existing.observedAt);
+  if (observedDifference !== 0) return observedDifference;
+  const explicitDifference = Number(candidate.explicit ?? false) - Number(existing.explicit);
+  if (explicitDifference !== 0) return explicitDifference;
+  const confidenceDifference = normalizeConfidence(candidate.confidence) - existing.confidence;
+  if (confidenceDifference !== 0) return confidenceDifference;
+  return (candidate.sourceMessageId ?? '').localeCompare(existing.sourceMessageId ?? '');
 }
 
 // Basic English/Chinese stop words to reduce noisy LIKE queries.
@@ -134,13 +159,15 @@ export class MemoryStore {
     }
     const confidence = normalizeConfidence(input.confidence);
     const expiresAt = normalizeOptionalDate(input.expiresAt);
+    const observedAt = normalizeObservedAt(input.observedAt);
 
     this.db
       .prepare(
         `INSERT INTO memories (
            id, key, value, source, thread_id, scope, source_run_id, confidence,
-           status, expires_at, last_used_at, superseded_by_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`
+           status, expires_at, last_used_at, superseded_by_id, kind, explicit,
+           source_message_id, observed_at, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -154,6 +181,10 @@ export class MemoryStore {
         input.status ?? 'active',
         expiresAt ?? null,
         input.supersededById ?? null,
+        input.kind ?? 'fact',
+        input.explicit ? 1 : 0,
+        input.sourceMessageId ?? null,
+        observedAt,
         now,
         now
       );
@@ -170,38 +201,43 @@ export class MemoryStore {
       if (!key || !value) throw new TypeError('memory key and value cannot be empty');
       const scope = input.scope ?? 'global';
       const confidence = normalizeConfidence(input.confidence);
+      const observedAt = normalizeObservedAt(input.observedAt);
+      const governedInput = { ...input, key, value, scope, confidence, observedAt };
       const existing = this.findActiveByKey(key, scope, input.threadId);
 
       if (!existing) {
-        return { memory: this.create({ ...input, key, value, scope, confidence }), action: 'created' };
+        return { memory: this.create(governedInput), action: 'created' };
       }
 
       if (normalizeText(existing.value).toLocaleLowerCase() === value.toLocaleLowerCase()) {
-        const memory = this.update(existing.id, {
-          source: input.source ?? existing.source,
-          threadId: input.threadId ?? existing.threadId,
-          sourceRunId: input.sourceRunId ?? existing.sourceRunId,
-          confidence: Math.max(existing.confidence, confidence),
-          expiresAt: input.expiresAt ?? existing.expiresAt,
-          status: 'active',
-        });
+        const newer = comparePrecedence(governedInput, existing) >= 0;
+        const memory = newer
+          ? this.update(existing.id, {
+              source: input.source ?? existing.source,
+              threadId: input.threadId ?? existing.threadId,
+              sourceRunId: input.sourceRunId ?? existing.sourceRunId,
+              confidence: Math.max(existing.confidence, confidence),
+              expiresAt: input.expiresAt ?? existing.expiresAt,
+              status: 'active',
+              kind: input.kind ?? existing.kind,
+              explicit: input.explicit ?? existing.explicit,
+              sourceMessageId: input.sourceMessageId ?? existing.sourceMessageId,
+              observedAt,
+            })
+          : existing;
         return { memory, action: 'reinforced', previousMemoryId: existing.id };
       }
 
-      if (confidence < existing.confidence) {
+      if (comparePrecedence(governedInput, existing) < 0) {
         const memory = this.create({
-          ...input,
-          key,
-          value,
-          scope,
-          confidence,
+          ...governedInput,
           status: 'superseded',
           supersededById: existing.id,
         });
         return { memory, action: 'rejected', previousMemoryId: existing.id };
       }
 
-      const memory = this.create({ ...input, key, value, scope, confidence });
+      const memory = this.create(governedInput);
       this.update(existing.id, { status: 'superseded', supersededById: memory.id });
       return { memory, action: 'superseded', previousMemoryId: existing.id };
     });
@@ -266,7 +302,7 @@ export class MemoryStore {
         AND (expires_at IS NULL OR expires_at > ?)
         AND (${keywordConditions.join(' OR ')})
         AND ${scopeCondition}
-      ORDER BY confidence DESC, updated_at DESC
+      ORDER BY explicit DESC, confidence DESC, observed_at DESC, updated_at DESC
       LIMIT ?`;
     const rows = this.db.prepare(sql).all(...values) as MemoryRow[];
     if (rows.length === 0) return [];
@@ -336,6 +372,22 @@ export class MemoryStore {
     if (updates.supersededById !== undefined) {
       sets.push('superseded_by_id = ?');
       values.push(updates.supersededById);
+    }
+    if (updates.kind !== undefined) {
+      sets.push('kind = ?');
+      values.push(updates.kind);
+    }
+    if (updates.explicit !== undefined) {
+      sets.push('explicit = ?');
+      values.push(updates.explicit ? 1 : 0);
+    }
+    if (updates.sourceMessageId !== undefined) {
+      sets.push('source_message_id = ?');
+      values.push(updates.sourceMessageId);
+    }
+    if (updates.observedAt !== undefined) {
+      sets.push('observed_at = ?');
+      values.push(normalizeObservedAt(updates.observedAt));
     }
 
     if (sets.length === 0) return existing;

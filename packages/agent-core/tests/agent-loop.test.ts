@@ -22,7 +22,6 @@ import { AgentLoop } from '../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
 import type { MemoryStore } from '../src/db/memoryStore.js';
-import type { MemoryExtractor } from '../src/memory/MemoryExtractor.js';
 import { ContextManager } from '../src/context/ContextManager.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
@@ -111,38 +110,23 @@ describe('AgentLoop', () => {
     expect(reply).toBe('Hello from parts');
   });
 
-  it('does not block a reply on background memory extraction', async () => {
+  it('does not run memory extraction inside the per-turn execution path', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'Reply now' } }],
     } as never);
 
-    let resolveExtraction!: (facts: []) => void;
-    const memoryExtractor = {
-      extract: vi.fn(
-        () => new Promise<[]>(resolve => {
-          resolveExtraction = resolve;
-        })
-      ),
-    } as unknown as MemoryExtractor;
     const memoryStore = {
       getRelevantMemories: vi.fn(() => []),
-      create: vi.fn(),
     } as unknown as MemoryStore;
     const agent = new AgentLoop({
       enablePlanning: false,
       memoryStore,
-      memoryExtractor,
-      awaitMemoryExtraction: false,
     });
 
-    const result = await Promise.race([
-      agent.chat('Hi'),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('reply was blocked')), 100)),
-    ]);
+    const result = await agent.chat('Hi');
 
     expect(result.reply).toBe('Reply now');
-    expect(memoryExtractor.extract).toHaveBeenCalledWith('Hi', 'Reply now');
-    resolveExtraction([]);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
   it('uses custom system prompt', async () => {

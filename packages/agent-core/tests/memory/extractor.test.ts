@@ -4,97 +4,70 @@ import { MemoryExtractor } from '../../src/memory/MemoryExtractor.js';
 vi.mock('../../src/config.js', () => ({
   config: {
     model: 'glm-5.2',
-    openai: {
-      chat: {
-        completions: {
-          create: vi.fn(),
-        },
-      },
-    },
+    openai: { chat: { completions: { create: vi.fn() } } },
   },
 }));
 
 import { config } from '../../src/config.js';
 
+const source = [{ id: 'message-1', content: '以后请用中文回答我。', createdAt: '2026-07-18T10:00:00.000Z' }];
+const candidate = {
+  key: '回答语言偏好',
+  value: '用户希望使用中文回答',
+  kind: 'user_preference',
+  scope: 'global',
+  confidence: 0.95,
+  explicit: true,
+  sourceMessageId: 'message-1',
+};
+
 describe('MemoryExtractor', () => {
-  beforeEach(() => {
-    vi.mocked(config.openai.chat.completions.create).mockReset();
-  });
+  beforeEach(() => vi.mocked(config.openai.chat.completions.create).mockReset());
 
-  it('extracts facts from a JSON array response', async () => {
+  it('extracts evidence-linked candidates from all supplied user messages', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify([
-              { key: 'preferred language', value: 'Chinese' },
-              { key: 'name', value: 'Alice' },
-            ]),
-          },
-        },
-      ],
+      choices: [{ message: { content: JSON.stringify([candidate]) } }],
     } as never);
 
-    const extractor = new MemoryExtractor();
-    const facts = await extractor.extract('I prefer Chinese.', 'Got it.');
-
-    expect(facts).toHaveLength(2);
-    expect(facts[0]).toEqual({ key: 'preferred language', value: 'Chinese' });
-    expect(facts[1]).toEqual({ key: 'name', value: 'Alice' });
+    const facts = await new MemoryExtractor().extract(source);
+    expect(facts).toEqual([candidate]);
+    const request = vi.mocked(config.openai.chat.completions.create).mock.calls[0][0] as {
+      messages: Array<{ content: string }>;
+    };
+    expect(request.messages[1].content).toContain('message-1');
+    expect(request.messages[1].content).toContain('以后请用中文回答我');
   });
 
-  it('strips markdown code fences before parsing', async () => {
+  it('accepts an empty array as a successful no-memory result', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [
-        {
-          message: {
-            content: '```json\n' + JSON.stringify([{ key: 'language', value: 'Chinese' }]) + '\n```',
-          },
-        },
-      ],
+      choices: [{ message: { content: '```json\n[]\n```' } }],
     } as never);
-
-    const extractor = new MemoryExtractor();
-    const facts = await extractor.extract('I prefer Chinese.', 'OK.');
-    expect(facts).toEqual([{ key: 'language', value: 'Chinese' }]);
+    await expect(new MemoryExtractor().extract(source)).resolves.toEqual([]);
   });
 
-  it('returns empty array when the model returns invalid JSON', async () => {
+  it('rejects invalid JSON so the thread remains unextracted', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
       choices: [{ message: { content: 'not json' } }],
     } as never);
-
-    const extractor = new MemoryExtractor();
-    const facts = await extractor.extract('Hello.', 'Hi.');
-    expect(facts).toEqual([]);
+    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
   });
 
-  it('returns empty array when the model call fails', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockRejectedValue(new Error('timeout') as never);
-
-    const extractor = new MemoryExtractor();
-    const facts = await extractor.extract('Hello.', 'Hi.');
-    expect(facts).toEqual([]);
+  it('propagates model failures so startup recovery can retry', async () => {
+    const extractor = new MemoryExtractor({
+      modelProvider: {
+        name: 'failing',
+        model: 'failing-model',
+        complete: async () => { throw new Error('timeout'); },
+        stream: async function* () { yield {}; },
+      },
+    });
+    await expect(extractor.extract(source)).rejects.toThrow('timeout');
   });
 
-  it('filters out items with empty key or value', async () => {
+  it('rejects candidates whose evidence is not one of the supplied messages', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify([
-              { key: '', value: 'Chinese' },
-              { key: 'valid', value: 'kept' },
-              { key: 'name', value: '' },
-            ]),
-          },
-        },
-      ],
+      choices: [{ message: { content: JSON.stringify([{ ...candidate, sourceMessageId: 'invented' }]) } }],
     } as never);
-
-    const extractor = new MemoryExtractor();
-    const facts = await extractor.extract('Hello.', 'Hi.');
-    expect(facts).toHaveLength(1);
-    expect(facts[0]).toEqual({ key: 'valid', value: 'kept' });
+    await expect(new MemoryExtractor().extract(source)).rejects.toThrow('Invalid memory candidate');
   });
 });

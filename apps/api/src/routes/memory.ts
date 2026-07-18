@@ -10,6 +10,10 @@ export interface CreateMemoryBody {
   sourceRunId?: string;
   confidence?: number;
   expiresAt?: string;
+  kind?: 'user_profile' | 'user_preference' | 'project_rule' | 'durable_goal' | 'fact';
+  explicit?: boolean;
+  sourceMessageId?: string;
+  observedAt?: string;
 }
 
 export interface UpdateMemoryBody {
@@ -21,6 +25,10 @@ export interface UpdateMemoryBody {
   confidence?: number;
   status?: 'active' | 'superseded' | 'expired';
   expiresAt?: string | null;
+  kind?: 'user_profile' | 'user_preference' | 'project_rule' | 'durable_goal' | 'fact';
+  explicit?: boolean;
+  sourceMessageId?: string | null;
+  observedAt?: string;
 }
 
 export async function memoryRoutes(fastify: FastifyInstance): Promise<void> {
@@ -28,7 +36,10 @@ export async function memoryRoutes(fastify: FastifyInstance): Promise<void> {
   const memoryStore = new MemoryStore(db);
 
   fastify.post<{ Body: CreateMemoryBody }>('/api/memories', async (request, reply) => {
-    const { key, value, source, threadId, scope, sourceRunId, confidence, expiresAt } = request.body;
+    const {
+      key, value, source, threadId, scope, sourceRunId, confidence, expiresAt,
+      kind, explicit, sourceMessageId, observedAt,
+    } = request.body;
 
     if (!key || typeof key !== 'string' || !value || typeof value !== 'string') {
       return reply.status(400).send({ error: 'key and value are required strings' });
@@ -47,6 +58,7 @@ export async function memoryRoutes(fastify: FastifyInstance): Promise<void> {
     try {
       const result = memoryStore.remember({
         key, value, source, threadId, scope, sourceRunId, confidence, expiresAt,
+        kind, explicit, sourceMessageId, observedAt,
       });
       return reply.status(result.action === 'created' ? 201 : 200).send({
         ...result.memory,

@@ -18,7 +18,6 @@ import { ThreadStore } from '../db/threadStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryStore } from '../db/memoryStore.js';
-import { MemoryExtractor } from '../memory/MemoryExtractor.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
@@ -55,8 +54,6 @@ export interface AgentLoopOptions {
   threadStore?: ThreadStore;
   traceEventStore?: TraceEventStore;
   memoryStore?: MemoryStore;
-  memoryExtractor?: MemoryExtractor;
-  awaitMemoryExtraction?: boolean;
   maxContextTokens?: number;
   recentTokenBudget?: number;
   signal?: AbortSignal;
@@ -117,6 +114,17 @@ export type AgentLoopEvent =
       /** Condensed internal event stream of the sub-agent (terminal events only). */
       events?: AgentLoopEvent[];
     }
+  | {
+      type: 'memory_consolidation';
+      phase: 'started' | 'completed' | 'failed';
+      messageCount?: number;
+      candidateCount?: number;
+      writtenCount?: number;
+      rejectedCount?: number;
+      markedExtracted?: boolean;
+      durationMs?: number;
+      error?: string;
+    }
   | { type: 'message'; content: string };
 
 /** Tools available to parallel sub-agents: read-only, so waves cannot conflict. */
@@ -149,8 +157,6 @@ export class AgentLoop extends EventEmitter {
   private readonly threadStore?: ThreadStore;
   private readonly traceEventStore?: TraceEventStore;
   private readonly memoryStore?: MemoryStore;
-  private readonly memoryExtractor?: MemoryExtractor;
-  private readonly awaitMemoryExtraction: boolean;
   private signal?: AbortSignal;
   private readonly taskId?: string;
   private currentMemoryText?: string;
@@ -265,8 +271,6 @@ export class AgentLoop extends EventEmitter {
     });
 
     this.memoryStore = options.memoryStore;
-    this.memoryExtractor = options.memoryExtractor;
-    this.awaitMemoryExtraction = options.awaitMemoryExtraction ?? false;
 
     if (options.threadId) {
       const db = options.db ?? getSharedConnection();
@@ -444,9 +448,6 @@ export class AgentLoop extends EventEmitter {
       });
       this.recorder.endRun();
       this.completeRun(runId);
-      const memoryPersistence = this.persistMemories(message, result.reply, runId);
-      if (this.awaitMemoryExtraction) await memoryPersistence;
-      else void memoryPersistence;
       return { reply: result.reply, events: this.recorder.getEvents(), runId, tokenUsage: usage };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -625,44 +626,6 @@ export class AgentLoop extends EventEmitter {
 
   private formatMemories(memories: Memory[]): string {
     return memories.map((m) => `${m.key}: ${m.value}`).join('\n');
-  }
-
-  private async extractAndStoreMemories(
-    userMessage: string,
-    assistantReply: string,
-    sourceRunId?: string,
-  ): Promise<void> {
-    if (!this.memoryStore || !this.memoryExtractor) {
-      return;
-    }
-
-    try {
-      const facts = await this.memoryExtractor.extract(userMessage, assistantReply);
-      for (const fact of facts) {
-        this.memoryStore.remember({
-          key: fact.key,
-          value: fact.value,
-          source: 'extracted',
-          threadId: this.threadId,
-          sourceRunId,
-          scope: 'global',
-          confidence: 0.7,
-        });
-      }
-    } catch {
-      // Memory extraction should not break the main loop.
-    }
-  }
-
-  private async persistMemories(
-    userMessage: string,
-    assistantReply: string,
-    sourceRunId?: string,
-  ): Promise<void> {
-    const extraction = this.extractAndStoreMemories(userMessage, assistantReply, sourceRunId);
-    if (this.awaitMemoryExtraction) {
-      await extraction;
-    }
   }
 
 }

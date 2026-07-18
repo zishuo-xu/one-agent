@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS memories (
   expires_at DATETIME,
   last_used_at DATETIME,
   superseded_by_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  explicit INTEGER NOT NULL DEFAULT 0,
+  source_message_id TEXT,
+  observed_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

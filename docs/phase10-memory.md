@@ -1,193 +1,89 @@
-# Phase 10：长期记忆检索
+# Phase 10：会话级长期记忆
 
-**日期**：2026-07-13  
-**项目**：one-agent  
+**日期**：2026-07-18
 **状态**：✅ 已实现
-
----
 
 ## 目标
 
-让 Agent 在每次对话后自动提取关键事实，并在后续用户提问时把这些事实召回注入上下文，实现跨 thread 的长期记忆。
+One Agent 将完整历史、执行过程和长期记忆分开：`messages` 保存对话证据，`trace_events` 保存执行事实，
+`memories` 只保存未来对话真正需要的长期信息。记忆整理不能影响主 Agent 的回答质量与时延。
+
+## 核心设计
 
 ```text
-第一轮：用户说“我喜欢中文” -> Agent 回复 -> 自动提取记忆
-第二轮（新 thread）：用户问“用我喜欢的语言打招呼” -> Agent 召回“中文”偏好 -> 用中文回复
+用户正常对话
+→ messages 持久化用户消息，并把 Thread 标记为未提取
+→ 主 Agent 独立完成回答，不调用记忆模型
+→ 切换/退出时整理当前 Thread
+→ 启动时恢复全部未提取 Thread
+→ Memory Agent 一次读取该 Thread 的全部用户消息
+→ Runtime 校验证据、合并冲突并标记已提取
 ```
 
----
+日常操作只处理正在离开的一个 Thread；全局扫描只发生在启动恢复阶段。合法的 `[]` 表示成功判断“没有长期记忆”，
+也会把 Thread 标记为已提取。模型、JSON 或数据库失败则保持未提取，下一次启动自动重试。
+CLI 的 `/exit`、`/quit`、输入流关闭和空闲时普通 `Ctrl-C` 都走同一条优雅关闭整理路径；连续中断仍可强制退出。
 
-## 技术决策
+## 数据结构
 
-| 决策 | 选择 | 原因 |
-|------|------|------|
-| 存储载体 | SQLite `memories` 表 | 与现有持久化层一致，无需额外依赖 |
-| 检索方式 | 关键词 LIKE 匹配（按 key/value） | 无需 embedding，实现简单，适合学习项目 |
-| 上下文注入 | 在 `ContextManager` 的 system prompt 后插入记忆片段 | 影响所有 LLM 调用，不破坏现有消息流 |
-| 规划感知 | 把相关记忆文本传入 `Planner.createPlan` | 让计划阶段也能利用历史知识 |
-| 写入时机 | 自动提取 | 每轮运行结束后由 `MemoryExtractor` 调用模型提取 JSON 事实 |
-| 作用范围 | 全局共享 | 不局限于当前 thread |
-| 数量限制 | 默认最多召回 5 条 | 控制 token 开销 |
-
----
-
-## 数据模型
-
-```sql
-CREATE TABLE IF NOT EXISTS memories (
-  id TEXT PRIMARY KEY,
-  key TEXT NOT NULL,
-  value TEXT NOT NULL,
-  source TEXT,
-  thread_id TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
-CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at);
-```
-
----
-
-## 新增模块
+`threads` 只增加一个状态：
 
 ```text
-packages/agent-core/src/
-├── db/migrations/003-memories.sql
-├── db/memoryStore.ts              # MemoryStore 持久化
-├── db/types.ts                    # Memory / CreateMemoryInput
-├── memory/MemoryExtractor.ts      # 从对话中提取关键事实
-├── context/ContextManager.ts      # 支持 memoryContext 注入
-├── planning/Planner.ts            # createPlan 接受 memories 参数
-├── agents/AgentLoop.ts            # 召回记忆、调用提取器
-└── index.ts                       # 导出 MemoryStore、MemoryExtractor、类型
-
-apps/api/src/
-├── routes/memory.ts               # 记忆管理路由
-└── server.ts                      # 注册 memoryRoutes
+memory_extracted = 0  未提取或上次失败
+memory_extracted = 1  已成功提取（包括空结果）
 ```
 
----
+`memories` 保持单表，并记录：
 
-## 关键实现细节
+- `kind`：用户背景、偏好、项目规则、长期目标或兼容事实；
+- `explicit`：用户是否明确表达；
+- `source_message_id`：唯一事实证据；
+- `observed_at`：原始用户消息发生时间；
+- `scope`、`confidence`、`status`、`expires_at`、`superseded_by_id` 等治理字段。
 
-### 1. `MemoryStore`
+旧 Thread 在升级时默认标记为已提取，避免一次记忆清理后又自动导入历史测试会话；之后只要收到新的用户消息，
+`MessageStore` 就在保存消息的同一事务中把该 Thread 重新标记为未提取并刷新版本时间。如果整理期间又收到新消息，
+本轮可以写入已确认的候选，但不会把 Thread 错误标记为已提取；下一次会重新读取完整会话。
 
-- 遵循现有 store 模式，提供 `create`、`getById`、`list`、`getRelevantMemories`、`update`、`deleteById`。
-- `getRelevantMemories(query, limit = 5)` 拆分查询词，过滤停用词，使用 `LIKE` 匹配 `key`/`value`，按 `updated_at` 排序返回前 N 条。
-- 记忆全局共享，但可保留 `thread_id` 作为来源审计。
+## Memory Agent
 
-### 2. `MemoryExtractor`
+Memory Agent 的一次调用单位是一个完整 Thread，但输入只包含用户消息，不包含 Assistant 回复、reasoning、工具结果、
+搜索结果或文件内容。允许提取用户长期背景、稳定偏好、项目规则和长期目标；拒绝普通知识、临时任务、预测和凭据。
 
-```ts
-extract(userMessage: string, assistantReply: string): Promise<{ key: string; value: string }[]>
-```
+每个候选必须引用本次输入中的 `sourceMessageId`。无法提供原始用户证据、返回非法 JSON 或伪造消息 ID，整个整理视为失败，
+Thread 保持未提取。密码、Token、API Key 和私钥还会在写入前由 Runtime 再次拒绝。
 
-- 使用 `config.openai.chat.completions.create` 调用模型。
-- Prompt 要求返回 JSON 数组：`[{ "key": "...", "value": "..." }]`。
-- 解析失败或模型异常时返回空数组，**不影响主流程**。
+## 顺序无关冲突处理
 
-### 3. `ContextManager` 注入记忆
-
-新增 `memoryContext` 字段和 `setMemoryContext(content)`：
-
-- `buildContext()` 和 `getContextForDisplay()` 在 system prompt 后插入一条 system 消息，展示相关记忆。
-- 无记忆时行为完全不变。
-
-### 4. `AgentLoop` 集成
-
-`chat(message)` 流程：
-
-1. 添加用户消息后，调用 `memoryStore.getRelevantMemories(message)` 召回相关记忆。
-2. 如果有记忆，通过 `contextManager.setMemoryContext(...)` 注入上下文。
-3. 规划阶段把记忆文本传给 `Planner.createPlan`。
-4. 运行成功后，用 `memoryExtractor.extract(message, reply)` 提取事实并写入 `MemoryStore`。
-
----
-
-## API 路由
-
-| 方法 | 路由 | 说明 |
-|------|------|------|
-| POST | `/api/memories` | 手动创建记忆（调试用） |
-| GET | `/api/memories` | 列出所有记忆，可传 `?query=...` 做关键词召回 |
-| GET | `/api/memories/:id` | 查询单条记忆 |
-| DELETE | `/api/memories/:id` | 删除记忆 |
-
----
-
-## 测试覆盖
+事实新旧由 `observed_at` 决定，而不是 `created_at`：
 
 ```text
-packages/agent-core/tests/db/memoryStore.test.ts
-packages/agent-core/tests/context/ContextManager-memory.test.ts
-packages/agent-core/tests/memory/extractor.test.ts
-packages/agent-core/tests/db/persistence-memory-integration.test.ts
-apps/api/tests/memory-routes.test.ts
+7 月 1 日旧会话：用户使用 npm
+7 月 10 日新会话：用户改用 pnpm
+7 月 20 日才补处理旧会话
+→ pnpm 保持 active，npm 只能保存为 superseded
 ```
 
----
+相同事实增强现有记录；冲突事实依次比较原始消息时间、明确程度、置信度和稳定证据 ID，保证处理顺序不同仍得到相同结果。
 
-## 手动验证
+## 召回与可观察性
 
-1. 启动 API：
+召回先过滤 `active`、作用域和过期时间，再按关键词/中文 bigram 匹配，并按明确程度、置信度和事实时间排序。
+Memory Consolidation 的开始、成功和失败写入 Trace，包括消息数、候选数、写入数、拒绝数、耗时和是否成功标记 Thread。
+Trace 写入失败不会改变记忆整理结果。
 
-   ```bash
-   pnpm dev:api
-   ```
+## 设计边界
 
-2. 告诉 Agent 一个偏好：
+- 不在每轮回答后额外调用模型；
+- 不从 Agent 回复中生成用户事实；
+- 不新增记忆候选表或后台任务表；
+- 不引入向量/图数据库；
+- 不根据记忆或 Trace 自动优化 Agent；
+- 不让记忆失败改变主任务结果。
 
-   ```bash
-   curl -X POST http://localhost:3000/api/chat \
-     -H 'Content-Type: application/json' \
-     -d '{"message": "我喜欢用中文交流"}'
-   ```
+## 当前限制
 
-3. 查看记忆是否被写入：
-
-   ```bash
-   curl http://localhost:3000/api/memories
-   ```
-
-4. 新建 thread（或清掉当前对话），问相关的问题：
-
-   ```bash
-   curl -X POST http://localhost:3000/api/chat \
-     -H 'Content-Type: application/json' \
-     -d '{"message": "请用我喜欢的语言说你好"}'
-   ```
-
-   应观察到 Agent 使用中文回复。
-
----
-
-## 当前局限与后续优化
-
-1. **关键词召回精度有限**  
-   目前使用简单的 `LIKE` 匹配。后续可引入 embedding + 向量检索（如 `sqlite-vec` 或专用向量库）。
-
-2. **记忆冲突未处理**  
-   如果同一 key 出现矛盾的新事实，目前是独立写入，不会自动合并或覆盖。
-
-3. **提取质量依赖模型**  
-   当前 `glm-5.2` 对 JSON 输出稳定性一般，已做 markdown 代码块剥离和解析失败回退。
-
-4. **隐私与范围控制**  
-   当前记忆全局共享。未来可支持按用户/session 隔离，或提供 `/forget` 命令。
-
----
-
-## 相关文档
-
-- `docs/optimization-notes.md`
-- `docs/phase6-async-streaming.md`
-- `docs/phase9-task-persistence.md`
-- `SIMPLIFIED_AGENT_PROJECT_ROADMAP.md`
-
----
-
-## 下一步
-
-Phase 11：Docker 与部署。
+- 超长 Thread 当前整体交给模型，超过模型上下文时会保持未提取并等待后续容量策略；
+- API 没有显式“切换/关闭 Thread”端点，主要依赖消息变更标记和服务启动恢复；
+- 召回命中依据尚未作为独立 Trace 事件展示；
+- 关键词检索是否需要升级为 SQLite FTS5，应由记忆评测集决定。

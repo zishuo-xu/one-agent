@@ -12,6 +12,7 @@ const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY,
   title TEXT,
+  memory_extracted INTEGER NOT NULL DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -97,6 +98,10 @@ CREATE TABLE IF NOT EXISTS memories (
   expires_at DATETIME,
   last_used_at DATETIME,
   superseded_by_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  explicit INTEGER NOT NULL DEFAULT 0,
+  source_message_id TEXT,
+  observed_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -147,6 +152,12 @@ export function migrate(instance: Database.Database): void {
 
   // Backward-compatible column additions for existing databases.
   try {
+    instance.exec('ALTER TABLE threads ADD COLUMN memory_extracted INTEGER NOT NULL DEFAULT 1');
+  } catch {
+    // Column already exists. Existing threads start as extracted so upgrading
+    // never re-imports old test conversations after a deliberate memory reset.
+  }
+  try {
     instance.exec('ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0');
   } catch {
     // Column already exists.
@@ -193,6 +204,10 @@ export function migrate(instance: Database.Database): void {
     'ALTER TABLE memories ADD COLUMN expires_at DATETIME',
     'ALTER TABLE memories ADD COLUMN last_used_at DATETIME',
     'ALTER TABLE memories ADD COLUMN superseded_by_id TEXT',
+    "ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact'",
+    'ALTER TABLE memories ADD COLUMN explicit INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE memories ADD COLUMN source_message_id TEXT',
+    'ALTER TABLE memories ADD COLUMN observed_at DATETIME',
   ]) {
     try {
       instance.exec(sql);

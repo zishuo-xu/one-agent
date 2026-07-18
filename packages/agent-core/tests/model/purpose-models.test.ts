@@ -90,7 +90,7 @@ describe('per-purpose model selection', () => {
       choices: [{ message: { content: '[]' } }],
     } as never);
 
-    await new MemoryExtractor().extract('hi', 'hello');
+    await new MemoryExtractor().extract([{ id: 'm1', content: 'hi', createdAt: new Date().toISOString() }]);
 
     expect(lastCallModel()).toBe('utility-model');
   });
@@ -119,7 +119,9 @@ describe('per-purpose model selection', () => {
 
     const { OpenAICompatibleProvider } = await import('../../src/model/OpenAICompatibleProvider.js');
     const pinned = new OpenAICompatibleProvider(config.openai as never, 'pinned-model');
-    await new MemoryExtractor({ modelProvider: pinned }).extract('hi', 'hello');
+    await new MemoryExtractor({ modelProvider: pinned }).extract([
+      { id: 'm1', content: 'hi', createdAt: new Date().toISOString() },
+    ]);
 
     expect(lastCallModel()).toBe('pinned-model');
   });

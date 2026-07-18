@@ -20,6 +20,9 @@ describe('MemoryStore', () => {
     expect(memory.scope).toBe('global');
     expect(memory.confidence).toBe(0.7);
     expect(memory.status).toBe('active');
+    expect(memory.kind).toBe('fact');
+    expect(memory.explicit).toBe(false);
+    expect(memory.observedAt).toBeDefined();
 
     const found = store.getById(memory.id);
     expect(found).toEqual(memory);
@@ -94,8 +97,14 @@ describe('MemoryStore', () => {
   });
 
   it('supersedes an active fact with an equally or more confident conflict', () => {
-    const oldFact = store.remember({ key: 'timezone', value: 'Shanghai', confidence: 0.7 });
-    const result = store.remember({ key: 'timezone', value: 'Tokyo', confidence: 0.8 });
+    const oldFact = store.remember({
+      key: 'timezone', value: 'Shanghai', confidence: 0.7,
+      observedAt: '2026-07-01T00:00:00.000Z',
+    });
+    const result = store.remember({
+      key: 'timezone', value: 'Tokyo', confidence: 0.8,
+      observedAt: '2026-07-10T00:00:00.000Z',
+    });
 
     expect(result.action).toBe('superseded');
     expect(result.memory.status).toBe('active');
@@ -107,8 +116,14 @@ describe('MemoryStore', () => {
   });
 
   it('keeps the stronger active fact when a lower-confidence conflict arrives', () => {
-    const strong = store.remember({ key: 'timezone', value: 'Shanghai', confidence: 0.9 });
-    const weak = store.remember({ key: 'timezone', value: 'Tokyo', confidence: 0.4 });
+    const strong = store.remember({
+      key: 'timezone', value: 'Shanghai', confidence: 0.9,
+      observedAt: '2026-07-10T00:00:00.000Z',
+    });
+    const weak = store.remember({
+      key: 'timezone', value: 'Tokyo', confidence: 0.4,
+      observedAt: '2026-07-01T00:00:00.000Z',
+    });
 
     expect(weak.action).toBe('rejected');
     expect(weak.memory).toMatchObject({ status: 'superseded', supersededById: strong.memory.id });

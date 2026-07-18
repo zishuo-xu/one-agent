@@ -141,15 +141,16 @@ running 任务重置为 pending 后重新执行
 
 ## 阶段 10：长期记忆检索 ✅
 
-让 Agent 自动提取并跨 thread 召回关键事实。
+让独立 Memory Agent 按完整会话整理并跨 thread 召回可信长期事实。
 
 ```text
 memories 表保存全局事实
-AgentLoop 每轮结束后自动提取
+切换/退出时整理当前 Thread，启动时恢复未提取 Thread
+只以用户消息为证据，并按原始消息时间解决冲突
 新提问按关键词召回并注入上下文
 ```
 
-产出：`MemoryStore`、`MemoryExtractor`、跨 thread 记忆共享、记忆管理 API。
+产出：`MemoryStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、跨 thread 记忆共享、记忆管理 API。
 
 ## 最终架构
 

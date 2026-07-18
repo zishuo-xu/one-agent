@@ -10,7 +10,6 @@ import {
   ToolRegistry,
   ThreadStore,
   MemoryStore,
-  MemoryExtractor,
   getSharedConnection,
 } from '@one-agent/agent-core';
 import type { TaskStatus } from '@one-agent/agent-core';
@@ -41,7 +40,6 @@ export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
     retryDelayMs: Number(process.env.TASK_RETRY_DELAY_MS ?? 1000),
   });
   const memoryStore = new MemoryStore(db);
-  const memoryExtractor = new MemoryExtractor();
 
   function createAgent(options: { threadId?: string; taskId?: string; signal?: AbortSignal }) {
     const sandbox = new Sandbox(WORKSPACE_ROOT);
@@ -53,7 +51,6 @@ export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
       taskId: options.taskId,
       signal: options.signal,
       memoryStore,
-      memoryExtractor,
     });
   }
 

@@ -13,7 +13,7 @@ import {
   ThreadStore,
   RunStore,
   MemoryStore,
-  MemoryExtractor,
+  MemoryConsolidator,
   MessageStore,
   TraceEventStore,
   getSharedConnection,
@@ -107,7 +107,6 @@ function validateApiKey(): boolean {
 function createAgent(
   threadId: string | undefined,
   memoryStore: MemoryStore,
-  memoryExtractor: MemoryExtractor,
   enablePlanning: boolean | 'auto' = false
 ) {
   const sandbox = new Sandbox(WORKSPACE_ROOT);
@@ -118,8 +117,6 @@ function createAgent(
     tools,
     threadId,
     memoryStore,
-    memoryExtractor,
-    awaitMemoryExtraction: false,
     enablePlanning,
   });
 }
@@ -236,7 +233,7 @@ async function main() {
   const runStore = new RunStore(db);
   const messageStore = new MessageStore(db);
   const memoryStore = new MemoryStore(db);
-  const memoryExtractor = new MemoryExtractor();
+  const memoryConsolidator = new MemoryConsolidator(db, { memoryStore });
   const traceEventStore = new TraceEventStore(db);
 
   let threadId: string;
@@ -259,8 +256,9 @@ async function main() {
     return;
   }
 
-  let agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
+  let agent = createAgent(threadId, memoryStore, plan);
   printRecoveryHint(runStore, threadId);
+  void memoryConsolidator.recoverUnextracted();
 
   // Optionally start the trace web viewer in the background.
   let traceProcess: import('node:child_process').ChildProcess | null = null;
@@ -340,6 +338,10 @@ async function main() {
       console.log('\nInterrupting current turn... press Ctrl-C again to force quit.');
       abortController.abort();
       abortController = null;
+    } else if (!abortController && sigintCount === 1) {
+      console.log('\nClosing session and consolidating memory...');
+      rl.close();
+      if (traceProcess) traceProcess.kill();
     } else {
       process.exit(0);
     }
@@ -556,9 +558,11 @@ async function main() {
         console.log(`Thread not found: ${id}`);
         continue;
       }
+      const leavingThreadId = threadId;
       threadId = existing.id;
       title = existing.title;
-      agent = createAgent(threadId, memoryStore, memoryExtractor, plan);
+      agent = createAgent(threadId, memoryStore, plan);
+      void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       printRecoveryHint(runStore, threadId);
       continue;
@@ -699,11 +703,7 @@ async function main() {
         parts.push(`输入 ${usage.promptTokens} tokens`);
         parts.push(`输出 ${usage.completionTokens} tokens`);
       }
-      if (memoryStore && memoryExtractor) {
-        if (verbose) parts.push('记忆：后台提取已启动');
-      } else if (verbose) {
-        parts.push('记忆：未配置');
-      }
+      if (verbose) parts.push('记忆：切换或退出会话时整理');
       if (parts.length > 0) {
         console.log(`\n(${parts.join(' · ')})`);
       }
@@ -725,6 +725,9 @@ async function main() {
       printSeparator();
     }
   }
+
+  await memoryConsolidator.consolidateThread(threadId);
+  if (traceProcess) traceProcess.kill();
 }
 
 main().catch((error) => {
