@@ -34,9 +34,9 @@
       "query": "What project language is used?",
       "threadId": "thread-current",
       "memories": [
-        { "key": "global language", "value": "Chinese" },
-        { "key": "current project language", "value": "TypeScript", "scope": "thread", "threadId": "thread-current" },
-        { "key": "other project language", "value": "Rust", "scope": "thread", "threadId": "thread-other" }
+        { "key": "global language", "value": "Chinese", "observedAt": "2026-01-03T00:00:00.000Z" },
+        { "key": "current project language", "value": "TypeScript", "scope": "thread", "threadId": "thread-current", "observedAt": "2026-01-02T00:00:00.000Z" },
+        { "key": "other project language", "value": "Rust", "scope": "thread", "threadId": "thread-other", "observedAt": "2026-01-01T00:00:00.000Z" }
       ],
       "expectedSelectedKeys": ["global language", "current project language"],
       "expectedOutcomes": { "other project language": "filtered_scope" }
