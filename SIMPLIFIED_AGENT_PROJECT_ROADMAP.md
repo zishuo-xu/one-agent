@@ -156,14 +156,17 @@ memories 表保存全局事实
 ## 最终架构
 
 ```text
-React Web / CLI
+CLI / REST API / Trace Viewer（只读）
    ├─ HTTP：创建任务、查询历史
-   └─ SSE/WebSocket：运行事件 + 流式文本
+   ├─ SSE：任务事件 + 流式文本
+   └─ Trace Viewer：读取运行事实，不触发执行或验证
           ↓
 Fastify API
    ├─ Task Routes
    ├─ Task Queue
-   ├─ Agent Loop（规划 / 工具 / 自纠）
+   ├─ AgentLoop 门面
+   │    ├─ SimpleLoop（直接回答 / 工具循环）
+   │    └─ PlanningLoop（规划 / 工具 / Judge / 重规划）
    ├─ Tool Registry
    ├─ Context Manager（记忆 / 摘要）
    ├─ Trace Store
@@ -174,7 +177,7 @@ Fastify API
 SQLite：threads / messages / tool_calls / agent_runs / tasks / trace_events / memories
 ```
 
-## 推荐开发顺序
+## 已完成的核心开发顺序
 
 ```text
 1. 单 Agent ✅
@@ -188,6 +191,12 @@ SQLite：threads / messages / tool_calls / agent_runs / tasks / trace_events / m
 9. 全局 CLI 命令 ✅
 10. 任务持久化 ✅
 11. 长期记忆检索 ✅
+12. 规划增强与模型抽象 ✅
+13. 工具生态与受限子 Agent ✅
+14. Trace / Eval 联动与子 Agent 观测 ✅
+15. 能力评测基线与四并发运行 ✅
+16. 会话级记忆治理与召回可解释性 ✅
+17. PlanningLoop 断点恢复 v1 ✅
 ```
 
 每完成一个阶段提交一次 Git：
@@ -201,8 +210,19 @@ feat: add run tracing
 feat: add agent evaluation
 feat: add global CLI command
 feat: persist task queue to sqlite for restart recovery
-feat: add long-term memory retrieval with automatic fact extraction
+feat: add session-level memory consolidation and retrieval
 ```
+
+## 后续通用能力候选（未实现）
+
+相比继续增加业务工具，当前更值得研究的通用 Agent 方向是“显式工作状态 + 自适应执行策略”：
+
+- `WorkingState / Blackboard` 统一保存目标、约束、证据事实、假设、未解决问题、失败尝试和下一步意图；
+- `Strategy Controller` 根据复杂度、不确定性、工具反馈与预算，在直接执行、规划、假设验证和反思策略之间切换；
+- 状态变化和策略切换进入 Trace，供开发人员分析，但 Runtime 不根据 Trace 自动修改自己。
+
+该方向目前只是设计候选，尚未进入实现。应先定义最小状态结构和可评价场景，再决定是否开发；当前事实以
+[项目目标、愿景与设计现状](./docs/project-vision-and-status.md)为准。
 
 ## 简历表达
 
