@@ -6,11 +6,81 @@ import {
   TraceEventStore,
   MessageStore,
 } from '@one-agent/agent-core';
-import type { TraceEvent } from '@one-agent/agent-core';
+import type { AgentRun, TraceEvent } from '@one-agent/agent-core';
 
 export interface TraceWebServerOptions {
   port: number;
   host: string;
+}
+
+export interface RunOverview {
+  run: AgentRun;
+  metrics: {
+    durationMs: number;
+    eventCount: number;
+    modelCallCount: number;
+    modelFailureCount: number;
+    retryCount: number;
+    totalTokens: number;
+    toolCallCount: number;
+    toolFailureCount: number;
+  };
+  recovery: {
+    resumedFromRunId?: string;
+    resumedByRunIds: string[];
+  };
+}
+
+/** Build a read-only summary from persisted facts; it never changes Run state. */
+export function buildRunOverview(
+  run: AgentRun,
+  traces: TraceEvent[],
+  threadRuns: AgentRun[],
+): RunOverview {
+  const modelEvents = traces.filter((event) => event.eventType === 'model_call');
+  const modelStarts = modelEvents.filter((event) => event.eventData.type === 'model_call' && event.eventData.phase === 'started');
+  const modelTerminals = modelEvents.filter((event) => event.eventData.type === 'model_call' && event.eventData.phase !== 'started');
+  const toolResults = traces.filter((event) => event.eventType === 'tool_result');
+  const endMs = run.endTime
+    ? Date.parse(run.endTime)
+    : traces.length > 0
+      ? Date.parse(traces[traces.length - 1].createdAt)
+      : Date.parse(run.startTime);
+  const startMs = Date.parse(run.startTime);
+  const resumedFromTrace = traces.find(
+    (event) => event.eventData.type === 'run' && event.eventData.phase === 'started' && event.eventData.resumedFromRunId,
+  );
+  const resumedFromRunId = run.checkpoint?.resumedFromRunId
+    ?? (resumedFromTrace?.eventData.type === 'run' ? resumedFromTrace.eventData.resumedFromRunId : undefined);
+
+  return {
+    run,
+    metrics: {
+      durationMs: Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : 0,
+      eventCount: traces.length,
+      modelCallCount: modelStarts.length,
+      modelFailureCount: modelTerminals.filter(
+        (event) => event.eventData.type === 'model_call' && event.eventData.phase === 'failed',
+      ).length,
+      retryCount: modelStarts.filter(
+        (event) => event.eventData.type === 'model_call' && event.eventData.attempt > 1,
+      ).length,
+      totalTokens: modelTerminals.reduce((total, event) => {
+        if (event.eventData.type !== 'model_call' || event.eventData.phase !== 'completed') return total;
+        return total + (event.eventData.usage?.totalTokens ?? 0);
+      }, 0),
+      toolCallCount: traces.filter((event) => event.eventType === 'tool_call').length,
+      toolFailureCount: toolResults.filter(
+        (event) => event.eventData.type === 'tool_result' && !event.eventData.toolResult.success,
+      ).length,
+    },
+    recovery: {
+      resumedFromRunId,
+      resumedByRunIds: threadRuns
+        .filter((candidate) => candidate.checkpoint?.resumedFromRunId === run.id)
+        .map((candidate) => candidate.id),
+    },
+  };
 }
 
 export function buildTraceWebServer(): FastifyInstance {
@@ -74,6 +144,15 @@ export function buildTraceWebServer(): FastifyInstance {
     return traceEventStore.getByRun(id);
   });
 
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/overview', async (request, reply) => {
+    const { id } = request.params;
+    const run = runStore.getById(id);
+    if (!run) {
+      return reply.status(404).send({ error: `Run not found: ${id}` });
+    }
+    return buildRunOverview(run, traceEventStore.getByRun(id), runStore.getByThread(run.threadId));
+  });
+
   fastify.get('/', async (request, reply) => {
     return reply.type('text/html').send(renderViewerPage());
   });
@@ -115,6 +194,7 @@ function renderViewerPage(): string {
       --run: #f8fafc;
       --model_call: #06b6d4;
       --plan_step: #a78bfa;
+      --warning: #f97316;
     }
     * { box-sizing: border-box; }
     body {
@@ -171,6 +251,23 @@ function renderViewerPage(): string {
     .item.failed {
       border-left: 3px solid var(--failed);
     }
+    .item.interrupted, .item.recovery_required { border-left: 3px solid var(--warning); }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      line-height: 1.4;
+      background: var(--panel-hover);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .status-badge.completed { color: #6ee7b7; background: #064e3b; }
+    .status-badge.failed { color: #fca5a5; background: #7f1d1d; }
+    .status-badge.running, .status-badge.pending { color: #67e8f9; background: #164e63; }
+    .status-badge.interrupted, .status-badge.recovery_required { color: #fdba74; background: #7c2d12; }
     .item-error {
       font-size: 12px;
       color: var(--failed);
@@ -258,6 +355,58 @@ function renderViewerPage(): string {
       font-size: 13px;
       color: var(--muted);
       font-weight: normal;
+    }
+    .run-overview {
+      display: none;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(30, 41, 59, 0.72);
+    }
+    .overview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .overview-title { min-width: 0; }
+    .overview-id {
+      margin-top: 4px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(80px, 1fr));
+      gap: 8px;
+    }
+    .metric {
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+    }
+    .metric-value { font-size: 16px; font-weight: 650; }
+    .metric-label { margin-top: 2px; font-size: 10px; color: var(--muted); }
+    .metric.warning .metric-value { color: #fdba74; }
+    .recovery-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .run-link {
+      color: #93c5fd;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
     }
     /* Visual timeline bar */
     .timeline-bar {
@@ -363,6 +512,19 @@ function renderViewerPage(): string {
       white-space: pre-wrap;
       word-break: break-word;
     }
+    @media (max-width: 1100px) {
+      .sidebar { width: 220px; }
+      .runs { width: 260px; }
+      .metrics { grid-template-columns: repeat(3, minmax(80px, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      body { height: auto; overflow: auto; }
+      .container { display: block; height: auto; }
+      .sidebar, .runs, .timeline { width: 100%; height: auto; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+      .sidebar, .runs { max-height: 34vh; }
+      .timeline { min-height: 70vh; }
+      .list, .event-list { max-height: inherit; }
+    }
   </style>
 </head>
 <body>
@@ -395,6 +557,7 @@ function renderViewerPage(): string {
           <button onclick="showAllThreadTraces()">All traces</button>
         </div>
       </div>
+      <div id="run-overview" class="run-overview"></div>
       <div id="filters" class="filters" style="padding: 8px 16px; display: none;"></div>
       <div id="timeline-bar-container" style="padding: 0 16px; display: none;">
         <div id="timeline-bar" class="timeline-bar"></div>
@@ -441,9 +604,9 @@ function renderViewerPage(): string {
         container.innerHTML = '<div class="empty">No runs for this thread</div>';
       } else {
         container.innerHTML = runs.map(r => \`
-          <div class="item \${selectedRunId === r.id ? 'active' : ''} \${r.status === 'failed' ? 'failed' : ''}" onclick="selectRun(\${escapeHtml(JSON.stringify(r.id))})">
+          <div class="item \${selectedRunId === r.id ? 'active' : ''} \${escapeHtml(r.status)}" data-run-id="\${escapeHtml(r.id)}" onclick="selectRun(\${escapeHtml(JSON.stringify(r.id))})">
             <div class="item-title">\${escapeHtml(r.preview || r.status)}\${r.checkpoint?.resumedFromRunId ? ' ↩ resumed' : ''}</div>
-            <div class="item-meta">\${escapeHtml(r.id.slice(0, 8))} · \${escapeHtml(r.status)} · trace \${escapeHtml(r.traceStatus || 'unknown')}\${r.droppedTraceEvents ? ' (' + r.droppedTraceEvents + ' dropped)' : ''} · \${formatTime(r.startTime)}</div>
+            <div class="item-meta"><span class="status-badge \${escapeHtml(r.status)}">\${escapeHtml(r.status)}</span> · \${escapeHtml(r.id.slice(0, 8))} · trace \${escapeHtml(r.traceStatus || 'unknown')}\${r.droppedTraceEvents ? ' (' + r.droppedTraceEvents + ' dropped)' : ''} · \${formatTime(r.startTime)}</div>
             \${r.status === 'failed' && r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
           </div>
         \`).join('');
@@ -455,14 +618,21 @@ function renderViewerPage(): string {
       selectedRunId = id;
       const items = document.querySelectorAll('#runs .item');
       items.forEach(el => el.classList.remove('active'));
-      const active = Array.from(items).find(el => el.querySelector('.item-meta').textContent.includes(id));
+      const active = Array.from(items).find(el => el.dataset.runId === id);
       if (active) active.classList.add('active');
-      const traces = await fetchJson(\`/api/runs/\${id}/traces\`);
+      const [overview, traces] = await Promise.all([
+        fetchJson(\`/api/runs/\${id}/overview\`),
+        fetchJson(\`/api/runs/\${id}/traces\`),
+      ]);
+      renderRunOverview(overview);
       renderTraces(traces, 'Run ' + id.slice(0, 8));
     }
 
     async function showAllThreadTraces() {
       if (!selectedThreadId) return;
+      selectedRunId = null;
+      document.querySelectorAll('#runs .item').forEach(el => el.classList.remove('active'));
+      document.getElementById('run-overview').style.display = 'none';
       const traces = await fetchJson(\`/api/threads/\${selectedThreadId}/traces\`);
       renderTraces(traces, 'All traces for thread');
     }
@@ -470,6 +640,49 @@ function renderViewerPage(): string {
     async function refreshTraces() {
       if (selectedRunId) await selectRun(selectedRunId);
       else if (selectedThreadId) await showAllThreadTraces();
+    }
+
+    function renderRunOverview(overview) {
+      const container = document.getElementById('run-overview');
+      const r = overview.run;
+      const m = overview.metrics;
+      const recoveryLinks = [];
+      if (overview.recovery.resumedFromRunId) {
+        recoveryLinks.push('resumed from ' + runLink(overview.recovery.resumedFromRunId));
+      }
+      if (overview.recovery.resumedByRunIds.length > 0) {
+        recoveryLinks.push('resumed by ' + overview.recovery.resumedByRunIds.map(runLink).join(', '));
+      }
+      const traceWarning = r.traceStatus === 'partial' || r.traceStatus === 'failed' || r.droppedTraceEvents > 0;
+      container.innerHTML = \`
+        <div class="overview-head">
+          <div class="overview-title">
+            <span class="status-badge \${escapeHtml(r.status)}">\${escapeHtml(r.status)}</span>
+            <span class="status-badge">trace \${escapeHtml(r.traceStatus || 'unknown')}</span>
+            <div class="overview-id">\${escapeHtml(r.id)} · \${escapeHtml(r.model)}</div>
+          </div>
+          <div class="item-meta">\${formatTime(r.startTime)}</div>
+        </div>
+        <div class="metrics">
+          \${metric(formatDuration(m.durationMs), 'duration')}
+          \${metric(m.totalTokens.toLocaleString(), 'tokens')}
+          \${metric(m.modelCallCount, m.modelFailureCount > 0 ? 'model calls · ' + m.modelFailureCount + ' failed' : 'model calls', m.modelFailureCount > 0)}
+          \${metric(m.toolCallCount, m.toolFailureCount > 0 ? 'tool calls · ' + m.toolFailureCount + ' failed' : 'tool calls', m.toolFailureCount > 0)}
+          \${metric(m.retryCount, 'retries', m.retryCount > 0)}
+          \${metric(m.eventCount, 'trace events', traceWarning)}
+        </div>
+        \${recoveryLinks.length > 0 ? \`<div class="recovery-links">\${recoveryLinks.join(' · ')}</div>\` : ''}
+        \${r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
+      \`;
+      container.style.display = 'block';
+    }
+
+    function metric(value, label, warning = false) {
+      return \`<div class="metric\${warning ? ' warning' : ''}"><div class="metric-value">\${escapeHtml(String(value))}</div><div class="metric-label">\${escapeHtml(label)}</div></div>\`;
+    }
+
+    function runLink(id) {
+      return \`<span class="run-link" onclick="selectRun(\${escapeHtml(JSON.stringify(id))})">\${escapeHtml(id.slice(0, 8))}</span>\`;
     }
 
     function summarizeEvent(e) {
@@ -690,6 +903,15 @@ function renderViewerPage(): string {
       if (!iso) return '';
       const d = new Date(iso);
       return d.toLocaleString();
+    }
+
+    function formatDuration(ms) {
+      if (!Number.isFinite(ms)) return '—';
+      if (ms < 1000) return Math.round(ms) + ' ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + ' s';
+      const minutes = Math.floor(ms / 60000);
+      const seconds = Math.round((ms % 60000) / 1000);
+      return minutes + 'm ' + seconds + 's';
     }
 
     refreshThreads();

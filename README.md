@@ -56,6 +56,9 @@ pnpm dev:trace-web  # 单独启动追踪可视化
 pnpm dev:cli -- --trace
 ```
 
+Trace Viewer 会按 Thread 和 Run 展示执行时间线。选中单次 Run 后，顶部总览会汇总状态、Trace 健康度、
+耗时、token、模型调用、工具调用、重试次数和事件数量；中断前后的 Run 可以沿恢复关系互相跳转。
+
 ### 全局安装（输入 `one-agent` 启动）
 
 ```bash

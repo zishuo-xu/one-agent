@@ -130,6 +130,73 @@ describe('trace web server', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('GET /api/runs/:id/overview summarizes cost, failures, retries, and recovery', async () => {
+    const db = getSharedConnection();
+    const threadStore = new ThreadStore(db);
+    const runStore = new RunStore(db);
+    const traceEventStore = new TraceEventStore(db);
+    const thread = threadStore.create({});
+    const run = runStore.create({ threadId: thread.id, model: 'test-model', status: 'completed' });
+    const base = { runId: run.id, threadId: thread.id, model: 'test-model' };
+
+    traceEventStore.create({
+      ...base,
+      eventType: 'run',
+      eventData: { type: 'run', phase: 'started', resumedFromRunId: 'previous-run' },
+    });
+    traceEventStore.create({
+      ...base,
+      eventType: 'model_call',
+      eventData: {
+        type: 'model_call', phase: 'started', modelCallId: 'm1', purpose: 'main',
+        provider: 'test', model: 'test-model', attempt: 2, streaming: false,
+        startedAt: new Date().toISOString(),
+      },
+    });
+    traceEventStore.create({
+      ...base,
+      eventType: 'model_call',
+      eventData: {
+        type: 'model_call', phase: 'completed', modelCallId: 'm1', purpose: 'main',
+        provider: 'test', model: 'test-model', attempt: 2, streaming: false,
+        startedAt: new Date().toISOString(), usage: { promptTokens: 20, completionTokens: 10, totalTokens: 30 },
+      },
+    });
+    traceEventStore.create({
+      ...base,
+      eventType: 'tool_call',
+      eventData: { type: 'tool_call', toolCall: { id: 'c1', name: 'read_file', arguments: { path: 'missing.txt' } } },
+    });
+    traceEventStore.create({
+      ...base,
+      eventType: 'tool_result',
+      eventData: { type: 'tool_result', toolCallId: 'c1', toolResult: { success: false, error: 'missing' } },
+    });
+
+    const server = buildTraceWebServer();
+    const response = await server.inject({ method: 'GET', url: `/api/runs/${run.id}/overview` });
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body);
+    expect(body.run.id).toBe(run.id);
+    expect(body.metrics).toMatchObject({
+      eventCount: 5,
+      modelCallCount: 1,
+      modelFailureCount: 0,
+      retryCount: 1,
+      totalTokens: 30,
+      toolCallCount: 1,
+      toolFailureCount: 1,
+    });
+    expect(body.recovery.resumedFromRunId).toBe('previous-run');
+  });
+
+  it('GET /api/runs/:id/overview returns 404 for a missing run', async () => {
+    const server = buildTraceWebServer();
+    const response = await server.inject({ method: 'GET', url: '/api/runs/nonexistent/overview' });
+    expect(response.statusCode).toBe(404);
+  });
+
   it('GET /api/threads/:id/traces returns trace events for a thread', async () => {
     const db = getSharedConnection();
     const threadStore = new ThreadStore(db);
@@ -209,5 +276,16 @@ describe('trace web server', () => {
     expect(response.body).toContain('event-children');
     expect(response.body).toContain('.timeline-seg.sub_agent');
     expect(response.body).toContain('.filter-btn.sub_agent');
+  });
+
+  it('GET / includes run overview and stable run selection hooks', async () => {
+    const server = buildTraceWebServer();
+    const response = await server.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('/api/runs/${id}/overview');
+    expect(response.body).toContain('renderRunOverview');
+    expect(response.body).toContain('data-run-id="${escapeHtml(r.id)}"');
+    expect(response.body).toContain("el.dataset.runId === id");
   });
 });
