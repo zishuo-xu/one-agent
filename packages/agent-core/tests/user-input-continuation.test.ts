@@ -16,6 +16,7 @@ import { createRequestUserInputTool } from '../src/agents/requestUserInputTool.j
 import { createConnection } from '../src/db/connection.js';
 import { RunStore } from '../src/db/runStore.js';
 import { ThreadStore } from '../src/db/threadStore.js';
+import { TraceEventStore } from '../src/db/traceEventStore.js';
 import { MockProvider } from '../src/model/MockProvider.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
@@ -30,6 +31,7 @@ describe('durable user-input continuation', () => {
     const db = createConnection({ path: ':memory:' });
     const threadId = new ThreadStore(db).create({ id: 'input-thread' }).id;
     const runStore = new RunStore(db);
+    const traceStore = new TraceEventStore(db);
     const firstAgent = new AgentLoop({
       threadId,
       db,
@@ -56,7 +58,7 @@ describe('durable user-input continuation', () => {
       reply: 'Which environment?',
     });
     const waitingRun = runStore.getWaitingByThread(threadId);
-    expect(waitingRun?.checkpoint).toMatchObject({
+    expect(traceStore.getLatestRecoveryPoint(waitingRun!.id)).toMatchObject({
       loopMode: 'simple',
       originalMessage: 'Deploy the service',
       pendingInput: { question: 'Which environment?' },
@@ -135,6 +137,7 @@ describe('durable user-input continuation', () => {
     const db = createConnection({ path: ':memory:' });
     const threadId = new ThreadStore(db).create({ id: 'planning-input-thread' }).id;
     const runStore = new RunStore(db);
+    const traceStore = new TraceEventStore(db);
     const firstAgent = new AgentLoop({
       threadId,
       db,
@@ -165,7 +168,7 @@ describe('durable user-input continuation', () => {
 
     const waiting = await firstAgent.chat('Deploy the application');
     expect(waiting.status).toBe('waiting_for_input');
-    const checkpoint = runStore.getById(waiting.runId!)?.checkpoint;
+    const checkpoint = traceStore.getLatestRecoveryPoint(waiting.runId!);
     expect(checkpoint?.loopMode).toBe('planning');
     if (checkpoint?.loopMode === 'planning') {
       expect(checkpoint.plan.steps[0].status).toBe('pending');
@@ -189,7 +192,7 @@ describe('durable user-input continuation', () => {
       status: 'completed',
       reply: 'Deployment target confirmed: staging.',
     });
-    const finalCheckpoint = runStore.getById(completed.runId!)?.checkpoint;
+    const finalCheckpoint = traceStore.getLatestRecoveryPoint(completed.runId!);
     expect(finalCheckpoint?.pendingInput).toBeUndefined();
     db.close();
   });

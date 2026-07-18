@@ -36,6 +36,7 @@ export function buildRunOverview(
   run: AgentRun,
   traces: TraceEvent[],
   threadRuns: AgentRun[],
+  threadTraces: TraceEvent[] = [],
 ): RunOverview {
   const modelEvents = traces.filter((event) => event.eventType === 'model_call');
   const modelStarts = modelEvents.filter((event) => event.eventData.type === 'model_call' && event.eventData.phase === 'started');
@@ -52,6 +53,18 @@ export function buildRunOverview(
   );
   const resumedFromRunId = run.checkpoint?.resumedFromRunId
     ?? (resumedFromTrace?.eventData.type === 'run' ? resumedFromTrace.eventData.resumedFromRunId : undefined);
+  const resumedByRunIds = threadRuns
+    .filter((candidate) => {
+      if (candidate.checkpoint?.resumedFromRunId === run.id) return true;
+      return threadTraces.some(
+        (event) =>
+          event.runId === candidate.id &&
+          event.eventData.type === 'run' &&
+          event.eventData.phase === 'started' &&
+          event.eventData.resumedFromRunId === run.id,
+      );
+    })
+    .map((candidate) => candidate.id);
 
   return {
     run,
@@ -76,9 +89,7 @@ export function buildRunOverview(
     },
     recovery: {
       resumedFromRunId,
-      resumedByRunIds: threadRuns
-        .filter((candidate) => candidate.checkpoint?.resumedFromRunId === run.id)
-        .map((candidate) => candidate.id),
+      resumedByRunIds,
     },
   };
 }
@@ -115,6 +126,7 @@ export function buildTraceWebServer(): FastifyInstance {
 
     // Runs come back DESC (newest first); reverse to match ascending user messages.
     const runsAsc = [...runs].reverse();
+    const threadTraces = traceEventStore.getByThread(id);
 
     return runs.map((run) => {
       const runIdx = runsAsc.indexOf(run);
@@ -122,7 +134,16 @@ export function buildTraceWebServer(): FastifyInstance {
       const prompt = userMsg
         ? userMsg.content.replace(/\n/g, ' ').slice(0, 120)
         : '';
-      return { ...run, preview: prompt || run.status };
+      const started = threadTraces.find(
+        (event) =>
+          event.runId === run.id &&
+          event.eventData.type === 'run' &&
+          event.eventData.phase === 'started',
+      );
+      const resumedFromRunId = run.checkpoint?.resumedFromRunId ?? (
+        started?.eventData.type === 'run' ? started.eventData.resumedFromRunId : undefined
+      );
+      return { ...run, resumedFromRunId, preview: prompt || run.status };
     });
   });
 
@@ -150,7 +171,12 @@ export function buildTraceWebServer(): FastifyInstance {
     if (!run) {
       return reply.status(404).send({ error: `Run not found: ${id}` });
     }
-    return buildRunOverview(run, traceEventStore.getByRun(id), runStore.getByThread(run.threadId));
+    return buildRunOverview(
+      run,
+      traceEventStore.getByRun(id),
+      runStore.getByThread(run.threadId),
+      traceEventStore.getByThread(run.threadId),
+    );
   });
 
   fastify.get('/', async (request, reply) => {
@@ -605,7 +631,7 @@ function renderViewerPage(): string {
       } else {
         container.innerHTML = runs.map(r => \`
           <div class="item \${selectedRunId === r.id ? 'active' : ''} \${escapeHtml(r.status)}" data-run-id="\${escapeHtml(r.id)}" onclick="selectRun(\${escapeHtml(JSON.stringify(r.id))})">
-            <div class="item-title">\${escapeHtml(r.preview || r.status)}\${r.checkpoint?.resumedFromRunId ? ' ↩ resumed' : ''}</div>
+            <div class="item-title">\${escapeHtml(r.preview || r.status)}\${r.resumedFromRunId ? ' ↩ resumed' : ''}</div>
             <div class="item-meta"><span class="status-badge \${escapeHtml(r.status)}">\${escapeHtml(r.status)}</span> · \${escapeHtml(r.id.slice(0, 8))} · trace \${escapeHtml(r.traceStatus || 'unknown')}\${r.droppedTraceEvents ? ' (' + r.droppedTraceEvents + ' dropped)' : ''} · \${formatTime(r.startTime)}</div>
             \${r.status === 'failed' && r.error ? \`<div class="item-error" title="\${escapeHtml(r.error)}">\${escapeHtml(r.error)}</div>\` : ''}
           </div>

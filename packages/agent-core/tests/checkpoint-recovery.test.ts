@@ -17,6 +17,7 @@ import type { RunCheckpoint } from '../src/agents/checkpoint.js';
 import { createConnection } from '../src/db/connection.js';
 import { RunStore } from '../src/db/runStore.js';
 import { ThreadStore } from '../src/db/threadStore.js';
+import { TraceEventStore } from '../src/db/traceEventStore.js';
 import { MockProvider } from '../src/model/MockProvider.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
@@ -46,6 +47,7 @@ describe('PlanningLoop checkpoint recovery', () => {
     const db = createConnection({ path: ':memory:' });
     const threadId = new ThreadStore(db).create({ id: 'checkpoint-thread' }).id;
     const runStore = new RunStore(db);
+    const traceStore = new TraceEventStore(db);
     let releaseTool!: () => void;
     let markToolStarted!: () => void;
     const toolStarted = new Promise<void>((resolve) => { markToolStarted = resolve; });
@@ -91,10 +93,13 @@ describe('PlanningLoop checkpoint recovery', () => {
     await toolStarted;
 
     const inProgress = runStore.getByThread(threadId)[0];
+    const inProgressState = traceStore.getLatestRecoveryPoint(inProgress.id);
     expect(inProgress.status).toBe('running');
     expect(inProgress.traceStatus).toBe('recording');
-    expect(inProgress.checkpoint?.plan.steps[0].status).toBe('running');
-    expect(inProgress.checkpoint?.activeToolCall).toMatchObject({
+    expect(inProgressState?.loopMode).toBe('planning');
+    if (inProgressState?.loopMode !== 'planning') throw new Error('Expected planning recovery point');
+    expect(inProgressState.plan.steps[0].status).toBe('running');
+    expect(inProgressState.activeToolCall).toMatchObject({
       id: 'write-call',
       status: 'running',
       recoveryPolicy: 'verify_before_retry',
@@ -103,15 +108,19 @@ describe('PlanningLoop checkpoint recovery', () => {
     releaseTool();
     const result = await running;
     const completed = runStore.getById(result.runId!);
+    const completedState = traceStore.getLatestRecoveryPoint(result.runId!);
     expect(completed?.status).toBe('completed');
-    expect(completed?.checkpoint?.plan.steps[0].status).toBe('completed');
-    expect(completed?.checkpoint?.activeToolCall).toBeUndefined();
+    expect(completedState?.loopMode).toBe('planning');
+    if (completedState?.loopMode !== 'planning') throw new Error('Expected planning recovery point');
+    expect(completedState.plan.steps[0].status).toBe('completed');
+    expect(completedState.activeToolCall).toBeUndefined();
   });
 
   it('resumes from the first incomplete step without replaying completed work', async () => {
     const db = createConnection({ path: ':memory:' });
     const threadId = new ThreadStore(db).create({ id: 'recovery-thread' }).id;
     const runStore = new RunStore(db);
+    const traceStore = new TraceEventStore(db);
     const oldRun = runStore.create({
       threadId,
       model: 'mock-model',
@@ -156,10 +165,13 @@ describe('PlanningLoop checkpoint recovery', () => {
     expect(readFile).toHaveBeenCalledWith({ path: 'second.txt' });
     expect(runStore.getById(oldRun.id)?.status).toBe('interrupted');
     const resumed = runStore.getById(result.runId!);
+    const resumedState = traceStore.getLatestRecoveryPoint(result.runId!);
     expect(resumed?.status).toBe('completed');
-    expect(resumed?.checkpoint?.resumedFromRunId).toBe(oldRun.id);
-    expect(resumed?.checkpoint?.recoveryCount).toBe(1);
-    expect(resumed?.checkpoint?.plan.steps.map((step) => step.status)).toEqual([
+    expect(resumedState?.resumedFromRunId).toBe(oldRun.id);
+    expect(resumedState?.recoveryCount).toBe(1);
+    expect(resumedState?.loopMode).toBe('planning');
+    if (resumedState?.loopMode !== 'planning') throw new Error('Expected planning recovery point');
+    expect(resumedState.plan.steps.map((step) => step.status)).toEqual([
       'completed',
       'completed',
     ]);

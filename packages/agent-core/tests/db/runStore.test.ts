@@ -63,7 +63,7 @@ describe('RunStore', () => {
     });
   });
 
-  it('persists a JSON checkpoint and lists recoverable runs', () => {
+  it('persists a legacy JSON checkpoint and lists running runs', () => {
     const checkpoint = {
       version: 1 as const,
       updatedAt: new Date().toISOString(),
@@ -78,12 +78,12 @@ describe('RunStore', () => {
     const run = store.create({ threadId, model: 'gpt-test', checkpoint });
 
     expect(store.getById(run.id)?.checkpoint).toEqual(checkpoint);
-    expect(store.getRecoverableByThread(threadId).map((item) => item.id)).toEqual([run.id]);
+    expect(store.getRunningByThread(threadId).map((item) => item.id)).toEqual([run.id]);
   });
 
-  it('does not advertise a running run without a recovery fact', () => {
-    store.create({ threadId, model: 'gpt-test' });
-    expect(store.getRecoverableByThread(threadId)).toEqual([]);
+  it('lists running state without interpreting Trace recovery facts', () => {
+    const run = store.create({ threadId, model: 'gpt-test' });
+    expect(store.getRunningByThread(threadId).map((item) => item.id)).toEqual([run.id]);
   });
 
   it('completes a run', () => {

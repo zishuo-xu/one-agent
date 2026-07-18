@@ -100,7 +100,7 @@ describe('TraceEventStore', () => {
        WHERE run_id = ? AND event_type = 'recovery_point'`
     ).get(runId) as { event_data: string };
     expect(raw.event_data).toContain('secret-value');
-    expect(runStore.getById(runId)?.checkpoint).toMatchObject({
+    expect(store.getLatestRecoveryPoint(runId)).toMatchObject({
       pendingInput: { approval: { toolCall: { arguments: { api_key: 'secret-value' } } } },
     });
   });

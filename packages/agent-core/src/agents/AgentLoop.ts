@@ -22,7 +22,7 @@ import {
   MANAGE_MEMORY_SYSTEM_INSTRUCTION,
   MANAGE_MEMORY_TOOL_NAME,
 } from '../memory/manageMemoryTool.js';
-import { CreateToolCallInput, Memory } from '../db/types.js';
+import { CreateToolCallInput, Memory, type AgentRun } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
 import { SubAgentRunner } from './SubAgentRunner.js';
@@ -308,7 +308,7 @@ export class AgentLoop extends EventEmitter {
     if (interruptedRun.status !== 'running') {
       throw new Error(`Run ${runId} is ${interruptedRun.status}, not an interrupted running run.`);
     }
-    const checkpoint = interruptedRun.checkpoint;
+    const checkpoint = this.readRecoveryPoint(interruptedRun);
     if (!checkpoint) {
       throw new Error(`Run ${runId} has no checkpoint and cannot be resumed.`);
     }
@@ -371,7 +371,7 @@ export class AgentLoop extends EventEmitter {
     if (!waitingRun || waitingRun.threadId !== this.threadId) {
       throw new Error(`Waiting run not found in this thread: ${runId}`);
     }
-    const checkpoint = waitingRun.checkpoint;
+    const checkpoint = this.readRecoveryPoint(waitingRun);
     if (waitingRun.status !== 'waiting_for_input' || !checkpoint?.pendingInput) {
       throw new Error(`Run ${runId} is not waiting for user input.`);
     }
@@ -811,7 +811,8 @@ export class AgentLoop extends EventEmitter {
     request: UserInputRequest,
   ): RunCheckpoint {
     if (loop === this.planningLoop) {
-      const persisted = runId ? this.runStore?.getById(runId)?.checkpoint : undefined;
+      const persistedRun = runId ? this.runStore?.getById(runId) : undefined;
+      const persisted = persistedRun ? this.readRecoveryPoint(persistedRun) : undefined;
       if (!persisted || persisted.loopMode !== 'planning') {
         throw new Error('PlanningLoop approval requires a persisted planning checkpoint.');
       }
@@ -827,6 +828,11 @@ export class AgentLoop extends EventEmitter {
       resumedFromRunId: recovery?.resumedFromRunId,
       pendingInput: request,
     };
+  }
+
+  /** Trace-first recovery read with a legacy checkpoint fallback. */
+  private readRecoveryPoint(run: AgentRun): RunCheckpoint | undefined {
+    return this.traceEventStore?.getLatestRecoveryPoint(run.id) ?? run.checkpoint;
   }
 
 }

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { TraceEvent, CreateTraceEventInput } from './types.js';
 import { sanitizeTraceEvent } from '../agents/traceSanitizer.js';
+import type { RunCheckpoint } from '../agents/checkpoint.js';
 
 interface TraceEventRow {
   id: string;
@@ -81,6 +82,32 @@ export class TraceEventStore {
       .all(runId) as TraceEventRow[];
 
     return rows.map(rowToTraceEvent);
+  }
+
+  /**
+   * Read the exact latest recovery fact for resume/continue flows.
+   * Unlike public Trace queries, this intentionally bypasses sanitization so
+   * a previously approved frozen tool call can be continued without changing
+   * its arguments.
+   */
+  getLatestRecoveryPoint(runId: string): RunCheckpoint | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT event_data FROM trace_events
+         WHERE run_id = ? AND event_type = 'recovery_point'
+         ORDER BY sequence DESC, created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(runId) as { event_data: string } | undefined;
+    if (!row) return undefined;
+    try {
+      const event = JSON.parse(row.event_data) as {
+        type?: string;
+        checkpoint?: RunCheckpoint;
+      };
+      return event.type === 'recovery_point' ? event.checkpoint : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   getByTask(taskId: string): TraceEvent[] {

@@ -10,10 +10,11 @@ import {
   AgentRuntime,
   config,
   RunStore,
+  TraceEventStore,
   MessageStore,
   getSharedConnection,
 } from '@one-agent/agent-core';
-import type { AgentRunResult } from '@one-agent/agent-core';
+import type { AgentRun, AgentRunResult, RunCheckpoint } from '@one-agent/agent-core';
 import { WORKSPACE_ROOT } from './load-env.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
@@ -117,19 +118,48 @@ function printSeparator() {
   console.log('─'.repeat(60));
 }
 
-function printRecoveryHint(runStore: RunStore, threadId: string): void {
-  const recoverable = runStore.getRecoverableByThread(threadId);
+function readRecoveryPoint(
+  traceEventStore: TraceEventStore,
+  run: AgentRun,
+): RunCheckpoint | undefined {
+  return traceEventStore.getLatestRecoveryPoint(run.id) ?? run.checkpoint;
+}
+
+function getRecoverableRuns(
+  runStore: RunStore,
+  traceEventStore: TraceEventStore,
+  threadId: string,
+): AgentRun[] {
+  return runStore
+    .getRunningByThread(threadId)
+    .filter((run) => readRecoveryPoint(traceEventStore, run)?.loopMode === 'planning');
+}
+
+function printRecoveryHint(
+  runStore: RunStore,
+  traceEventStore: TraceEventStore,
+  threadId: string,
+): void {
+  const recoverable = getRecoverableRuns(runStore, traceEventStore, threadId);
   if (recoverable.length === 0) return;
   console.log(cyan(`Detected ${recoverable.length} interrupted planning run(s).`));
   for (const run of recoverable) {
-    const stepCount = run.checkpoint?.loopMode === 'planning' ? run.checkpoint.plan.steps.length : 0;
+    const recoveryPoint = readRecoveryPoint(traceEventStore, run);
+    const stepCount = recoveryPoint?.loopMode === 'planning' ? recoveryPoint.plan.steps.length : 0;
     console.log(dim(`  /resume ${shortId(run.id)}  (${stepCount} plan steps)`));
   }
 }
 
-function printWaitingHint(runStore: RunStore, threadId: string, includeQuestion = true): void {
+function printWaitingHint(
+  runStore: RunStore,
+  traceEventStore: TraceEventStore,
+  threadId: string,
+  includeQuestion = true,
+): void {
   const waiting = runStore.getWaitingByThread(threadId);
-  const request = waiting?.checkpoint?.pendingInput;
+  const request = waiting
+    ? readRecoveryPoint(traceEventStore, waiting)?.pendingInput
+    : undefined;
   if (!waiting || !request) return;
   console.log(cyan(`This thread is waiting for your answer (${shortId(waiting.id)}):`));
   if (includeQuestion) console.log(request.question);
@@ -337,8 +367,8 @@ async function main() {
   }
 
   let agent = runtime.createAgent({ threadId, planning });
-  printRecoveryHint(runStore, threadId);
-  printWaitingHint(runStore, threadId);
+  printRecoveryHint(runStore, traceEventStore, threadId);
+  printWaitingHint(runStore, traceEventStore, threadId);
   void memoryConsolidator.recoverUnextracted();
 
   // Optionally start the trace web viewer in the background.
@@ -623,23 +653,26 @@ async function main() {
       agent = runtime.createAgent({ threadId, planning });
       void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
-      printRecoveryHint(runStore, threadId);
-      printWaitingHint(runStore, threadId);
+      printRecoveryHint(runStore, traceEventStore, threadId);
+      printWaitingHint(runStore, traceEventStore, threadId);
       continue;
     }
 
     if (trimmed === '/resume') {
       console.log('Usage: /resume <run-id>');
-      printRecoveryHint(runStore, threadId);
+      printRecoveryHint(runStore, traceEventStore, threadId);
       continue;
     }
 
     if (trimmed.startsWith('/resume ')) {
       const id = trimmed.slice('/resume '.length).trim();
-      const run = runStore.getById(id) ?? runStore
-        .getRecoverableByThread(threadId)
+      const run = runStore.getById(id) ?? getRecoverableRuns(runStore, traceEventStore, threadId)
         .find((candidate) => candidate.id.startsWith(id));
-      if (!run || run.threadId !== threadId) {
+      if (
+        !run ||
+        run.threadId !== threadId ||
+        readRecoveryPoint(traceEventStore, run)?.loopMode !== 'planning'
+      ) {
         console.log(`Recoverable run not found: ${id}`);
         continue;
       }
@@ -711,7 +744,7 @@ async function main() {
           console.log(`\n${renderMarkdown(renderable)}`);
         }
         if (result.status === 'waiting_for_input') {
-          printWaitingHint(runStore, threadId);
+          printWaitingHint(runStore, traceEventStore, threadId);
         } else {
           console.log(dim(`Continued as run ${shortId(result.runId ?? '')}.`));
         }
@@ -804,7 +837,7 @@ async function main() {
         console.log('\n[Model returned an empty response]');
       }
       if (runResult.status === 'waiting_for_input') {
-        printWaitingHint(runStore, threadId, false);
+        printWaitingHint(runStore, traceEventStore, threadId, false);
       }
 
       const parts: string[] = [];
