@@ -58,6 +58,13 @@ export interface ModelToolCall {
   arguments: string;
 }
 
+/** Provider-neutral function tool exposed to a model. */
+export interface ModelToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 /** One normalized piece of a streaming completion. */
 export interface ModelChunk {
   content?: string;
@@ -76,8 +83,8 @@ export interface ModelResponse {
 
 export interface ModelRequest {
   messages: Message[];
-  /** Provider-specific tool schemas (OpenAI chat format), passed through verbatim. */
-  tools?: unknown[];
+  /** Provider-neutral tools; each Provider owns wire-format conversion. */
+  tools?: ModelToolDefinition[];
   /** Ask for JSON-only output; providers fall back to plain text if unsupported. */
   jsonMode?: boolean;
   timeoutMs?: number;

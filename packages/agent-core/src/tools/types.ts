@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ModelToolDefinition } from '../model/types.js';
 
 export interface ToolDefinition {
   name: string;
@@ -19,11 +20,5 @@ export interface ToolResult {
   error?: string;
 }
 
-export interface ToolSchema {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-}
+/** @deprecated Provider-facing schemas are now ModelToolDefinition. */
+export type ToolSchema = ModelToolDefinition;

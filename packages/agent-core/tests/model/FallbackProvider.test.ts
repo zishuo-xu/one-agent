@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import type Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
+import { describe, it, expect, vi } from 'vitest';
+import { AnthropicProvider } from '../../src/model/AnthropicProvider.js';
 import { FallbackProvider, defaultShouldFallback } from '../../src/model/FallbackProvider.js';
+import { OpenAICompatibleProvider } from '../../src/model/OpenAICompatibleProvider.js';
 import type {
   ModelCapabilities,
   ModelChunk,
@@ -61,6 +65,64 @@ describe('defaultShouldFallback', () => {
     expect(defaultShouldFallback(httpError(401))).toBe(false);
     expect(defaultShouldFallback(httpError(404))).toBe(false);
     expect(defaultShouldFallback(Object.assign(new Error('aborted'), { name: 'AbortError' }))).toBe(false);
+  });
+});
+
+describe('cross-protocol fallback', () => {
+  it('fails over from native Anthropic to OpenAI-compatible without Runtime branching', async () => {
+    const anthropicCreate = vi.fn().mockRejectedValue(Object.assign(new Error('overloaded'), {
+      status: 529,
+    }));
+    const openAICreate = vi.fn().mockResolvedValue({
+      choices: [{ message: { content: 'fallback answer' } }],
+    });
+    const primary = new AnthropicProvider(
+      { messages: { create: anthropicCreate } } as unknown as Anthropic,
+      'claude-primary',
+    );
+    const fallback = new OpenAICompatibleProvider(
+      { chat: { completions: { create: openAICreate } } } as unknown as OpenAI,
+      'openai-fallback',
+    );
+    const provider = new FallbackProvider([primary, fallback]);
+
+    const response = await provider.complete({
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(response.content).toBe('fallback answer');
+    expect(anthropicCreate).toHaveBeenCalledOnce();
+    expect(openAICreate).toHaveBeenCalledOnce();
+  });
+
+  it('fails over from OpenAI-compatible to native Anthropic with the same contract', async () => {
+    const openAICreate = vi.fn().mockRejectedValue(httpError(500));
+    const anthropicCreate = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: 'anthropic fallback' }],
+      usage: {
+        input_tokens: 2,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+    });
+    const primary = new OpenAICompatibleProvider(
+      { chat: { completions: { create: openAICreate } } } as unknown as OpenAI,
+      'openai-primary',
+    );
+    const fallback = new AnthropicProvider(
+      { messages: { create: anthropicCreate } } as unknown as Anthropic,
+      'claude-fallback',
+    );
+    const provider = new FallbackProvider([primary, fallback]);
+
+    const response = await provider.complete({
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(response.content).toBe('anthropic fallback');
+    expect(openAICreate).toHaveBeenCalledOnce();
+    expect(anthropicCreate).toHaveBeenCalledOnce();
   });
 });
 

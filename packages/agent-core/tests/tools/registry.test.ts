@@ -34,16 +34,16 @@ describe('ToolRegistry', () => {
     expect(() => registry.get('missing')).toThrow('Tool not found: missing');
   });
 
-  it('generates OpenAI-compatible schemas', () => {
+  it('generates provider-neutral model tool schemas', () => {
     const registry = new ToolRegistry();
     registry.register(echoTool);
 
     const schemas = registry.getSchemas();
     expect(schemas).toHaveLength(1);
-    expect(schemas[0].type).toBe('function');
-    expect(schemas[0].function.name).toBe('echo');
-    expect(schemas[0].function.parameters).toHaveProperty('properties');
-    expect(schemas[0].function.parameters).toHaveProperty('required');
+    expect(schemas[0].name).toBe('echo');
+    expect(schemas[0].description).toBe('Echo the input message');
+    expect(schemas[0].inputSchema).toHaveProperty('properties');
+    expect(schemas[0].inputSchema).toHaveProperty('required');
   });
 
   it('registers multiple tools at once', () => {

@@ -38,12 +38,9 @@ export class ToolRegistry {
       ? toolNames.map((name) => this.get(name))
       : this.list();
     return tools.map((tool) => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: zodToJsonSchema(tool.parameters),
-      },
+      name: tool.name,
+      description: tool.description,
+      inputSchema: zodToJsonSchema(tool.parameters),
     }));
   }
 }

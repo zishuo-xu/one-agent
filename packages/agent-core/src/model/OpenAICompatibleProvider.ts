@@ -5,6 +5,7 @@ import type {
   ModelRequest,
   ModelResponse,
   ModelToolCall,
+  ModelToolDefinition,
   TokenUsage,
   ToolCallDelta,
   ModelCapabilities,
@@ -38,7 +39,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
   async complete(request: ModelRequest): Promise<ModelResponse> {
     const { messages, tools, jsonMode, timeoutMs, signal } = request;
     const options = { timeout: timeoutMs, signal };
-    const base = { model: this.model, messages: messages as never, tools: tools as never };
+    const base = {
+      model: this.model,
+      messages: messages as never,
+      tools: this.toOpenAITools(tools) as never,
+    };
 
     let response: unknown;
     if (jsonMode) {
@@ -66,7 +71,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         messages: messages as never,
         stream: true,
         stream_options: { include_usage: true },
-        tools: tools as never,
+        tools: this.toOpenAITools(tools) as never,
       },
       { timeout: timeoutMs, signal },
     )) as unknown;
@@ -113,6 +118,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const toolCalls = this.normalizeToolCalls(record.tool_calls);
     const usage = this.normalizeUsage((response as Record<string, unknown>)?.usage);
     return { content, reasoning: reasoning || undefined, toolCalls, usage };
+  }
+
+  private toOpenAITools(tools: ModelToolDefinition[] | undefined) {
+    return tools?.map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+      },
+    }));
   }
 
   /**

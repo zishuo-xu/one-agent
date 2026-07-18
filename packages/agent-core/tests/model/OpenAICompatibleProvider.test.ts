@@ -68,13 +68,24 @@ describe('OpenAICompatibleProvider', () => {
     it('passes model, tools and jsonMode through to the client', async () => {
       const create = vi.fn().mockResolvedValue({ choices: [{ message: { content: '{}' } }] });
       const provider = new OpenAICompatibleProvider(makeClient(create), 'test-model');
-      const tools = [{ type: 'function', function: { name: 't' } }];
+      const tools = [{
+        name: 't',
+        description: 'test tool',
+        inputSchema: { type: 'object', properties: {} },
+      }];
 
       await provider.complete({ messages: [{ role: 'user', content: 'hi' }], tools, jsonMode: true });
 
       const [params] = create.mock.calls[0];
       expect(params.model).toBe('test-model');
-      expect(params.tools).toBe(tools);
+      expect(params.tools).toEqual([{
+        type: 'function',
+        function: {
+          name: 't',
+          description: 'test tool',
+          parameters: { type: 'object', properties: {} },
+        },
+      }]);
       expect(params.response_format).toEqual({ type: 'json_object' });
     });
 

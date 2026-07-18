@@ -24,6 +24,7 @@
     "test:recovery": "vitest run tests/checkpoint-recovery.test.ts tests/process-crash-recovery.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
     "better-sqlite3": "^12.11.1",
     "openai": "^4.52.0",
     "zod": "^3.23.8",

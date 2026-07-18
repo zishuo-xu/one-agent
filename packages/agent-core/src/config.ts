@@ -1,6 +1,6 @@
+import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { createProviderFromEnv } from './model/factory.js';
-import { OpenAICompatibleProvider } from './model/OpenAICompatibleProvider.js';
 
 function getEnv(key: string, defaultValue?: string): string {
   const value = process.env[key];
@@ -35,7 +35,31 @@ const openai = new OpenAI({
   baseURL: process.env.OPENAI_BASE_URL,
   apiKey: getEnv('OPENAI_API_KEY', ''),
 });
-const model = process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo';
+const selectedProvider = process.env.MODEL_PROVIDER ?? 'openai-compatible';
+const usesAnthropic = selectedProvider === 'anthropic';
+const model = usesAnthropic
+  ? getEnv('ANTHROPIC_MODEL')
+  : process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo';
+const anthropic = usesAnthropic
+  ? new Anthropic({
+      apiKey: getEnv('ANTHROPIC_API_KEY', ''),
+      baseURL: process.env.ANTHROPIC_BASE_URL,
+    })
+  : undefined;
+const anthropicMaxTokens = getNumericEnv('ANTHROPIC_MAX_TOKENS', 4096);
+const modelTimeoutMs = process.env.MODEL_TIMEOUT_MS !== undefined
+  ? getNumericEnv('MODEL_TIMEOUT_MS', 30000)
+  : getNumericEnv('OPENAI_TIMEOUT_MS', 30000);
+
+function createPurposeProvider(purposeModel: string | undefined) {
+  return purposeModel
+    ? createProviderFromEnv(openai, purposeModel, {
+        anthropicClient: anthropic,
+        anthropicMaxTokens,
+        includeFallback: false,
+      })
+    : undefined;
+}
 
 export const config = {
   port: getNumericEnv('PORT', 3000),
@@ -43,27 +67,25 @@ export const config = {
   openai,
   model,
   /**
-   * Default model provider chain (primary + optional fallback configured via
-   * OPENAI_FALLBACK_* env vars). Consumers may still wrap `config.openai`
-   * directly when they need a pinned single provider (tests, eval mocks).
+   * Default protocol-neutral Provider chain. MODEL_PROVIDER selects the
+   * primary adapter and FALLBACK_MODEL_PROVIDER may select another protocol.
    */
-  modelProvider: createProviderFromEnv(openai, model),
+  modelProvider: createProviderFromEnv(openai, model, {
+    anthropicClient: anthropic,
+    anthropicMaxTokens,
+  }),
   /**
    * Optional stronger model for planning/judging (PLANNING_MODEL).
    * Falls back to modelProvider when unset.
    */
-  planningModelProvider: process.env.PLANNING_MODEL
-    ? new OpenAICompatibleProvider(openai, process.env.PLANNING_MODEL)
-    : undefined,
+  planningModelProvider: createPurposeProvider(process.env.PLANNING_MODEL),
   /**
    * Optional cheaper model for summarization and memory extraction
    * (UTILITY_MODEL). Falls back to modelProvider when unset.
    */
-  utilityModelProvider: process.env.UTILITY_MODEL
-    ? new OpenAICompatibleProvider(openai, process.env.UTILITY_MODEL)
-    : undefined,
-  /** Per-request timeout in milliseconds. Override with OPENAI_TIMEOUT_MS. */
-  timeoutMs: getNumericEnv('OPENAI_TIMEOUT_MS', 30000),
+  utilityModelProvider: createPurposeProvider(process.env.UTILITY_MODEL),
+  /** Per-request timeout. MODEL_TIMEOUT_MS supersedes legacy OPENAI_TIMEOUT_MS. */
+  timeoutMs: modelTimeoutMs,
   /** Maximum estimated tokens in the context window before summarization triggers. */
   maxContextTokens: getNumericEnv('MAX_CONTEXT_TOKENS', 4096),
   /** Token budget for the recent (non-summarized) message window. */

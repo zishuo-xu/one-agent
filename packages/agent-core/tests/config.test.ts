@@ -29,4 +29,19 @@ describe('config', () => {
     const fresh = await import('../src/config.js');
     expect(fresh.config.maxContextTokens).toBe(8192);
   });
+
+  it('selects the native Anthropic Provider through configuration only', async () => {
+    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
+    vi.stubEnv('ANTHROPIC_MODEL', 'claude-test');
+    vi.resetModules();
+
+    const fresh = await import('../src/config.js');
+
+    expect(fresh.config.model).toBe('claude-test');
+    expect(fresh.config.modelProvider).toMatchObject({
+      name: 'anthropic',
+      model: 'claude-test',
+    });
+  });
 });

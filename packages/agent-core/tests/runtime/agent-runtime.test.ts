@@ -1,4 +1,6 @@
+import type Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
+import { AnthropicProvider } from '../../src/model/AnthropicProvider.js';
 import { AgentRuntime } from '../../src/runtime/AgentRuntime.js';
 import { createConnection } from '../../src/db/connection.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
@@ -86,6 +88,25 @@ describe('AgentRuntime', () => {
     const agent = runtime.createAgent({ planning: false });
 
     expect((agent as unknown as { modelProvider: ModelProvider }).modelProvider).toBe(pinned);
+    db.close();
+  });
+
+  it('accepts the native Anthropic adapter without Runtime-specific logic', () => {
+    const db = createConnection({ path: ':memory:' });
+    const anthropic = new AnthropicProvider(
+      { messages: { create: async () => ({}) } } as unknown as Anthropic,
+      'claude-runtime-test',
+    );
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-anthropic-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: anthropic,
+    });
+
+    const agent = runtime.createAgent({ planning: false });
+
+    expect((agent as unknown as { modelProvider: ModelProvider }).modelProvider).toBe(anthropic);
     db.close();
   });
 });

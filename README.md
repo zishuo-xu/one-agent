@@ -32,12 +32,22 @@ one-agent/
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 OPENAI_API_KEY
+# 编辑 .env，选择 Provider 并填写对应 API Key / Model
 ```
 
-支持实现所需能力的 OpenAI 兼容端点（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）。
-可选配置备用模型：设置 `OPENAI_FALLBACK_BASE_URL` / `OPENAI_FALLBACK_API_KEY` /
-`OPENAI_FALLBACK_MODEL` 后，主模型出现 5xx / 429 / 网络错误时自动 failover。
+当前有两种协议适配器：OpenAI Compatible（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）
+和原生 Anthropic Messages API。默认使用 OpenAI Compatible；原生 Anthropic 配置示例：
+
+```bash
+MODEL_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=your-claude-model
+ANTHROPIC_MAX_TOKENS=4096
+```
+
+可通过 `FALLBACK_MODEL_PROVIDER`、`FALLBACK_API_KEY`、`FALLBACK_MODEL` 和可选的
+`FALLBACK_BASE_URL` 配置备用协议，支持 Anthropic 与 OpenAI Compatible 双向组合。
+原有 `OPENAI_FALLBACK_*` 配置继续兼容。主模型出现 5xx / 429 / 网络错误时自动 failover。
 
 `ModelProvider` 不只统一请求与响应，还必须声明 `streaming`、`toolCalling`、
 `structuredOutput`、`reasoning` 和可选上下文窗口。能力分为 `native`、`emulated`、
@@ -242,7 +252,7 @@ Detected 1 interrupted planning run(s).
 - [x] Phase 9：任务持久化（SQLite TaskStore + 重启恢复）
 - [x] Phase 10：长期记忆检索（跨 thread 记忆共享）
 - [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
-- [x] Phase 12：多模型抽象层（ModelProvider 能力契约 + 主备 failover）
+- [x] Phase 12：多模型抽象层（OpenAI Compatible / 原生 Anthropic + 能力契约 + 跨协议 failover）
 - [x] Phase 13：工具生态扩展（run_command + 文件工具补齐）
 - [x] Phase 14：Eval+Trace 联动（失败案例可观测闭环 + JSON 数据集）
 - [x] Phase 15：子 Agent（spawn_agent 工具 + delegate/parallel 波次并行委派）

@@ -35,13 +35,23 @@ export type {
 } from './agents/checkpoint.js';
 export type { Message, MessageRole } from './agents/types.js';
 
-export { OpenAICompatibleProvider, FallbackProvider, defaultShouldFallback, createProviderFromEnv } from './model/index.js';
+export {
+  AnthropicProvider,
+  OpenAICompatibleProvider,
+  FallbackProvider,
+  defaultShouldFallback,
+  createProviderFromEnv,
+} from './model/index.js';
 export type {
+  AnthropicProviderOptions,
   ModelProvider,
   ModelRequest,
   ModelResponse,
   ModelChunk,
   ModelToolCall,
+  ModelToolDefinition,
+  ModelProviderKind,
+  ProviderFactoryOptions,
   ToolCallDelta,
   TokenUsage,
   FallbackPredicate,
