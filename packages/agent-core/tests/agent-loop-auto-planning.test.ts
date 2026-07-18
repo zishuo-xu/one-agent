@@ -101,7 +101,7 @@ describe('AgentLoop auto planning', () => {
     expect(events.some((e) => e.type === 'plan')).toBe(true);
   });
 
-  it('upgrades a direct verdict to planning before a multi-tool batch executes', async () => {
+  it('upgrades a direct verdict to planning before a large tool batch executes', async () => {
     const db = createConnection({ path: ':memory:' });
     const threadId = new ThreadStore(db).create({ id: 'adaptive-strategy-thread' }).id;
     const execute = vi.fn((args: unknown) => args);
@@ -120,6 +120,7 @@ describe('AgentLoop auto planning', () => {
         tool_calls: [
           { id: 'call-1', function: { name: 'echo', arguments: '{"message":"one"}' } },
           { id: 'call-2', function: { name: 'echo', arguments: '{"message":"two"}' } },
+          { id: 'call-3', function: { name: 'echo', arguments: '{"message":"three"}' } },
         ],
       } }] } as never)
       .mockResolvedValueOnce({ choices: [{ message: { content: 'Planned after runtime escalation.' } }] } as never);
@@ -137,7 +138,7 @@ describe('AgentLoop auto planning', () => {
         to: 'planning',
         trigger: expect.objectContaining({
           phase: 'before_tool_execution',
-          toolCallNames: ['echo', 'echo'],
+          toolCallNames: ['echo', 'echo', 'echo'],
           switchCount: 1,
         }),
       }),

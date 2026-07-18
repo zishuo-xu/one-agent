@@ -2,24 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { StrategyController } from '../../src/agents/StrategyController.js';
 
 describe('StrategyController', () => {
-  it('escalates a multi-tool first batch before execution', () => {
+  it('escalates a large first batch before execution', () => {
     const controller = new StrategyController();
     expect(controller.evaluate({
       phase: 'before_tool_execution',
       loop: 'simple',
       toolIteration: 0,
-      toolCallNames: ['read_file', 'write_file'],
+      toolCallNames: ['read_file', 'write_file', 'run_command'],
       switchCount: 0,
     })).toMatchObject({ action: 'switch_to_planning' });
   });
 
-  it('keeps a single-tool direct path simple', () => {
+  it('keeps up to two direct tool calls simple', () => {
     const controller = new StrategyController();
     expect(controller.evaluate({
       phase: 'before_tool_execution',
       loop: 'simple',
       toolIteration: 0,
-      toolCallNames: ['read_file'],
+      toolCallNames: ['read_file', 'read_file'],
       switchCount: 0,
     })).toEqual({ action: 'continue' });
   });
@@ -29,7 +29,7 @@ describe('StrategyController', () => {
     const base = {
       phase: 'before_tool_execution' as const,
       loop: 'simple' as const,
-      toolCallNames: ['read_file', 'write_file'],
+      toolCallNames: ['read_file', 'write_file', 'run_command'],
     };
     expect(controller.evaluate({ ...base, toolIteration: 1, switchCount: 0 }))
       .toEqual({ action: 'continue' });

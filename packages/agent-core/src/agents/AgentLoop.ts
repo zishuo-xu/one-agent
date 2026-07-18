@@ -764,8 +764,13 @@ export class AgentLoop extends EventEmitter {
       {
         role: 'system',
         content:
-          'You decide whether a user request needs multi-step planning with tools, ' +
-          'or can be answered directly. Reply with exactly one word: "plan" or "direct".',
+          'You are a cost-aware routing controller for an agent runtime. ' +
+          'Reply with exactly one word: "plan" or "direct". ' +
+          'Choose plan only for work that clearly needs dependent multi-stage execution, ' +
+          'coordinated changes, explicit verification/recovery, or decomposition of an ambiguous task. ' +
+          'Choose direct for conversation, memory recall, concise answers, and one or two independent ' +
+          'read-only or tool operations. The runtime can safely promote a direct task before a large ' +
+          'tool batch, so when uncertain choose direct.',
       },
       { role: 'user', content: message },
     ];

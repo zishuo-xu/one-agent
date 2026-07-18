@@ -11,7 +11,7 @@ export type StrategyDecision =
   | { action: 'switch_to_planning'; reason: string };
 
 export interface StrategyControllerOptions {
-  /** Maximum tool calls SimpleLoop may execute in its first batch. Default 1. */
+  /** Maximum tool calls SimpleLoop may execute in its first batch. Default 2. */
   maxInitialToolBatch?: number;
   /** Hard cap for direct-to-planning transitions in one Run. Default 1. */
   maxSwitches?: number;
@@ -29,7 +29,7 @@ export class StrategyController {
   readonly maxSwitches: number;
 
   constructor(options: StrategyControllerOptions = {}) {
-    this.maxInitialToolBatch = options.maxInitialToolBatch ?? 1;
+    this.maxInitialToolBatch = options.maxInitialToolBatch ?? 2;
     this.maxSwitches = options.maxSwitches ?? 1;
   }
 
