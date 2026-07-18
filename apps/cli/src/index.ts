@@ -4,6 +4,8 @@ import readline from 'node:readline';
 import { createServer as createNetServer } from 'node:net';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { ChildProcess } from 'node:child_process';
 import {
   AgentRuntime,
   config,
@@ -20,7 +22,7 @@ import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
 import { categorizeError, printError } from './errors.js';
 import { createChatEventHandler } from './chat-events.js';
-import { isUsableApiKey, parseArgs, resolveThread } from './args.js';
+import { isUsableApiKey, parseArgs, resolveThread, toPlanningOption } from './args.js';
 import {
   cyan,
   dim,
@@ -136,6 +138,47 @@ async function findAvailablePort(startPort = 3001, attempts = 20): Promise<numbe
   throw new Error(`No available trace viewer port in ${startPort}-${startPort + attempts - 1}`);
 }
 
+async function startTraceViewer(background: boolean): Promise<ChildProcess | null> {
+  const { spawn } = await import('node:child_process');
+  const traceWebPath = fileURLToPath(new URL('../../trace-web/dist/index.js', import.meta.url));
+  if (!fs.existsSync(traceWebPath)) {
+    console.error('Trace viewer not found. Run "pnpm build" first.');
+    return null;
+  }
+  const tracePort = await findAvailablePort();
+  const child = spawn('node', [
+    traceWebPath,
+    '--port', String(tracePort),
+    '--host', '127.0.0.1',
+    '--workspace', WORKSPACE_ROOT,
+  ], {
+    stdio: background ? 'ignore' : 'inherit',
+    detached: false,
+    env: {
+      ...process.env,
+      DATABASE_PATH: process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db'),
+    },
+  });
+  console.log(cyan(`Trace viewer: http://127.0.0.1:${tracePort}`));
+  console.log(dim(`Trace database: ${process.env.DATABASE_PATH}`));
+  return child;
+}
+
+async function waitForProcess(child: ChildProcess): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code && code !== 0) {
+        reject(new Error(`Trace viewer exited with code ${code}.`));
+      } else if (signal && signal !== 'SIGINT' && signal !== 'SIGTERM') {
+        reject(new Error(`Trace viewer exited after signal ${signal}.`));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 function createProgressIndicator(label = 'Thinking'): {
   start: () => void;
   stop: () => void;
@@ -177,7 +220,27 @@ function createProgressIndicator(label = 'Thinking'): {
 }
 
 async function main() {
-  const { threadId: argThreadId, newThread, verbose, help, version, init, plan, trace } = parseArgs();
+  let args;
+  try {
+    args = parseArgs();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error('Run "one-agent --help" for usage.');
+    process.exitCode = 1;
+    return;
+  }
+  const {
+    command,
+    threadId: argThreadId,
+    newThread,
+    verbose,
+    help,
+    version,
+    init,
+    loop,
+    withTrace,
+    deprecatedFlags,
+  } = args;
 
   if (help) {
     printHelp();
@@ -191,6 +254,30 @@ async function main() {
 
   if (init) {
     createEnvTemplate();
+    return;
+  }
+
+  for (const flag of deprecatedFlags) {
+    const replacement = flag === '--plan'
+      ? '--loop planning'
+      : flag === '--plan-auto'
+        ? '--loop auto'
+        : 'one-agent trace';
+    console.warn(dim(`${flag} is deprecated; use ${replacement}.`));
+  }
+
+  if (command === 'trace') {
+    try {
+      const traceProcess = await startTraceViewer(false);
+      if (!traceProcess) {
+        process.exitCode = 1;
+        return;
+      }
+      await waitForProcess(traceProcess);
+    } catch (error) {
+      console.error(`Trace viewer failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
     return;
   }
 
@@ -215,10 +302,11 @@ async function main() {
 
   let threadId: string;
   let title: string | null = null;
+  const planning = toPlanningOption(loop);
 
   try {
     const resolution = resolveThread(
-      { threadId: argThreadId, newThread, verbose, help, version, init, plan, trace },
+      args,
       threadStore.list().map((t) => ({ id: t.id, title: t.title })),
       (id) => Boolean(threadStore.getById(id)),
       (id) => threadStore.create(id ? { id } : {}).id,
@@ -233,37 +321,15 @@ async function main() {
     return;
   }
 
-  let agent = runtime.createAgent({ threadId, planning: plan });
+  let agent = runtime.createAgent({ threadId, planning });
   printRecoveryHint(runStore, threadId);
   void memoryConsolidator.recoverUnextracted();
 
   // Optionally start the trace web viewer in the background.
-  let traceProcess: import('node:child_process').ChildProcess | null = null;
-  if (trace) {
+  let traceProcess: ChildProcess | null = null;
+  if (withTrace) {
     try {
-      const { spawn } = await import('node:child_process');
-      const fs = await import('node:fs');
-      const traceWebPath = path.resolve(new URL('../../trace-web/dist/index.js', import.meta.url).pathname);
-      if (fs.existsSync(traceWebPath)) {
-        const tracePort = await findAvailablePort();
-        traceProcess = spawn('node', [
-          traceWebPath,
-          '--port', String(tracePort),
-          '--host', '127.0.0.1',
-          '--workspace', WORKSPACE_ROOT,
-        ], {
-          stdio: 'ignore',
-          detached: false,
-          env: {
-            ...process.env,
-            DATABASE_PATH: process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db'),
-          },
-        });
-        console.log(cyan(`Trace viewer: http://127.0.0.1:${tracePort}`));
-        console.log(dim(`Trace database: ${process.env.DATABASE_PATH}`));
-      } else {
-        console.warn(dim('Trace viewer not found. Run "pnpm build" first.'));
-      }
+      traceProcess = await startTraceViewer(true);
     } catch (err) {
       console.warn(dim(`Trace viewer failed: ${err instanceof Error ? err.message : String(err)}`));
     }
@@ -538,7 +604,7 @@ async function main() {
       const leavingThreadId = threadId;
       threadId = existing.id;
       title = existing.title;
-      agent = runtime.createAgent({ threadId, planning: plan });
+      agent = runtime.createAgent({ threadId, planning });
       void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       printRecoveryHint(runStore, threadId);

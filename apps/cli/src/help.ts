@@ -1,7 +1,9 @@
 import { bold, dim, cyan } from './format.js';
 
 export const HELP_TEXT = `
-${bold('Usage')}: one-agent [options]
+${bold('Usage')}:
+  one-agent [options]
+  one-agent trace [--workspace <dir>]
 
 ${bold('Options')}:
   --help, -h          Show this help message
@@ -11,10 +13,16 @@ ${bold('Options')}:
   --new-thread        Alias of --new
   --thread <id>       Resume a specific thread
   --workspace <dir>   Use the given directory as the agent workspace
-  --plan              Enable planning mode for multi-step tool tasks
-  --plan-auto         Let the agent decide per message whether to plan
+  --loop <mode>       Execution strategy: auto (default), simple, or planning
   --verbose           Show model reasoning, internal thoughts, plans, and reflections
-  --trace             Start the trace web viewer at http://127.0.0.1:3001
+
+${bold('Commands')}:
+  trace               Start the read-only Trace Viewer without starting chat
+
+${bold('Compatibility aliases')}:
+  --plan              Deprecated alias for --loop planning
+  --plan-auto         Deprecated alias for --loop auto
+  --trace             Deprecated: start Trace Viewer together with chat
 
 ${bold('REPL commands')}:
   /help               Show this command list
@@ -37,7 +45,7 @@ ${bold('REPL commands')}:
 
 ${dim('Without --thread/--new, the most recent thread is resumed automatically.')}
 ${dim('Model reasoning is always recorded in Trace; use --verbose to also show it live.')}
-${dim('Use --plan to enable multi-step planning mode, or --plan-auto to let the agent decide.')}
+${dim('The default --loop auto sends simple tasks directly and plans only complex tasks.')}
 `.trim();
 
 export function printHelp(): void {

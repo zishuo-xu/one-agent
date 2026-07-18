@@ -180,6 +180,9 @@ Trace Viewer（只读） ───────────────→ SQLite
 （读取运行事实，不构造 AgentRuntime，不触发执行或验证）
 ```
 
+CLI 默认只需 `one-agent`：恢复最近 Thread 并使用 Auto Planning。会话选择统一为 `--new` / `--thread`，
+执行策略统一为 `--loop auto|simple|planning`，只读观察入口独立为 `one-agent trace`；旧参数仅保留兼容。
+
 ## 已完成的核心开发顺序
 
 ```text

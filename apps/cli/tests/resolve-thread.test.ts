@@ -11,15 +11,13 @@ describe('resolveThread', () => {
     expect(res).toEqual({ threadId: 'abc123', mode: 'resumed' });
   });
 
-  it('--thread <id> creates when it does not exist', () => {
+  it('--thread <id> fails clearly when it does not exist', () => {
     const args = parseArgs(['--thread', 'abc123']);
-    const res = resolveThread(args, [], existsNone, createNew);
-    expect(res).toEqual({ threadId: 'abc123', mode: 'created' });
+    expect(() => resolveThread(args, [], existsNone, createNew)).toThrow('Thread not found');
   });
 
-  it('--thread <id> --new creates even if id collides', () => {
-    const args = parseArgs(['--thread', 'abc123', '--new']);
-    expect(() => resolveThread(args, [], () => true, createNew)).toThrow(/already exists/);
+  it('rejects combining --thread with --new', () => {
+    expect(() => parseArgs(['--thread', 'abc123', '--new'])).toThrow('Do not combine');
   });
 
   it('--new alone creates a fresh thread', () => {
