@@ -1,5 +1,8 @@
 # One Agent 项目 — 第三阶段总结报告
 
+> 文档状态：历史阶段快照（非当前实现说明）
+> 阅读说明：测试数量、文件结构和“下一步”只代表 Phase 3 完成时。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **版本**：Phase 3 — 上下文与记忆管理  
 **日期**：2026-07-13  
 **技术栈**：TypeScript + pnpm + OpenAI-compatible SDK
@@ -172,4 +175,3 @@ d2f29d8 feat: add context manager with summarization
 | 摘要消息角色 | `system` | 不污染 assistant/user 序列 |
 | 增量摘要 | 缓存 `lastSummarizedIndex` | 避免重复调用模型，提升效率 |
 | 工具对处理 | 摘要时保留 tool_call + tool_result 配对 | 避免模型看到孤立 tool call |
-

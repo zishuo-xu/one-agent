@@ -1,5 +1,8 @@
 # One Agent 项目 — 第一阶段总结报告
 
+> 文档状态：历史阶段快照（非当前项目定位）
+> 阅读说明：本文保留 Phase 1 最初探索多 Agent 路线时的记录，该定位后来已被 One Agent Runtime 取代。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **生成日期**：2026-07-13  
 **技术栈**：TypeScript + pnpm workspace + Fastify + OpenAI-compatible SDK
 

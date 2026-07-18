@@ -1,5 +1,8 @@
 # One Agent 项目 — 第四阶段总结报告
 
+> 文档状态：历史阶段快照（非当前实现说明）
+> 阅读说明：文中的“仍无会话状态”、模型表现和测试数量是 Phase 4 当时结论，不能描述当前 Runtime。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **版本**：Phase 4 — 规划与自我纠错  
 **日期**：2026-07-13  
 **技术栈**：TypeScript + pnpm + OpenAI-compatible SDK
@@ -206,4 +209,3 @@ d2f29d8 feat: add context manager with summarization
 2. **计划步骤与工具调用不完全绑定**：模型即使计划中没有指定工具，也可能在执行步骤时调用工具。这是合理的 ReAct 行为，但需进一步评估。
 
 3. **API 仍无会话状态**：每次请求新建 `AgentLoop`，Phase 5 持久化将解决此问题。
-

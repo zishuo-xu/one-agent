@@ -1,5 +1,8 @@
 # 简化版 Agent 项目学习路线
 
+> 文档状态：维护中的学习路线
+> 当前实现与能力边界以 [《项目目标、愿景与设计现状》](./docs/project-vision-and-status.md)为准；历史阶段文档的阅读方式见 [《文档索引与治理规则》](./docs/README.md)。
+
 ## 目标
 
 实现并吃透**一个** Agent 的完整内核，理解 Agent 的核心机制（循环、工具、记忆、规划、持久化、流式、评估），而不是堆砌多 Agent 编排。
@@ -101,7 +104,7 @@ task.created -> task.started -> plan -> thought -> tool_call -> tool_result -> m
 
 已实现 SSE 任务事件流与 CLI 实时事件输出。
 
-学习并发限制、取消、timeout、重试、幂等，以及 SSE/WebSocket 流式文本与断线重连。
+学习并发限制、取消、timeout、重试、幂等，以及流式文本与断线重连。当前实现使用 SSE；WebSocket 仅是可选的学习方向。
 
 ## 阶段 7：Trace 与 Evaluation ✅
 
@@ -114,7 +117,7 @@ toolCalls / status / error / 推理链
 
 已新增 `trace_events` 表保存完整事件流，并可用 `EvalRunner` 跑确定性回归测试。
 
-准备 20 条固定测试任务，检查：任务是否完成、是否调用正确工具、参数是否有效、是否超时、规划是否合理。
+阶段初期准备 20 条固定回归任务，检查任务是否完成、是否调用正确工具、参数是否有效、是否超时、规划是否合理。Phase 17 后已扩展为 40 个能力任务、77 个 checkpoint。
 
 ## 阶段 8：全局 CLI 命令 ✅
 

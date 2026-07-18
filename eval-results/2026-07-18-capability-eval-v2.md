@@ -1,5 +1,8 @@
 # 能力评测 v2 报告（2026-07-18）
 
+> 文档状态：不可变评测记录
+> 阅读说明：分数、耗时、token 和“下一步”只对应本次模型、数据集与代码版本，不自动代表未来基线。当前能力结论见 [项目现状](../docs/project-vision-and-status.md)，治理规则见 [文档索引](../docs/README.md)。
+
 - **模型**：deepseek-v4-flash（DeepSeek API）
 - **题库**：修复后的 `eval-datasets/capability`，40 题（L1×5 / L2×8 / L3×5 / L4×7 / L5×5 / L6×10）
 - **运行方式**：SimpleLoop / PlanningLoop 各跑一次，任务级并发 4，开启 Trace

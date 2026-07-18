@@ -1,5 +1,8 @@
 # Phase 16：子 Agent 观测性 + 模型降级
 
+> 文档状态：历史阶段快照（非当前 Trace 完整说明）
+> 阅读说明：本文保留嵌套 Trace 和 utility model 首次实现时的设计、测试数量与文件结构。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **日期**：2026-07-13
 **状态**：✅ 已完成
 

@@ -1,5 +1,8 @@
 # 自主测试与修复报告
 
+> 文档状态：历史工程记录（非当前缺陷清单）
+> 阅读说明：结论、测试数量和未解决项截止 2026-07-17；后续修复可能已经改变状态。当前限制见 [项目现状](./project-vision-and-status.md)，历史分类见 [文档索引](./README.md)。
+
 **日期**：2026-07-17
 **范围**：one-agent v0.1.0 全仓库（agent-core / cli / api / trace-web）
 **前置资产**：`docs/feature-review-2026-07.md`（代码审查）、`docs/functional-test-report-2026-07.md`（24 用例真实模型端到端测试）

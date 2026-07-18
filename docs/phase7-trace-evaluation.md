@@ -1,5 +1,8 @@
 # Phase 7：Trace 与 Evaluation
 
+> 文档状态：历史阶段快照（非当前 Trace / Eval 规范）
+> 阅读说明：本文记录 Trace / Eval 的第一版；当前已增加有序 Trace、Trace 健康度、离线 Completion Contract 与能力评测。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **日期**：2026-07-13  
 **项目**：one-agent  
 **状态**：✅ 已实现

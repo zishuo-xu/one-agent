@@ -1,5 +1,8 @@
 # Phase 9：任务持久化与重启恢复
 
+> 文档状态：历史阶段快照（非当前恢复能力总览）
+> 阅读说明：本文描述 API TaskQueue 的重启恢复，不等同于后来加入的 PlanningLoop Run 断点恢复。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **日期**：2026-07-13  
 **项目**：one-agent  
 **状态**：✅ 已实现

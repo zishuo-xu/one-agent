@@ -1,5 +1,8 @@
 # one-agent 功能全景回顾与问题审视
 
+> 文档状态：历史审查快照（非当前能力清单）
+> 阅读说明：本文反映 2026-07-16 走查时的代码，后续修复、Trace、恢复与记忆治理尚未全部包含。当前事实见 [项目现状](./project-vision-and-status.md)，历史分类见 [文档索引](./README.md)。
+
 **日期**：2026-07-16
 **范围**：`packages/agent-core` 全部模块 + `apps/cli`、`apps/api`、`apps/trace-web`
 **方法**：全代码走查（关键结论已对源码二次核实；SQLite 迁移与 shell 拦截规则经实际执行验证）

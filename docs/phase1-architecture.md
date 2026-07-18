@@ -1,5 +1,8 @@
 # One Agent 项目 — 第一阶段架构设计
 
+> 文档状态：历史阶段快照（非当前架构规范）
+> 阅读说明：本文保留 Phase 1 当时的设计；“当前”和“后续”均相对于 2026-07-13。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **版本**：Phase 1  
 **日期**：2026-07-13  
 **技术栈**：TypeScript + pnpm workspace + Fastify + OpenAI-compatible SDK

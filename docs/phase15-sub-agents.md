@@ -1,5 +1,8 @@
 # Phase 15：子 Agent（执行引擎 + 规划级并行委派）
 
+> 文档状态：历史阶段快照（非当前多 Agent 产品路线）
+> 阅读说明：本文记录受限子 Agent 首次实现；One Agent 仍是单主 Agent Runtime，不发展无约束递归编排。最新边界见 [项目现状](./project-vision-and-status.md)。
+
 **日期**：2026-07-16
 **状态**：✅ 已完成
 

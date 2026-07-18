@@ -1,5 +1,8 @@
 # One Agent 项目 — 第二阶段总结报告
 
+> 文档状态：历史阶段快照（非当前实现说明）
+> 阅读说明：测试数量、文件结构和“下一步”只代表 Phase 2 完成时。最新事实见 [项目现状](./project-vision-and-status.md)，分类规则见 [文档索引](./README.md)。
+
 **版本**：Phase 2 — Tool Calling  
 **日期**：2026-07-13  
 **技术栈**：TypeScript + pnpm + zod + OpenAI-compatible SDK
