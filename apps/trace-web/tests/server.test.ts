@@ -9,17 +9,27 @@ import {
 import { buildTraceWebServer } from '../src/server.js';
 
 describe('trace web server', () => {
+  let servers: Array<ReturnType<typeof buildTraceWebServer>> = [];
+
+  function buildServer() {
+    const server = buildTraceWebServer();
+    servers.push(server);
+    return server;
+  }
+
   beforeEach(() => {
     process.env.DATABASE_PATH = ':memory:';
     resetSharedConnection();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(servers.map((server) => server.close()));
+    servers = [];
     resetSharedConnection();
   });
 
   it('GET / returns the viewer HTML page', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/' });
 
     expect(response.statusCode).toBe(200);
@@ -29,7 +39,7 @@ describe('trace web server', () => {
   });
 
   it('GET / escapes stored ids/errors for HTML, attribute, and JS-string contexts', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/' });
     const html = response.body;
 
@@ -52,7 +62,7 @@ describe('trace web server', () => {
     threadStore.create({ title: 'First thread' });
     threadStore.create({ title: 'Second thread' });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/api/threads' });
 
     expect(response.statusCode).toBe(200);
@@ -70,7 +80,7 @@ describe('trace web server', () => {
     const thread = threadStore.create({});
     runStore.create({ threadId: thread.id, model: 'test', status: 'completed' });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: `/api/threads/${thread.id}/runs`,
@@ -83,7 +93,7 @@ describe('trace web server', () => {
   });
 
   it('GET /api/threads/:id/runs returns 404 for missing thread', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: '/api/threads/nonexistent/runs',
@@ -107,7 +117,7 @@ describe('trace web server', () => {
       model: 'test',
     });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: `/api/runs/${run.id}/traces`,
@@ -121,7 +131,7 @@ describe('trace web server', () => {
   });
 
   it('GET /api/runs/:id/traces returns 404 for missing run', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: '/api/runs/nonexistent/traces',
@@ -173,7 +183,7 @@ describe('trace web server', () => {
       eventData: { type: 'tool_result', toolCallId: 'c1', toolResult: { success: false, error: 'missing' } },
     });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: `/api/runs/${run.id}/overview` });
 
     expect(response.statusCode).toBe(200);
@@ -192,7 +202,7 @@ describe('trace web server', () => {
   });
 
   it('GET /api/runs/:id/overview returns 404 for a missing run', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/api/runs/nonexistent/overview' });
     expect(response.statusCode).toBe(404);
   });
@@ -212,7 +222,7 @@ describe('trace web server', () => {
       model: 'test',
     });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: `/api/threads/${thread.id}/traces`,
@@ -251,7 +261,7 @@ describe('trace web server', () => {
       model: 'test',
     });
 
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({
       method: 'GET',
       url: `/api/runs/${run.id}/traces`,
@@ -268,7 +278,7 @@ describe('trace web server', () => {
   });
 
   it('GET / includes the nested sub-agent rendering hooks', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/' });
 
     expect(response.statusCode).toBe(200);
@@ -279,7 +289,7 @@ describe('trace web server', () => {
   });
 
   it('GET / includes run overview and stable run selection hooks', async () => {
-    const server = buildTraceWebServer();
+    const server = buildServer();
     const response = await server.inject({ method: 'GET', url: '/' });
 
     expect(response.statusCode).toBe(200);
