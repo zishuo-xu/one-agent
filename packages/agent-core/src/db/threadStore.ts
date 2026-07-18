@@ -62,7 +62,9 @@ export class ThreadStore {
   }
 
   updateTimestamp(id: string): void {
-    const now = new Date().toISOString();
+    const current = this.getById(id);
+    if (!current) return;
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
     this.db
       .prepare('UPDATE threads SET updated_at = ? WHERE id = ?')
       .run(now, id);

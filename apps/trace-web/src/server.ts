@@ -743,6 +743,15 @@ function renderViewerPage(): string {
           const children = childCount > 0 ? ' · ' + childCount + ' events' : '';
           return { label: status + meta + children, preview: task + (detail ? ' — ' + detail : '') };
         }
+        case 'memory_recall': {
+          const selected = d.selectedCount ?? 0;
+          const candidates = d.candidateCount ?? 0;
+          const keywords = Array.isArray(d.keywords) ? d.keywords.join(', ') : '';
+          const cost = d.estimatedTokens !== undefined ? ' · ~' + d.estimatedTokens + ' tokens' : '';
+          const reason = d.skipReason ? ' · ' + d.skipReason : '';
+          const error = d.error ? ' · failed: ' + d.error : '';
+          return { label: selected + '/' + candidates + ' selected' + cost, preview: keywords + reason + error };
+        }
         case 'message_delta':
         case 'reasoning_delta':
           return { label: e.chunkCount + ' chunks', preview: (e.fullText ?? d.content ?? '').slice(0, 300) };

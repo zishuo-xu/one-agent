@@ -62,12 +62,18 @@ export class MessageStore {
         now,
       );
       if (message.role === 'user' && !message.internal) {
+        const current = this.db
+          .prepare('SELECT updated_at FROM threads WHERE id = ?')
+          .get(threadId) as { updated_at: string } | undefined;
+        const currentMs = current ? Date.parse(normalizeUtcDateTime(current.updated_at)) : 0;
+        const nextRevision = new Date(Math.max(Date.now(), currentMs + 1)).toISOString();
         // The timestamp is the thread revision used by MemoryConsolidator.
         // Update both fields atomically with the message so an in-flight
-        // consolidation cannot mark a thread complete after newer input.
+        // consolidation cannot mark a thread complete after newer input. It
+        // advances monotonically even when two writes share one wall-clock ms.
         this.db
           .prepare('UPDATE threads SET memory_extracted = 0, updated_at = ? WHERE id = ?')
-          .run(now, threadId);
+          .run(nextRevision, threadId);
       }
     });
     transaction();

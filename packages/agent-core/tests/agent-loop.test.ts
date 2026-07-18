@@ -116,7 +116,10 @@ describe('AgentLoop', () => {
     } as never);
 
     const memoryStore = {
-      getRelevantMemories: vi.fn(() => []),
+      recallRelevantMemories: vi.fn(() => ({
+        memories: [],
+        report: { keywords: [], candidateCount: 0, selectedCount: 0, candidates: [] },
+      })),
     } as unknown as MemoryStore;
     const agent = new AgentLoop({
       enablePlanning: false,

@@ -150,7 +150,8 @@ memories 表保存全局事实
 新提问按关键词召回并注入上下文
 ```
 
-产出：`MemoryStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、跨 thread 记忆共享、记忆管理 API。
+产出：`MemoryStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、跨 thread 记忆共享、记忆管理 API、
+召回决策 Trace 与 `memory-recall-v1` 离线评测基线。
 
 ## 最终架构
 

@@ -110,13 +110,19 @@ describe('memory routes', () => {
     const first = await server.inject({
       method: 'POST',
       url: '/api/memories',
-      payload: { key: 'timezone', value: 'Shanghai', confidence: 0.9 },
+      payload: {
+        key: 'timezone', value: 'Shanghai', confidence: 0.9,
+        observedAt: '2026-07-10T00:00:00.000Z',
+      },
     });
     const firstBody = JSON.parse(first.body);
     const conflict = await server.inject({
       method: 'POST',
       url: '/api/memories',
-      payload: { key: 'timezone', value: 'Tokyo', confidence: 0.4 },
+      payload: {
+        key: 'timezone', value: 'Tokyo', confidence: 0.4,
+        observedAt: '2026-07-01T00:00:00.000Z',
+      },
     });
     expect(conflict.statusCode).toBe(200);
     expect(JSON.parse(conflict.body)).toMatchObject({

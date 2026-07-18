@@ -163,6 +163,47 @@ describe('MemoryStore', () => {
     expect(store.getById(global.id)?.lastUsedAt).not.toBeNull();
   });
 
+  it('explains selected and filtered recall candidates without exposing values', () => {
+    const selected = store.create({
+      key: 'preferred language', value: 'Chinese', explicit: true, confidence: 0.95,
+    });
+    const limited = store.create({ key: 'project language', value: 'TypeScript', confidence: 0.5 });
+    const scoped = store.create({
+      key: 'local language', value: 'Rust', scope: 'thread', threadId: 'thread-other',
+    });
+    const inactive = store.create({
+      key: 'old language', value: 'Go', status: 'superseded',
+    });
+    const expired = store.create({
+      key: 'temporary language', value: 'Python', expiresAt: '2000-01-01T00:00:00.000Z',
+    });
+
+    const recall = store.recallRelevantMemories('preferred project local old temporary language', {
+      threadId: 'thread-current',
+      limit: 1,
+    });
+
+    expect(recall.memories.map((memory) => memory.id)).toEqual([selected.id]);
+    expect(recall.report).toMatchObject({ candidateCount: 5, selectedCount: 1 });
+    const outcomes = new Map(recall.report.candidates.map((candidate) => [candidate.memoryId, candidate]));
+    expect(outcomes.get(selected.id)?.outcome).toBe('selected');
+    expect(outcomes.get(limited.id)?.outcome).toBe('filtered_limit');
+    expect(outcomes.get(scoped.id)?.outcome).toBe('filtered_scope');
+    expect(outcomes.get(inactive.id)?.outcome).toBe('filtered_inactive');
+    expect(outcomes.get(expired.id)?.outcome).toBe('filtered_expired');
+    expect(outcomes.get(selected.id)?.matchedKeywords).toEqual(expect.arrayContaining(['preferred', 'language']));
+    expect(JSON.stringify(recall.report)).not.toContain('Chinese');
+  });
+
+  it('explains why a query skipped recall', () => {
+    expect(store.recallRelevantMemories('is it').report).toMatchObject({
+      skipReason: 'no_keywords', candidateCount: 0, selectedCount: 0,
+    });
+    expect(store.recallRelevantMemories('language', 0).report).toMatchObject({
+      skipReason: 'limit_zero', candidateCount: 0, selectedCount: 0,
+    });
+  });
+
   it('normalizes updates and rejects empty content', () => {
     const memory = store.create({ key: 'language', value: 'Chinese' });
     expect(store.update(memory.id, { value: '  Simplified   Chinese  ' }).value)

@@ -57,6 +57,39 @@ export interface RelevantMemoryOptions {
   threadId?: string;
 }
 
+export type MemoryRecallOutcome =
+  | 'selected'
+  | 'filtered_inactive'
+  | 'filtered_expired'
+  | 'filtered_scope'
+  | 'filtered_limit';
+
+export interface MemoryRecallCandidate {
+  memoryId: string;
+  key: string;
+  kind: Memory['kind'];
+  scope: Memory['scope'];
+  status: Memory['status'];
+  matchedKeywords: string[];
+  explicit: boolean;
+  confidence: number;
+  observedAt: string;
+  outcome: MemoryRecallOutcome;
+}
+
+export interface MemoryRecallReport {
+  keywords: string[];
+  skipReason?: 'no_keywords' | 'limit_zero';
+  candidateCount: number;
+  selectedCount: number;
+  candidates: MemoryRecallCandidate[];
+}
+
+export interface MemoryRecallResult {
+  memories: Memory[];
+  report: MemoryRecallReport;
+}
+
 export interface RememberResult {
   memory: Memory;
   action: 'created' | 'reinforced' | 'superseded' | 'rejected';
@@ -275,43 +308,100 @@ export class MemoryStore {
   }
 
   getRelevantMemories(query: string, limitOrOptions: number | RelevantMemoryOptions = 5): Memory[] {
+    return this.recallRelevantMemories(query, limitOrOptions).memories;
+  }
+
+  /** Retrieve memories together with a value-free explanation suitable for Trace. */
+  recallRelevantMemories(
+    query: string,
+    limitOrOptions: number | RelevantMemoryOptions = 5,
+  ): MemoryRecallResult {
     const options = typeof limitOrOptions === 'number'
       ? { limit: limitOrOptions }
       : limitOrOptions;
     const limit = options.limit ?? 5;
     const keywords = extractKeywords(query);
     if (keywords.length === 0 || limit <= 0) {
-      return [];
+      return {
+        memories: [],
+        report: {
+          keywords,
+          skipReason: limit <= 0 ? 'limit_zero' : 'no_keywords',
+          candidateCount: 0,
+          selectedCount: 0,
+          candidates: [],
+        },
+      };
     }
 
     this.expireDue();
     const keywordConditions: string[] = [];
-    const values: unknown[] = [new Date().toISOString()];
+    const values: unknown[] = [];
     for (const word of keywords) {
       keywordConditions.push('(key LIKE ? OR value LIKE ?)');
       values.push(`%${word}%`, `%${word}%`);
     }
-    const scopeCondition = options.threadId
-      ? `(scope = 'global' OR (scope = 'thread' AND thread_id = ?))`
-      : `scope = 'global'`;
-    if (options.threadId) values.push(options.threadId);
-    values.push(limit);
 
     const sql = `SELECT * FROM memories
-      WHERE status = 'active'
-        AND (expires_at IS NULL OR expires_at > ?)
-        AND (${keywordConditions.join(' OR ')})
-        AND ${scopeCondition}
-      ORDER BY explicit DESC, confidence DESC, observed_at DESC, updated_at DESC
-      LIMIT ?`;
+      WHERE ${keywordConditions.join(' OR ')}
+      ORDER BY explicit DESC, confidence DESC, observed_at DESC, updated_at DESC`;
     const rows = this.db.prepare(sql).all(...values) as MemoryRow[];
-    if (rows.length === 0) return [];
+    const nowMs = Date.now();
+    const selected: Memory[] = [];
+    const candidates = rows.map((row): MemoryRecallCandidate => {
+      const memory = rowToMemory(row);
+      let outcome: MemoryRecallOutcome;
+      if (memory.status === 'expired' || (memory.expiresAt && Date.parse(memory.expiresAt) <= nowMs)) {
+        outcome = 'filtered_expired';
+      } else if (memory.status !== 'active') {
+        outcome = 'filtered_inactive';
+      } else if (memory.scope === 'thread' && memory.threadId !== options.threadId) {
+        outcome = 'filtered_scope';
+      } else if (selected.length >= limit) {
+        outcome = 'filtered_limit';
+      } else {
+        outcome = 'selected';
+        selected.push(memory);
+      }
+      const searchable = `${memory.key}\n${memory.value}`.toLocaleLowerCase();
+      return {
+        memoryId: memory.id,
+        key: memory.key,
+        kind: memory.kind,
+        scope: memory.scope,
+        status: memory.status,
+        matchedKeywords: keywords.filter((keyword) => searchable.includes(keyword.toLocaleLowerCase())),
+        explicit: memory.explicit,
+        confidence: memory.confidence,
+        observedAt: memory.observedAt,
+        outcome,
+      };
+    });
+    if (selected.length === 0) {
+      return {
+        memories: [],
+        report: {
+          keywords,
+          candidateCount: candidates.length,
+          selectedCount: 0,
+          candidates,
+        },
+      };
+    }
     const usedAt = new Date().toISOString();
-    const placeholders = rows.map(() => '?').join(', ');
+    const placeholders = selected.map(() => '?').join(', ');
     this.db
       .prepare(`UPDATE memories SET last_used_at = ? WHERE id IN (${placeholders})`)
-      .run(usedAt, ...rows.map((row) => row.id));
-    return rows.map((row) => ({ ...rowToMemory(row), lastUsedAt: usedAt }));
+      .run(usedAt, ...selected.map((memory) => memory.id));
+    return {
+      memories: selected.map((memory) => ({ ...memory, lastUsedAt: usedAt })),
+      report: {
+        keywords,
+        candidateCount: candidates.length,
+        selectedCount: selected.length,
+        candidates,
+      },
+    };
   }
 
   update(id: string, updates: Partial<Omit<Memory, 'id' | 'createdAt'>>): Memory {

@@ -55,6 +55,10 @@ export class ContextManager {
     this.memoryContext = content;
   }
 
+  clearMemoryContext(): void {
+    this.memoryContext = null;
+  }
+
   /** Feed back the real prompt_tokens from the model's usage response. */
   updateLastKnownTokens(promptTokens: number): void {
     this.lastKnownPromptTokens = promptTokens;

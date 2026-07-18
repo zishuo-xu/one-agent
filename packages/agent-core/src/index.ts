@@ -50,6 +50,13 @@ export { TraceEventStore } from './db/traceEventStore.js';
 export { SqliteTaskStore } from './db/taskStore.js';
 export { MemoryStore } from './db/memoryStore.js';
 export type {
+  MemoryRecallCandidate,
+  MemoryRecallOutcome,
+  MemoryRecallReport,
+  MemoryRecallResult,
+  RelevantMemoryOptions,
+} from './db/memoryStore.js';
+export type {
   Thread,
   PersistedMessage,
   AgentRun,

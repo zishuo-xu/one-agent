@@ -130,4 +130,22 @@ describe('AgentLoop memory integration', () => {
     expect(contextText).toContain('最喜欢的编程语言');
     expect(contextText).toContain('Rust');
   });
+
+  it('removes the previous memory context when the next query has no match', async () => {
+    memoryStore.create({ key: 'preferred language', value: 'Chinese' });
+    const threadId = threadStore.create({ id: 'thread-no-stale-memory' }).id;
+    mockCreate
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'Chinese.' } }] } as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'A joke.' } }] } as never);
+    const agent = new AgentLoop({ enablePlanning: false, threadId, db, memoryStore });
+
+    await agent.chat('What language do I prefer?');
+    await agent.chat('Tell me a joke about penguins.');
+
+    const firstRequest = mockCreate.mock.calls[0][0] as { messages: Array<{ content: string }> };
+    const secondRequest = mockCreate.mock.calls[1][0] as { messages: Array<{ content: string }> };
+    expect(firstRequest.messages.map((message) => message.content).join('\n')).toContain('preferred language');
+    expect(secondRequest.messages.map((message) => message.content).join('\n'))
+      .not.toContain('Relevant context from past conversations');
+  });
 });

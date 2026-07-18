@@ -8,6 +8,7 @@ import { ToolCall, ToolResult } from '../tools/types.js';
 import { Message } from './types.js';
 import { ContextManager } from '../context/ContextManager.js';
 import { PersistenceContextManager } from '../context/PersistenceContextManager.js';
+import { estimateTokens } from '../context/tokenEstimate.js';
 import { Planner } from '../planning/Planner.js';
 import { ReasoningChain } from '../planning/ReasoningChain.js';
 import type { Plan, PlanStep } from '../planning/types.js';
@@ -123,6 +124,18 @@ export type AgentLoopEvent =
       rejectedCount?: number;
       markedExtracted?: boolean;
       durationMs?: number;
+      error?: string;
+    }
+  | {
+      type: 'memory_recall';
+      keywords: string[];
+      skipReason?: 'no_keywords' | 'limit_zero';
+      candidateCount: number;
+      selectedCount: number;
+      candidates: import('../db/memoryStore.js').MemoryRecallCandidate[];
+      injectedMemoryIds: string[];
+      injectedCharacters: number;
+      estimatedTokens: number;
       error?: string;
     }
   | { type: 'message'; content: string };
@@ -392,16 +405,6 @@ export class AgentLoop extends EventEmitter {
     this.recorder.reset();
     this.reasoningChain = new ReasoningChain();
 
-    // Recall relevant long-term memories and inject them into the context.
-    this.currentMemoryText = undefined;
-    if (this.memoryStore) {
-      const memories = this.memoryStore.getRelevantMemories(message, { threadId: this.threadId });
-      if (memories.length > 0) {
-        this.currentMemoryText = this.formatMemories(memories);
-        this.contextManager.setMemoryContext(this.currentMemoryText);
-      }
-    }
-
     let runId: string | undefined;
     if (this.threadId && this.runStore) {
       const run = this.runStore.create({
@@ -425,6 +428,41 @@ export class AgentLoop extends EventEmitter {
     });
 
     try {
+      // Recall after run correlation is established so the complete decision,
+      // including an empty result, is inspectable in this run's Trace.
+      this.currentMemoryText = undefined;
+      this.contextManager.clearMemoryContext();
+      if (this.memoryStore) {
+        try {
+          const recall = this.memoryStore.recallRelevantMemories(message, { threadId: this.threadId });
+          if (recall.memories.length > 0) {
+            this.currentMemoryText = this.formatMemories(recall.memories);
+            this.contextManager.setMemoryContext(this.currentMemoryText);
+          }
+          this.recorder.record({
+            type: 'memory_recall',
+            ...recall.report,
+            injectedMemoryIds: recall.memories.map((memory) => memory.id),
+            injectedCharacters: this.currentMemoryText?.length ?? 0,
+            estimatedTokens: estimateTokens(this.currentMemoryText ?? ''),
+          });
+        } catch (error) {
+          // Memory is optional context. A retrieval/storage failure is visible
+          // in Trace but must never change the main task result.
+          this.recorder.record({
+            type: 'memory_recall',
+            keywords: [],
+            candidateCount: 0,
+            selectedCount: 0,
+            candidates: [],
+            injectedMemoryIds: [],
+            injectedCharacters: 0,
+            estimatedTokens: 0,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       // Planning requires both the opt-in and a tool registry; in 'auto' mode
       // a cheap classifier decides per message whether planning is worth it.
       const planningEnabled = (recovery || this.enablePlanning !== false) && this.toolRegistry;
