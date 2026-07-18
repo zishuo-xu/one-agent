@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import type { Plan, PlanStep } from '../planning/types.js';
 import type { Sandbox } from '../tools/sandbox.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
@@ -202,11 +202,11 @@ export class EvidenceCompletionVerifier implements CompletionVerifier {
     };
   }
 
-  private collectToolExecutions(events: AgentLoopEvent[]): ToolExecution[] {
+  private collectToolExecutions(events: AgentEvent[]): ToolExecution[] {
     const executions: ToolExecution[] = [];
     const pending: ToolCall[] = [];
 
-    const visit = (event: AgentLoopEvent) => {
+    const visit = (event: AgentEvent) => {
       if (event.type === 'tool_call') {
         pending.push(event.toolCall);
       } else if (event.type === 'tool_result') {
@@ -246,7 +246,7 @@ export class EvidenceCompletionVerifier implements CompletionVerifier {
     return typeof command === 'string' && MUTATING_COMMAND_PATTERN.test(command);
   }
 
-  private latestPlan(events: AgentLoopEvent[]): Plan | undefined {
+  private latestPlan(events: AgentEvent[]): Plan | undefined {
     const plans = events.filter(
       (event): event is { type: 'plan'; plan: Plan } => event.type === 'plan',
     );

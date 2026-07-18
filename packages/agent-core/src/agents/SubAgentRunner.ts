@@ -2,7 +2,7 @@ import type { ModelProvider, TokenUsage } from '../model/types.js';
 import type { ToolCall } from '../tools/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { AgentLoop } from './AgentLoop.js';
-import type { AgentLoopEvent } from './AgentLoop.js';
+import type { AgentEvent } from './events.js';
 
 export interface SubAgentTask {
   /** What the sub-agent should accomplish. */
@@ -31,7 +31,7 @@ export interface SubAgentResult {
    * stripped). Persisted by the parent as part of the sub_agent trace event
    * so the sub-agent is no longer a black box. Partial on failure.
    */
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
 }
 
 export interface SubAgentRunnerOptions {
@@ -105,7 +105,7 @@ export class SubAgentRunner {
 
     // Collect via the emitter rather than chat()'s return value so a failed
     // run still yields the partial event stream up to the error.
-    const collected: AgentLoopEvent[] = [];
+    const collected: AgentEvent[] = [];
     subAgent.on('event', (event) => collected.push(event));
 
     try {
@@ -139,6 +139,6 @@ export class SubAgentRunner {
  * event already carries the full reply text, so delta chunks are pure noise
  * in a persisted trace.
  */
-function condenseEvents(events: AgentLoopEvent[]): AgentLoopEvent[] {
+function condenseEvents(events: AgentEvent[]): AgentEvent[] {
   return events.filter((e) => e.type !== 'message_delta' && e.type !== 'reasoning_delta');
 }

@@ -1,6 +1,5 @@
-import { ToolResult } from '../../tools/types.js';
-import type { AgentLoopEvent } from '../AgentLoop.js';
-import type { LoopInfrastructure, LoopRunInput, LoopStrategy } from './types.js';
+import type { LoopInfrastructure, LoopStrategy } from './types.js';
+import type { RunContext } from '../RunContext.js';
 import { safeParseArgs } from './utils.js';
 
 /**
@@ -12,23 +11,21 @@ export class SimpleLoop implements LoopStrategy {
   private readonly contextManager: LoopInfrastructure['contextManager'];
   private readonly modelCaller: LoopInfrastructure['modelCaller'];
   private readonly recorder: LoopInfrastructure['recorder'];
-  private readonly toolExecutor: LoopInfrastructure['toolExecutor'];
+  private readonly toolRunner: LoopInfrastructure['toolRunner'];
   private readonly maxToolIterations: number;
   private readonly checkSignal: () => void;
-  private readonly persistToolCall: LoopInfrastructure['persistToolCall'];
 
   constructor(infra: LoopInfrastructure) {
     this.contextManager = infra.contextManager;
     this.modelCaller = infra.modelCaller;
     this.recorder = infra.recorder;
-    this.toolExecutor = infra.toolExecutor;
+    this.toolRunner = infra.toolRunner;
     this.maxToolIterations = infra.maxToolIterations;
     this.checkSignal = infra.checkSignal;
-    this.persistToolCall = infra.persistToolCall;
   }
 
-  async run(input: LoopRunInput): Promise<{ reply: string }> {
-    const { runId } = input;
+  async run(context: RunContext): Promise<{ reply: string }> {
+    const { runId } = context;
     let toolIterations = 0;
 
     while (toolIterations <= this.maxToolIterations) {
@@ -55,41 +52,8 @@ export class SimpleLoop implements LoopStrategy {
         });
 
         for (const call of calls) {
-          this.recorder.record({ type: 'tool_call', toolCall: call, attempt: toolIterations });
-          const toolStartedAt = Date.now();
-
-          if (!this.toolExecutor) {
-            const result: ToolResult = {
-              success: false,
-              error: 'No tool executor available',
-            };
-            this.recorder.record({
-              type: 'tool_result', toolResult: result, toolCallId: call.id,
-              attempt: toolIterations, status: 'failed', durationMs: Date.now() - toolStartedAt,
-            });
-            this.contextManager.addMessage({
-              role: 'tool',
-              content: JSON.stringify(result),
-              tool_call_id: call.id,
-              internal: true,
-            });
-            this.persistToolCall(runId, call, result);
-            continue;
-          }
-
-          const result = await this.toolExecutor.execute(call);
-          this.recorder.record({
-            type: 'tool_result', toolResult: result, toolCallId: call.id,
-            attempt: toolIterations, status: result.success ? 'succeeded' : 'failed',
-            durationMs: Date.now() - toolStartedAt,
-          });
-          this.contextManager.addMessage({
-            role: 'tool',
-            content: JSON.stringify(result),
-            tool_call_id: call.id,
-            internal: true,
-          });
-          this.persistToolCall(runId, call, result);
+          this.toolRunner.recordCalls([call], { attempt: toolIterations });
+          await this.toolRunner.execute(call, { runId, attempt: toolIterations });
         }
 
         toolIterations++;

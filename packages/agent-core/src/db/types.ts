@@ -1,4 +1,4 @@
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { Message } from '../agents/types.js';
 import { ReasoningStep } from '../planning/types.js';
 import { TaskStatus } from '../tasks/types.js';
@@ -65,7 +65,7 @@ export interface TraceEvent {
   taskId: string | null;
   threadId: string | null;
   eventType: string;
-  eventData: AgentLoopEvent;
+  eventData: AgentEvent;
   model: string | null;
   sequence: number;
   createdAt: string;
@@ -77,7 +77,7 @@ export interface CreateTraceEventInput {
   taskId?: string;
   threadId?: string;
   eventType: string;
-  eventData: AgentLoopEvent;
+  eventData: AgentEvent;
   model?: string;
   sequence?: number;
   createdAt?: string;
@@ -109,7 +109,7 @@ export interface PersistedTask {
   error: string | null;
   retryCount: number;
   failedReason: string | null;
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
   createdAt: string;
   updatedAt: string;
 }
@@ -123,7 +123,7 @@ export interface CreateTaskPersistedInput {
   error?: string;
   retryCount?: number;
   failedReason?: string;
-  events?: AgentLoopEvent[];
+  events?: AgentEvent[];
 }
 
 export interface Memory {

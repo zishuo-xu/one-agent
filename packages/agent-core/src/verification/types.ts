@@ -1,4 +1,4 @@
-import type { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 
 export type CompletionStatus =
   | 'verified'
@@ -41,7 +41,7 @@ export type CompletionRequirement =
 export interface CompletionVerificationInput {
   request: string;
   reply: string;
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
 }
 
 export interface CompletionVerifier {

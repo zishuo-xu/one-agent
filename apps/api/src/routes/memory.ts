@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { MemoryStore, getSharedConnection } from '@one-agent/agent-core';
+import { AgentRuntime } from '@one-agent/agent-core';
 
 export interface CreateMemoryBody {
   key: string;
@@ -31,9 +31,11 @@ export interface UpdateMemoryBody {
   observedAt?: string;
 }
 
-export async function memoryRoutes(fastify: FastifyInstance): Promise<void> {
-  const db = getSharedConnection();
-  const memoryStore = new MemoryStore(db);
+export async function memoryRoutes(
+  fastify: FastifyInstance,
+  options: { runtime: AgentRuntime },
+): Promise<void> {
+  const memoryStore = options.runtime.stores.memories;
 
   fastify.post<{ Body: CreateMemoryBody }>('/api/memories', async (request, reply) => {
     const {

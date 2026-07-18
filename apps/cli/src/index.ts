@@ -5,17 +5,10 @@ import { createServer as createNetServer } from 'node:net';
 import { stdin, stdout } from 'node:process';
 import path from 'node:path';
 import {
-  AgentLoop,
+  AgentRuntime,
   config,
-  createBuiltInTools,
-  Sandbox,
-  ToolRegistry,
-  ThreadStore,
   RunStore,
-  MemoryStore,
-  MemoryConsolidator,
   MessageStore,
-  TraceEventStore,
   getSharedConnection,
 } from '@one-agent/agent-core';
 import { WORKSPACE_ROOT } from './load-env.js';
@@ -102,23 +95,6 @@ function validateApiKey(): boolean {
   console.error('');
   console.error('Run "one-agent --help" for more options.');
   return false;
-}
-
-function createAgent(
-  threadId: string | undefined,
-  memoryStore: MemoryStore,
-  enablePlanning: boolean | 'auto' = false
-) {
-  const sandbox = new Sandbox(WORKSPACE_ROOT);
-  const tools = new ToolRegistry();
-  tools.registerMany(createBuiltInTools(sandbox));
-
-  return new AgentLoop({
-    tools,
-    threadId,
-    memoryStore,
-    enablePlanning,
-  });
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -229,12 +205,13 @@ async function main() {
   }
 
   const db = getSharedConnection();
-  const threadStore = new ThreadStore(db);
-  const runStore = new RunStore(db);
-  const messageStore = new MessageStore(db);
-  const memoryStore = new MemoryStore(db);
-  const memoryConsolidator = new MemoryConsolidator(db, { memoryStore });
-  const traceEventStore = new TraceEventStore(db);
+  const runtime = new AgentRuntime({ workspaceRoot: WORKSPACE_ROOT, db });
+  const threadStore = runtime.stores.threads;
+  const runStore = runtime.stores.runs;
+  const messageStore = runtime.stores.messages;
+  const memoryStore = runtime.stores.memories;
+  const memoryConsolidator = runtime.memory;
+  const traceEventStore = runtime.stores.traces;
 
   let threadId: string;
   let title: string | null = null;
@@ -256,7 +233,7 @@ async function main() {
     return;
   }
 
-  let agent = createAgent(threadId, memoryStore, plan);
+  let agent = runtime.createAgent({ threadId, planning: plan });
   printRecoveryHint(runStore, threadId);
   void memoryConsolidator.recoverUnextracted();
 
@@ -561,7 +538,7 @@ async function main() {
       const leavingThreadId = threadId;
       threadId = existing.id;
       title = existing.title;
-      agent = createAgent(threadId, memoryStore, plan);
+      agent = runtime.createAgent({ threadId, planning: plan });
       void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       printRecoveryHint(runStore, threadId);

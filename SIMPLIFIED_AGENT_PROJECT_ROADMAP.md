@@ -159,25 +159,23 @@ memories 表保存全局事实
 ## 最终架构
 
 ```text
-CLI / REST API / Trace Viewer（只读）
-   ├─ HTTP：创建任务、查询历史
-   ├─ SSE：任务事件 + 流式文本
-   └─ Trace Viewer：读取运行事实，不触发执行或验证
-          ↓
-Fastify API
-   ├─ Task Routes
-   ├─ Task Queue
-   ├─ AgentLoop 门面
-   │    ├─ SimpleLoop（直接回答 / 工具循环）
-   │    └─ PlanningLoop（规划 / 工具 / Judge / 重规划）
-   ├─ Tool Registry
-   ├─ Context Manager（记忆 / 摘要）
-   ├─ Trace Store
-   ├─ Task Store
-   ├─ Memory Store
-   └─ Evaluation Runner
-          ↓
+CLI / REST API
+   ├─ REST API 附加：Task Routes / Task Queue / SSE
+   └─ AgentRuntime（workspace 级装配）
+          ├─ AgentLoop（Thread / Run 生命周期）
+          │    ├─ RunContext（单次请求状态）
+          │    ├─ SimpleLoop（直接回答 / 工具循环）
+          │    └─ PlanningLoop（规划 / Judge / 重试 / 重规划）
+          ├─ ToolRunner（统一工具执行、结果、上下文与持久化协议）
+          ├─ Tool Registry / Executor
+          ├─ Context Manager（记忆 / 摘要）
+          ├─ Trace / Task / Memory Store
+          └─ Evaluation Runner
+                  ↓
 SQLite：threads / messages / tool_calls / agent_runs / tasks / trace_events / memories
+
+Trace Viewer（只读） ───────────────→ SQLite
+（读取运行事实，不构造 AgentRuntime，不触发执行或验证）
 ```
 
 ## 已完成的核心开发顺序

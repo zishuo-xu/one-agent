@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { Task, TaskStatus, CreateTaskInput, TaskStore } from './types.js';
-import type { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { TaskStatusStore } from './TaskStatusStore.js';
 
 export interface TaskQueueOptions {
@@ -98,7 +98,7 @@ export class TaskQueue extends EventEmitter {
     this.tryDispatch();
   }
 
-  appendEvent(id: string, event: AgentLoopEvent): void {
+  appendEvent(id: string, event: AgentEvent): void {
     this.store.appendEvent(id, event);
     const task = this.store.get(id);
     if (task) {

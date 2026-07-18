@@ -1,5 +1,5 @@
 import { AgentLoop } from '../agents/AgentLoop.js';
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { TaskQueue } from './TaskQueue.js';
 import { Task } from './types.js';
 
@@ -87,7 +87,7 @@ export class QueueWorker {
       signal: controller.signal,
     });
 
-    const onAgentEvent = (event: AgentLoopEvent) => {
+    const onAgentEvent = (event: AgentEvent) => {
       this.queue.appendEvent(task.id, event);
     };
 

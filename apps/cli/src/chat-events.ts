@@ -1,4 +1,4 @@
-import type { AgentLoopEvent } from '@one-agent/agent-core';
+import type { AgentEvent } from '@one-agent/agent-core';
 import { sanitizeTerminalText } from './output.js';
 
 function formatToolResultSummary(toolResult: {
@@ -53,7 +53,7 @@ export interface ChatTimelineResult {
  * streamed content for end-of-turn formatting.
  */
 export function createChatEventHandler(timeline: ChatTimeline): {
-  handler: (event: AgentLoopEvent) => void;
+  handler: (event: AgentEvent) => void;
   result: ChatTimelineResult;
 } {
   const result: ChatTimelineResult = {
@@ -67,7 +67,7 @@ export function createChatEventHandler(timeline: ChatTimeline): {
   };
   let reasoningVisible = false;
 
-  const handler = (event: AgentLoopEvent) => {
+  const handler = (event: AgentEvent) => {
     if (event.type === 'plan') {
       timeline.progress.setLabel('Working');
       if (timeline.verbose) {

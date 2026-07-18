@@ -1,4 +1,4 @@
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'dead_letter';
 
@@ -11,7 +11,7 @@ export interface Task {
   error?: string;
   retryCount: number;
   failedReason?: string;
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
   createdAt: string;
   updatedAt: string;
 }
@@ -28,7 +28,7 @@ export interface TaskStore {
   getOrThrow(id: string): Task;
   update(id: string, updates: Partial<Omit<Task, 'id' | 'createdAt'>>): Task;
   setStatus(id: string, status: TaskStatus): Task;
-  appendEvent(id: string, event: AgentLoopEvent): Task;
+  appendEvent(id: string, event: AgentEvent): Task;
   listByThread(threadId: string): Task[];
   listByStatus(statuses: TaskStatus[]): Task[];
   list(): Task[];
@@ -37,7 +37,7 @@ export interface TaskStore {
 export interface TaskEvent {
   taskId: string;
   type: 'task' | 'agent';
-  data: TaskUpdate | AgentLoopEvent;
+  data: TaskUpdate | AgentEvent;
 }
 
 export interface TaskUpdate {

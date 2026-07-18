@@ -1,18 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import {
-  getSharedConnection,
-  RunStore,
-  SqliteTaskStore,
-  ThreadStore,
-  TraceEventStore,
+  AgentRuntime,
 } from '@one-agent/agent-core';
 
-export async function traceRoutes(fastify: FastifyInstance): Promise<void> {
-  const db = getSharedConnection();
-  const runStore = new RunStore(db);
-  const threadStore = new ThreadStore(db);
-  const taskStore = new SqliteTaskStore(db);
-  const traceEventStore = new TraceEventStore(db);
+export async function traceRoutes(
+  fastify: FastifyInstance,
+  options: { runtime: AgentRuntime },
+): Promise<void> {
+  const runStore = options.runtime.stores.runs;
+  const threadStore = options.runtime.stores.threads;
+  const taskStore = options.runtime.stores.tasks;
+  const traceEventStore = options.runtime.stores.traces;
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/traces', async (request, reply) => {
     const { id } = request.params;

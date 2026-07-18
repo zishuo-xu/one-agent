@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import type { TokenUsage } from '../model/types.js';
 import type { TraceEventStore } from '../db/traceEventStore.js';
-import type { AgentLoopEvent } from './AgentLoop.js';
+import type { AgentEvent } from './events.js';
 import { sanitizeTraceEvent } from './traceSanitizer.js';
 
 export interface TokenUsageTotals {
@@ -13,7 +13,7 @@ export interface TokenUsageTotals {
 export interface RunRecorderOptions {
   traceEventStore?: TraceEventStore;
   /** Forwarded to listeners (AgentLoop re-emits these as its own 'event'). */
-  onEvent?: (event: AgentLoopEvent) => void;
+  onEvent?: (event: AgentEvent) => void;
   /**
    * Callback for real prompt_tokens of the loop's own model calls, so the
    * context manager can anchor its "last real + delta estimate". Auxiliary
@@ -30,10 +30,10 @@ export interface RunRecorderOptions {
  */
 export class RunRecorder {
   private readonly traceEventStore?: TraceEventStore;
-  private readonly onEvent?: (event: AgentLoopEvent) => void;
+  private readonly onEvent?: (event: AgentEvent) => void;
   private readonly onContextTokens?: (promptTokens: number) => void;
 
-  private events: AgentLoopEvent[] = [];
+  private events: AgentEvent[] = [];
   private tokenUsage: TokenUsageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   /** Buffered streaming deltas awaiting one aggregated trace row per stream. */
   private readonly deltaTraceBuffers = new Map<string, { chunks: string[]; occurredAt: string }>();
@@ -74,7 +74,7 @@ export class RunRecorder {
     this.runId = undefined;
   }
 
-  record(event: AgentLoopEvent): void {
+  record(event: AgentEvent): void {
     this.events.push(event);
     this.onEvent?.(event);
 
@@ -108,7 +108,7 @@ export class RunRecorder {
     }
   }
 
-  getEvents(): AgentLoopEvent[] {
+  getEvents(): AgentEvent[] {
     return [...this.events];
   }
 
@@ -142,7 +142,7 @@ export class RunRecorder {
     for (const [type, buffer] of this.deltaTraceBuffers) {
       if (buffer.chunks.length > 0) {
         this.persistTraceEvent(
-          { type, content: buffer.chunks.join('') } as AgentLoopEvent,
+          { type, content: buffer.chunks.join('') } as AgentEvent,
           buffer.occurredAt,
         );
       }
@@ -150,7 +150,7 @@ export class RunRecorder {
     this.deltaTraceBuffers.clear();
   }
 
-  private persistTraceEvent(event: AgentLoopEvent, occurredAt = new Date().toISOString()): void {
+  private persistTraceEvent(event: AgentEvent, occurredAt = new Date().toISOString()): void {
     const sequence = this.sequence++;
     try {
       this.traceEventStore!.create({

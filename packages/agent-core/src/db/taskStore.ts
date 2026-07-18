@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { Task, TaskStatus, CreateTaskInput, TaskStore } from '../tasks/types.js';
-import type { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 
 interface TaskRow {
   id: string;
@@ -28,7 +28,7 @@ function rowToTask(row: TaskRow): Task {
     error: row.error ?? undefined,
     retryCount: row.retry_count,
     failedReason: row.failed_reason ?? undefined,
-    events: JSON.parse(row.events) as AgentLoopEvent[],
+    events: JSON.parse(row.events) as AgentEvent[],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -138,7 +138,7 @@ export class SqliteTaskStore implements TaskStore {
     return this.update(id, { status });
   }
 
-  appendEvent(id: string, event: AgentLoopEvent): Task {
+  appendEvent(id: string, event: AgentEvent): Task {
     const task = this.getOrThrow(id);
     const events = [...task.events, event];
     return this.update(id, { events });

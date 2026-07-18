@@ -11,21 +11,21 @@ import { PersistenceContextManager } from '../context/PersistenceContextManager.
 import { estimateTokens } from '../context/tokenEstimate.js';
 import { Planner } from '../planning/Planner.js';
 import { ReasoningChain } from '../planning/ReasoningChain.js';
-import type { Plan, PlanStep } from '../planning/types.js';
+import type { Plan } from '../planning/types.js';
 import { TaskJudge } from '../planning/TaskJudge.js';
 import { getSharedConnection } from '../db/connection.js';
 import { RunStore } from '../db/runStore.js';
-import { ThreadStore } from '../db/threadStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryStore } from '../db/memoryStore.js';
 import { CreateToolCallInput, Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
+import type { ModelProvider, TokenUsage } from '../model/types.js';
 import { SubAgentRunner } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
 import { ModelCaller } from './ModelCaller.js';
 import { RunRecorder } from './RunRecorder.js';
+import { ToolRunner } from './ToolRunner.js';
 import { SimpleLoop } from './loops/SimpleLoop.js';
 import { PlanningLoop } from './loops/PlanningLoop.js';
 import type { LoopInfrastructure, LoopStrategy } from './loops/types.js';
@@ -33,6 +33,10 @@ import {
   assessCheckpointRecovery,
   type RunCheckpoint,
 } from './checkpoint.js';
+import type { AgentEvent } from './events.js';
+import type { AgentRunResult, RunContext } from './RunContext.js';
+
+export type { AgentLoopEvent } from './events.js';
 
 export interface AgentLoopOptions {
   systemPrompt?: string;
@@ -52,7 +56,6 @@ export interface AgentLoopOptions {
   db?: Database.Database;
   runStore?: RunStore;
   toolCallStore?: ToolCallStore;
-  threadStore?: ThreadStore;
   traceEventStore?: TraceEventStore;
   memoryStore?: MemoryStore;
   maxContextTokens?: number;
@@ -65,85 +68,6 @@ export interface AgentLoopOptions {
   /** Maximum delegation depth before spawn_agent is withheld (default 1). */
   maxSubAgentDepth?: number;
 }
-
-export type AgentLoopEvent =
-  | {
-      type: 'run';
-      phase: 'started' | 'completed' | 'failed' | 'cancelled';
-      loopMode?: 'simple' | 'planning' | 'auto';
-      model?: string;
-      provider?: string;
-      enabledTools?: string[];
-      resumedFromRunId?: string;
-      durationMs?: number;
-      error?: string;
-    }
-  | ModelCallTraceEvent
-  | { type: 'plan'; plan: Plan }
-  | {
-      type: 'plan_step';
-      stepId: string;
-      parentStepId?: string;
-      status: 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
-      attempt?: number;
-      failureAnalysis?: import('../planning/types.js').FailureAnalysis;
-    }
-  | { type: 'thought'; content: string }
-  | { type: 'reflection'; content: string }
-  | { type: 'tool_call'; toolCall: ToolCall; stepId?: string; attempt?: number }
-  | {
-      type: 'tool_result';
-      toolResult: ToolResult;
-      toolCallId?: string;
-      stepId?: string;
-      attempt?: number;
-      status?: 'succeeded' | 'failed' | 'rejected' | 'skipped';
-      durationMs?: number;
-    }
-  | { type: 'reasoning_delta'; content: string }
-  | { type: 'message_delta'; content: string }
-  | {
-      type: 'sub_agent';
-      task: string;
-      status: 'started' | 'completed' | 'failed';
-      stepId?: string;
-      reply?: string;
-      error?: string;
-      toolCallCount?: number;
-      durationMs?: number;
-      tokenUsage?: TokenUsage;
-      /** Condensed internal event stream of the sub-agent (terminal events only). */
-      events?: AgentLoopEvent[];
-    }
-  | {
-      type: 'memory_consolidation';
-      phase: 'started' | 'completed' | 'failed';
-      messageCount?: number;
-      candidateCount?: number;
-      writtenCount?: number;
-      rejectedCount?: number;
-      markedExtracted?: boolean;
-      durationMs?: number;
-      error?: string;
-    }
-  | {
-      type: 'memory_recall';
-      keywords: string[];
-      skipReason?: 'no_keywords' | 'limit_zero';
-      candidateCount: number;
-      selectedCount: number;
-      candidates: import('../db/memoryStore.js').MemoryRecallCandidate[];
-      injectedMemoryIds: string[];
-      injectedCharacters: number;
-      estimatedTokens: number;
-      error?: string;
-    }
-  | { type: 'message'; content: string };
-
-/** Tools available to parallel sub-agents: read-only, so waves cannot conflict. */
-const READ_ONLY_DELEGATION_TOOLS = ['read_file', 'list_files', 'search_files', 'web_search', 'get_time'];
-
-type ExecutionUnit = { type: 'single'; step: PlanStep } | { type: 'wave'; steps: PlanStep[] };
 
 export class AgentLoop extends EventEmitter {
   private readonly systemPrompt: string;
@@ -167,15 +91,13 @@ export class AgentLoop extends EventEmitter {
   private readonly recorder: RunRecorder;
   private readonly runStore?: RunStore;
   private readonly toolCallStore?: ToolCallStore;
-  private readonly threadStore?: ThreadStore;
   private readonly traceEventStore?: TraceEventStore;
   private readonly memoryStore?: MemoryStore;
   private signal?: AbortSignal;
   private readonly taskId?: string;
-  private currentMemoryText?: string;
   private readonly simpleLoop: SimpleLoop;
   private readonly planningLoop: PlanningLoop;
-  private reasoningChain: ReasoningChain;
+  private lastReasoningChain: ReasoningChain;
 
   constructor(options: AgentLoopOptions = {}) {
     super();
@@ -267,7 +189,7 @@ export class AgentLoop extends EventEmitter {
       this.recorder.accumulateUsage(usage, { trackPromptSize: false });
     this.planner.onUsage = trackAuxUsage;
     this.taskJudge.onUsage = trackAuxUsage;
-    this.reasoningChain = new ReasoningChain();
+    this.lastReasoningChain = new ReasoningChain();
 
     // The single entry point for this loop's own model calls: streaming and
     // non-streaming completions, retry policy, usage feedback, live deltas.
@@ -289,14 +211,13 @@ export class AgentLoop extends EventEmitter {
       const db = options.db ?? getSharedConnection();
       this.runStore = options.runStore ?? new RunStore(db);
       this.toolCallStore = options.toolCallStore ?? new ToolCallStore(db);
-      this.threadStore = options.threadStore ?? new ThreadStore(db);
       this.traceEventStore = options.traceEventStore ?? new TraceEventStore(db);
     }
 
     // Constructed after the persistence stores so trace persistence is wired.
     this.recorder = new RunRecorder({
       traceEventStore: this.traceEventStore,
-      onEvent: (event) => this.emit('event', event),
+      onEvent: (event: AgentEvent) => this.emit('event', event),
       onContextTokens: (promptTokens) => this.contextManager.updateLastKnownTokens(promptTokens),
     });
     this.planner.onTrace = (event) => this.recorder.record(event);
@@ -311,7 +232,13 @@ export class AgentLoop extends EventEmitter {
       modelCaller: this.modelCaller,
       recorder: this.recorder,
       toolRegistry: this.toolRegistry,
-      toolExecutor: this.toolExecutor,
+      toolRunner: new ToolRunner({
+        executor: this.toolExecutor,
+        contextManager: this.contextManager,
+        recorder: this.recorder,
+        checkSignal: () => this.checkSignal(),
+        persist: (runId, toolCall, result) => this.persistToolCall(runId, toolCall, result),
+      }),
       planner: this.planner,
       taskJudge: this.taskJudge,
       subAgentRunner: this.subAgentRunner,
@@ -319,18 +246,17 @@ export class AgentLoop extends EventEmitter {
       maxReplanAttempts: this.maxReplanAttempts,
       maxRetryAttempts: this.maxRetryAttempts,
       checkSignal: () => this.checkSignal(),
-      persistToolCall: (runId, toolCall, result) => this.persistToolCall(runId, toolCall, result),
       saveCheckpoint: (runId, checkpoint) => this.saveCheckpoint(runId, checkpoint),
     };
     this.simpleLoop = new SimpleLoop(infra);
     this.planningLoop = new PlanningLoop(infra);
   }
 
-  async chat(message: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+  async chat(message: string, signal?: AbortSignal): Promise<AgentRunResult> {
     return this.execute(message, signal);
   }
 
-  async resumeRun(runId: string, signal?: AbortSignal): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+  async resumeRun(runId: string, signal?: AbortSignal): Promise<AgentRunResult> {
     if (!this.runStore || !this.threadId) {
       throw new Error('Run recovery requires a persisted thread and RunStore.');
     }
@@ -395,7 +321,7 @@ export class AgentLoop extends EventEmitter {
     message: string,
     signal?: AbortSignal,
     recovery?: { checkpoint: RunCheckpoint; resumedFromRunId: string; addUserMessage: false },
-  ): Promise<{ reply: string; events: AgentLoopEvent[]; runId?: string; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+  ): Promise<AgentRunResult> {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
     this.checkSignal();
@@ -403,7 +329,8 @@ export class AgentLoop extends EventEmitter {
       this.contextManager.addMessage({ role: 'user', content: message });
     }
     this.recorder.reset();
-    this.reasoningChain = new ReasoningChain();
+    const reasoning = new ReasoningChain();
+    this.lastReasoningChain = reasoning;
 
     let runId: string | undefined;
     if (this.threadId && this.runStore) {
@@ -430,21 +357,21 @@ export class AgentLoop extends EventEmitter {
     try {
       // Recall after run correlation is established so the complete decision,
       // including an empty result, is inspectable in this run's Trace.
-      this.currentMemoryText = undefined;
+      let memoryText: string | undefined;
       this.contextManager.clearMemoryContext();
       if (this.memoryStore) {
         try {
           const recall = this.memoryStore.recallRelevantMemories(message, { threadId: this.threadId });
           if (recall.memories.length > 0) {
-            this.currentMemoryText = this.formatMemories(recall.memories);
-            this.contextManager.setMemoryContext(this.currentMemoryText);
+            memoryText = this.formatMemories(recall.memories);
+            this.contextManager.setMemoryContext(memoryText);
           }
           this.recorder.record({
             type: 'memory_recall',
             ...recall.report,
             injectedMemoryIds: recall.memories.map((memory) => memory.id),
-            injectedCharacters: this.currentMemoryText?.length ?? 0,
-            estimatedTokens: estimateTokens(this.currentMemoryText ?? ''),
+            injectedCharacters: memoryText?.length ?? 0,
+            estimatedTokens: estimateTokens(memoryText ?? ''),
           });
         } catch (error) {
           // Memory is optional context. A retrieval/storage failure is visible
@@ -470,14 +397,19 @@ export class AgentLoop extends EventEmitter {
         planningEnabled && (recovery || await this.resolvePlanningMode(message))
           ? this.planningLoop
           : this.simpleLoop;
-      const result = await loop.run({
+      const runContext: RunContext = {
         message,
         runId,
-        memories: this.currentMemoryText,
-        reasoningChain: this.reasoningChain,
-        resumeCheckpoint: recovery?.checkpoint,
-        resumedFromRunId: recovery?.resumedFromRunId,
-      });
+        taskId: this.taskId,
+        threadId: this.threadId,
+        signal: this.signal,
+        memoryText,
+        reasoning,
+        recovery: recovery
+          ? { checkpoint: recovery.checkpoint, resumedFromRunId: recovery.resumedFromRunId }
+          : undefined,
+      };
+      const result = await loop.run(runContext);
       const usage = this.recorder.getUsage();
       this.recorder.record({
         type: 'run',
@@ -502,7 +434,6 @@ export class AgentLoop extends EventEmitter {
       // Flush any buffered streaming deltas as one aggregated trace row per
       // stream, and clear run correlation.
       this.recorder.endRun();
-      this.currentMemoryText = undefined;
     }
   }
 
@@ -538,10 +469,10 @@ export class AgentLoop extends EventEmitter {
   }
 
   getReasoningChain(): ReasoningChain {
-    return this.reasoningChain;
+    return this.lastReasoningChain;
   }
 
-  getEvents(): AgentLoopEvent[] {
+  getEvents(): AgentEvent[] {
     return this.recorder.getEvents();
   }
 
@@ -624,7 +555,7 @@ export class AgentLoop extends EventEmitter {
     this.runStore.update(runId, {
       status: 'completed',
       endTime: new Date().toISOString(),
-      reasoningChain: this.reasoningChain.getSteps(),
+      reasoningChain: this.lastReasoningChain.getSteps(),
       traceStatus: trace.status,
       droppedTraceEvents: trace.droppedEventCount,
       traceError: trace.error,
@@ -638,7 +569,7 @@ export class AgentLoop extends EventEmitter {
       status: this.signal?.aborted ? 'cancelled' : 'failed',
       endTime: new Date().toISOString(),
       error,
-      reasoningChain: this.reasoningChain.getSteps(),
+      reasoningChain: this.lastReasoningChain.getSteps(),
       traceStatus: trace.status,
       droppedTraceEvents: trace.droppedEventCount,
       traceError: trace.error,

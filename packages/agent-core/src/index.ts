@@ -1,7 +1,14 @@
 export { config } from './config.js';
 export type { Config } from './config.js';
 export { AgentLoop } from './agents/AgentLoop.js';
-export type { AgentLoopOptions, AgentLoopEvent } from './agents/AgentLoop.js';
+export type { AgentLoopOptions } from './agents/AgentLoop.js';
+export type { AgentEvent, AgentLoopEvent } from './agents/events.js';
+export type { AgentRunResult, RunContext } from './agents/RunContext.js';
+export { AgentRuntime } from './runtime/AgentRuntime.js';
+export type {
+  AgentRuntimeOptions,
+  CreateRuntimeAgentOptions,
+} from './runtime/AgentRuntime.js';
 export { SubAgentRunner } from './agents/SubAgentRunner.js';
 export type { SubAgentTask, SubAgentResult, SubAgentRunnerOptions } from './agents/SubAgentRunner.js';
 export { createSpawnAgentTool } from './agents/spawnAgentTool.js';

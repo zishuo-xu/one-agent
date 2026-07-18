@@ -847,7 +847,7 @@ function renderViewerPage(): string {
     }
 
     // Render the embedded internal event stream of a sub_agent event as nested
-    // cards (raw AgentLoopEvent objects, wrapped for summarizeEvent reuse).
+    // cards (raw AgentEvent objects, wrapped for summarizeEvent reuse).
     function renderSubAgentChildren(e) {
       if (e.eventType !== 'sub_agent') return '';
       const children = e.eventData?.events;

@@ -1,4 +1,4 @@
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { ToolCall } from '../tools/types.js';
 import type { CompletionOutcome } from '../verification/types.js';
 
@@ -100,7 +100,7 @@ export interface EvalResult {
   taskId: string;
   passed: boolean;
   reply: string;
-  events: AgentLoopEvent[];
+  events: AgentEvent[];
   toolCalls: ToolCall[];
   errors: string[];
   durationMs: number;

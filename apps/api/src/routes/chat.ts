@@ -1,29 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import {
-  AgentLoop,
+  AgentRuntime,
   config,
-  ContextManager,
-  createBuiltInTools,
-  Sandbox,
-  ToolRegistry,
-  ThreadStore,
-  MessageStore,
-  RunStore,
-  ToolCallStore,
-  MemoryStore,
-  MemoryConsolidator,
-  getSharedConnection,
 } from '@one-agent/agent-core';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const WORKSPACE_ROOT = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../../workspace'
-);
-
-process.env.DATABASE_PATH =
-  process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db');
 
 export interface ChatBody {
   message: string;
@@ -43,19 +22,16 @@ function truncateTitle(text: string, maxLength = 50): string {
   return `${clean.slice(0, maxLength)}...`;
 }
 
-export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
-  const sandbox = new Sandbox(WORKSPACE_ROOT);
-  const tools = new ToolRegistry();
-  tools.registerMany(createBuiltInTools(sandbox));
-
-  const db = getSharedConnection();
-  const threadStore = new ThreadStore(db);
-  const messageStore = new MessageStore(db);
-  const runStore = new RunStore(db);
-  const toolCallStore = new ToolCallStore(db);
-  const memoryStore = new MemoryStore(db);
-  const memoryConsolidator = new MemoryConsolidator(db, { memoryStore });
-  void memoryConsolidator.recoverUnextracted();
+export async function chatRoutes(
+  fastify: FastifyInstance,
+  options: { runtime: AgentRuntime },
+): Promise<void> {
+  const { runtime } = options;
+  const threadStore = runtime.stores.threads;
+  const messageStore = runtime.stores.messages;
+  const runStore = runtime.stores.runs;
+  const toolCallStore = runtime.stores.toolCalls;
+  void runtime.memory.recoverUnextracted();
 
   fastify.post<{ Body: ChatBody; Reply: ChatReply }>('/api/chat', async (request, reply) => {
     const { message, threadId: bodyThreadId } = request.body;
@@ -77,11 +53,7 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         threadId = thread.id;
       }
 
-      const agent = new AgentLoop({
-        tools,
-        threadId,
-        memoryStore,
-      });
+      const agent = runtime.createAgent({ threadId });
       const { reply: response, events } = await agent.chat(message);
       return { reply: response, events, threadId };
     } catch (error) {

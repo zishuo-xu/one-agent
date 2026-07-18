@@ -1,28 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import {
-  AgentLoop,
-  config,
-  createBuiltInTools,
-  Sandbox,
+  AgentRuntime,
   TaskQueue,
   QueueWorker,
-  SqliteTaskStore,
-  ToolRegistry,
-  ThreadStore,
-  MemoryStore,
-  getSharedConnection,
 } from '@one-agent/agent-core';
 import type { TaskStatus } from '@one-agent/agent-core';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const WORKSPACE_ROOT = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../../workspace'
-);
-
-process.env.DATABASE_PATH =
-  process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db');
 
 export interface CreateTaskBody {
   message: string;
@@ -30,27 +12,23 @@ export interface CreateTaskBody {
   idempotencyKey?: string;
 }
 
-export async function taskRoutes(fastify: FastifyInstance): Promise<void> {
-  const db = getSharedConnection();
-  const taskStore = new SqliteTaskStore(db);
+export async function taskRoutes(
+  fastify: FastifyInstance,
+  options: { runtime: AgentRuntime },
+): Promise<void> {
+  const { runtime } = options;
+  const taskStore = runtime.stores.tasks;
   const taskQueue = new TaskQueue({
     store: taskStore,
     maxConcurrency: 2,
     maxRetries: Number(process.env.TASK_MAX_RETRIES ?? 3),
     retryDelayMs: Number(process.env.TASK_RETRY_DELAY_MS ?? 1000),
   });
-  const memoryStore = new MemoryStore(db);
-
   function createAgent(options: { threadId?: string; taskId?: string; signal?: AbortSignal }) {
-    const sandbox = new Sandbox(WORKSPACE_ROOT);
-    const tools = new ToolRegistry();
-    tools.registerMany(createBuiltInTools(sandbox));
-    return new AgentLoop({
-      tools,
+    return runtime.createAgent({
       threadId: options.threadId,
       taskId: options.taskId,
       signal: options.signal,
-      memoryStore,
     });
   }
 

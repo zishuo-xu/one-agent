@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { AgentLoop } from '../agents/AgentLoop.js';
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { Sandbox } from '../tools/sandbox.js';
 import { createBuiltInTools } from '../tools/built-in/index.js';
@@ -100,7 +100,7 @@ export class EvalRunner {
     const results = await mapWithConcurrency(options.tasks, concurrency, async (task) => {
       const start = Date.now();
       const errors: string[] = [];
-      const events: AgentLoopEvent[] = [];
+      const events: AgentEvent[] = [];
       let reply = '';
       let completionOutcome: EvalResult['completionOutcome'];
 
@@ -154,7 +154,7 @@ export class EvalRunner {
         requirements: buildCompletionRequirements(task),
       });
 
-      agent.on('event', (event: AgentLoopEvent) => {
+      agent.on('event', (event: AgentEvent) => {
         events.push(event);
       });
 

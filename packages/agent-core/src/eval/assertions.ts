@@ -1,8 +1,8 @@
-import { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 import { ToolCall } from '../tools/types.js';
 import { Plan } from '../planning/types.js';
 
-export function extractToolCalls(events: AgentLoopEvent[]): ToolCall[] {
+export function extractToolCalls(events: AgentEvent[]): ToolCall[] {
   return events
     .filter((e): e is { type: 'tool_call'; toolCall: ToolCall } => e.type === 'tool_call')
     .map((e) => e.toolCall);
@@ -105,7 +105,7 @@ export function assertToolEventuallyCalled(
   return undefined;
 }
 
-export function assertEventType(events: AgentLoopEvent[], type: AgentLoopEvent['type']): string | undefined {
+export function assertEventType(events: AgentEvent[], type: AgentEvent['type']): string | undefined {
   if (!events.some((e) => e.type === type)) {
     return `Expected event of type ${type}, but none found`;
   }
@@ -113,7 +113,7 @@ export function assertEventType(events: AgentLoopEvent[], type: AgentLoopEvent['
 }
 
 export function assertPlanEventContains(
-  events: AgentLoopEvent[],
+  events: AgentEvent[],
   phrases: string[]
 ): string | undefined {
   if (phrases.length === 0) return undefined;

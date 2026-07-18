@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Task, TaskStatus, CreateTaskInput, TaskStore } from './types.js';
-import type { AgentLoopEvent } from '../agents/AgentLoop.js';
+import type { AgentEvent } from '../agents/events.js';
 
 function deriveTaskId(idempotencyKey: string): string {
   return crypto.createHash('sha256').update(idempotencyKey).digest('hex');
@@ -61,7 +61,7 @@ export class TaskStatusStore implements TaskStore {
     return this.update(id, { status });
   }
 
-  appendEvent(id: string, event: AgentLoopEvent): Task {
+  appendEvent(id: string, event: AgentEvent): Task {
     const task = this.getOrThrow(id);
     task.events.push(event);
     task.updatedAt = new Date().toISOString();

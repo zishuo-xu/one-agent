@@ -1,21 +1,27 @@
 import { ToolCall, ToolResult } from '../../tools/types.js';
 import type { ModelToolCall } from '../../model/types.js';
-import type { AgentLoopEvent } from '../AgentLoop.js';
 import { Plan, PlanStep, FailureAnalysis } from '../../planning/types.js';
-import { ReasoningChain } from '../../planning/ReasoningChain.js';
 import type { SubAgentTask, SubAgentResult } from '../SubAgentRunner.js';
-import type { LoopInfrastructure, LoopRunInput, LoopStrategy } from './types.js';
+import type { LoopInfrastructure, LoopStrategy } from './types.js';
+import type { RunContext } from '../RunContext.js';
 import { safeParseArgs } from './utils.js';
 import {
   recoveryPolicyForTool,
   type ActiveToolCheckpoint,
   type RunCheckpoint,
 } from '../checkpoint.js';
+import {
+  allPlanStepsCompleted,
+  buildExecutionUnits,
+  findPlanStep,
+  flattenPlanPostOrder,
+  READ_ONLY_DELEGATION_TOOLS,
+} from './planExecution.js';
 
-/** Tools available to parallel sub-agents: read-only, so waves cannot conflict. */
-const READ_ONLY_DELEGATION_TOOLS = ['read_file', 'list_files', 'search_files', 'web_search', 'get_time'];
-
-type ExecutionUnit = { type: 'single'; step: PlanStep } | { type: 'wave'; steps: PlanStep[] };
+interface PlanningRunState {
+  context: RunContext;
+  checkpoint: RunCheckpoint & { runId?: string };
+}
 
 /**
  * The planning loop: plan -> execute steps/waves -> judge -> retry/replan ->
@@ -27,99 +33,94 @@ export class PlanningLoop implements LoopStrategy {
   private readonly modelCaller: LoopInfrastructure['modelCaller'];
   private readonly recorder: LoopInfrastructure['recorder'];
   private readonly toolRegistry: LoopInfrastructure['toolRegistry'];
-  private readonly toolExecutor: LoopInfrastructure['toolExecutor'];
+  private readonly toolRunner: LoopInfrastructure['toolRunner'];
   private readonly planner: LoopInfrastructure['planner'];
   private readonly taskJudge: LoopInfrastructure['taskJudge'];
   private readonly subAgentRunner: LoopInfrastructure['subAgentRunner'];
   private readonly maxReplanAttempts: number;
   private readonly maxRetryAttempts: number;
   private readonly checkSignal: () => void;
-  private readonly persistToolCall: LoopInfrastructure['persistToolCall'];
   private readonly persistCheckpoint: LoopInfrastructure['saveCheckpoint'];
-  private reasoningChain!: ReasoningChain;
-  private memories?: string;
-  private checkpointState?: RunCheckpoint & { runId?: string };
-
   constructor(infra: LoopInfrastructure) {
     this.contextManager = infra.contextManager;
     this.modelCaller = infra.modelCaller;
     this.recorder = infra.recorder;
     this.toolRegistry = infra.toolRegistry;
-    this.toolExecutor = infra.toolExecutor;
+    this.toolRunner = infra.toolRunner;
     this.planner = infra.planner;
     this.taskJudge = infra.taskJudge;
     this.subAgentRunner = infra.subAgentRunner;
     this.maxReplanAttempts = infra.maxReplanAttempts;
     this.maxRetryAttempts = infra.maxRetryAttempts;
     this.checkSignal = infra.checkSignal;
-    this.persistToolCall = infra.persistToolCall;
     this.persistCheckpoint = infra.saveCheckpoint;
   }
 
-  async run(input: LoopRunInput): Promise<{ reply: string }> {
-    const { message: userMessage, runId, memories } = input;
-    this.reasoningChain = input.reasoningChain;
-    this.memories = memories;
-    let plan = input.resumeCheckpoint
-      ? JSON.parse(JSON.stringify(input.resumeCheckpoint.plan)) as Plan
-      : await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memories);
-    let currentUnitIndex = input.resumeCheckpoint?.currentUnitIndex ?? 0;
-    let replanAttempts = input.resumeCheckpoint?.replanAttempts ?? 0;
-    let retryAttempts = input.resumeCheckpoint?.retryAttempts ?? 0;
-    const recoveryCount = input.resumeCheckpoint
-      ? input.resumeCheckpoint.recoveryCount + 1
+  async run(context: RunContext): Promise<{ reply: string }> {
+    const { message: userMessage, runId, memoryText } = context;
+    let plan = context.recovery
+      ? JSON.parse(JSON.stringify(context.recovery.checkpoint.plan)) as Plan
+      : await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memoryText);
+    let currentUnitIndex = context.recovery?.checkpoint.currentUnitIndex ?? 0;
+    let replanAttempts = context.recovery?.checkpoint.replanAttempts ?? 0;
+    let retryAttempts = context.recovery?.checkpoint.retryAttempts ?? 0;
+    const recoveryCount = context.recovery
+      ? context.recovery.checkpoint.recoveryCount + 1
       : 0;
 
     // A read-only tool that was interrupted can be regenerated safely. The
     // preflight in AgentLoop rejects every other active-tool policy.
-    if (input.resumeCheckpoint?.activeToolCall) {
-      const interruptedStep = this.findStep(plan.steps, input.resumeCheckpoint.activeToolCall.stepId);
+    if (context.recovery?.checkpoint.activeToolCall) {
+      const interruptedStep = findPlanStep(plan.steps, context.recovery.checkpoint.activeToolCall.stepId);
       if (interruptedStep) interruptedStep.status = 'pending';
     }
 
-    this.checkpointState = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      originalMessage: userMessage,
-      loopMode: 'planning',
-      plan,
-      currentUnitIndex,
-      replanAttempts,
-      retryAttempts,
-      recoveryCount,
-      resumedFromRunId: input.resumedFromRunId,
-      runId,
+    const state: PlanningRunState = {
+      context,
+      checkpoint: {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        originalMessage: userMessage,
+        loopMode: 'planning',
+        plan,
+        currentUnitIndex,
+        replanAttempts,
+        retryAttempts,
+        recoveryCount,
+        resumedFromRunId: context.recovery?.resumedFromRunId,
+        runId,
+      },
     };
     this.recordPlan(plan);
-    this.saveCheckpoint();
+    this.saveCheckpoint(state);
 
     // Execution units: single steps run in the main agent; consecutive
     // delegate+parallel steps are grouped into waves that run concurrently
     // in isolated sub-agents.
-    let units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+    let units = buildExecutionUnits(flattenPlanPostOrder(plan));
     while (true) {
       this.checkSignal();
-      this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+      this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
       const unit = units[currentUnitIndex];
 
       if (!unit) {
         // All steps completed mechanically: finalize without spending a
         // full-history judge call. The judge is still consulted for any
         // incomplete/failed end state.
-        if (this.allStepsCompleted(plan.steps)) {
+        if (allPlanStepsCompleted(plan.steps)) {
           return this.finalizeAnswer();
         }
-        const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+        const judge = await this.taskJudge.judge(plan, context.reasoning.getSteps());
         if (judge.complete || judge.nextAction === 'finalize') {
           return this.finalizeAnswer();
         }
         if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
-          plan = await this.replan(userMessage, plan, judge.failureAnalysis);
-          units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+          plan = await this.replan(state, userMessage, plan, judge.failureAnalysis);
+          units = buildExecutionUnits(flattenPlanPostOrder(plan));
           replanAttempts++;
           currentUnitIndex = 0;
           retryAttempts = 0;
-          this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+          this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
           continue;
         }
         return this.finalizeAnswer();
@@ -133,25 +134,25 @@ export class PlanningLoop implements LoopStrategy {
         if (step.children && step.children.length > 0) {
           const anyChildFailed = step.children.some((child) => child.status === 'failed');
           if (anyChildFailed) {
-            this.setStepStatus(step, 'failed');
+            this.setStepStatus(state, step, 'failed');
             const failureAnalysis: FailureAnalysis = {
               category: 'tool_failure',
               affectedStepIds: [step.id, ...step.children.filter((c) => c.status === 'failed').map((c) => c.id)],
               rootCause: 'One or more sub-steps failed.',
               recommendation: 'Replan the affected sub-steps or provide a fallback.',
             };
-            this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
-            const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+            context.reasoning.addFailureAnalysis(failureAnalysis, step.id);
+            const judge = await this.taskJudge.judge(plan, context.reasoning.getSteps());
             if (judge.complete || judge.nextAction === 'finalize') {
               return this.finalizeAnswer();
             }
             if (judge.nextAction === 'replan' && replanAttempts < this.maxReplanAttempts) {
-              plan = await this.replan(userMessage, plan, judge.failureAnalysis ?? failureAnalysis);
-              units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+              plan = await this.replan(state, userMessage, plan, judge.failureAnalysis ?? failureAnalysis);
+              units = buildExecutionUnits(flattenPlanPostOrder(plan));
               replanAttempts++;
               currentUnitIndex = 0;
               retryAttempts = 0;
-              this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+              this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
               continue;
             }
             return this.finalizeAnswer();
@@ -162,26 +163,26 @@ export class PlanningLoop implements LoopStrategy {
         // none failed, so executing the parent as a regular step would just
         // duplicate their work. Complete it and move on.
         if (step.children && step.children.length > 0) {
-          this.setStepStatus(step, 'completed');
+          this.setStepStatus(state, step, 'completed');
           retryAttempts = 0;
           currentUnitIndex++;
-          this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+          this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
           continue;
         }
 
-        this.setStepStatus(step, 'running');
+        this.setStepStatus(state, step, 'running');
         executionResult = step.delegate
-          ? await this.executeSingleDelegatedStep(step, plan)
-          : await this.executeStep(step, plan, runId);
+          ? await this.executeSingleDelegatedStep(state, step, plan)
+          : await this.executeStep(state, step, plan, runId);
       } else {
         // On wave retries, completed steps keep their status and are NOT
         // re-executed — only failed/pending steps run again.
         for (const step of unit.steps) {
           if (step.status !== 'completed') {
-            this.setStepStatus(step, 'running');
+            this.setStepStatus(state, step, 'running');
           }
         }
-        executionResult = await this.executeWave(unit.steps, plan);
+        executionResult = await this.executeWave(state, unit.steps, plan);
       }
 
       if (executionResult.next === 'final') {
@@ -189,12 +190,12 @@ export class PlanningLoop implements LoopStrategy {
       }
 
       if (executionResult.next === 'replan' && replanAttempts < this.maxReplanAttempts) {
-        plan = await this.replan(userMessage, plan, executionResult.failureAnalysis);
-        units = this.buildExecutionUnits(this.flattenPlanPostOrder(plan));
+        plan = await this.replan(state, userMessage, plan, executionResult.failureAnalysis);
+        units = buildExecutionUnits(flattenPlanPostOrder(plan));
         replanAttempts++;
         currentUnitIndex = 0;
         retryAttempts = 0;
-        this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+        this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
         continue;
       }
 
@@ -204,7 +205,7 @@ export class PlanningLoop implements LoopStrategy {
             type: 'plan_step', stepId: unit.step.id, parentStepId: unit.step.parentId,
             status: 'retrying', attempt: retryAttempts + 1,
           });
-          this.setStepStatus(unit.step, 'pending', retryAttempts + 1);
+          this.setStepStatus(state, unit.step, 'pending', retryAttempts + 1);
         } else {
           for (const step of unit.steps) {
             if (step.status === 'failed') {
@@ -212,12 +213,12 @@ export class PlanningLoop implements LoopStrategy {
                 type: 'plan_step', stepId: step.id, parentStepId: step.parentId,
                 status: 'retrying', attempt: retryAttempts + 1,
               });
-              this.setStepStatus(step, 'pending', retryAttempts + 1);
+              this.setStepStatus(state, step, 'pending', retryAttempts + 1);
             }
           }
         }
         retryAttempts++;
-        this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+        this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
         continue;
       }
 
@@ -235,54 +236,12 @@ export class PlanningLoop implements LoopStrategy {
       }
 
       if (unit.type === 'single') {
-        this.setStepStatus(unit.step, 'completed');
+        this.setStepStatus(state, unit.step, 'completed');
       }
       retryAttempts = 0;
       currentUnitIndex++;
-      this.updateCheckpointProgress(currentUnitIndex, replanAttempts, retryAttempts, plan);
+      this.updateCheckpointProgress(state, currentUnitIndex, replanAttempts, retryAttempts, plan);
     }
-  }
-
-  private flattenPlanPostOrder(plan: Plan): PlanStep[] {
-    const order: PlanStep[] = [];
-    const visit = (step: PlanStep) => {
-      if (step.children && step.children.length > 0) {
-        for (const child of step.children) {
-          visit(child);
-        }
-      }
-      order.push(step);
-    };
-    for (const step of plan.steps) {
-      visit(step);
-    }
-    return order;
-  }
-
-  /**
-   * Group the flattened execution order into units: consecutive steps marked
-   * delegate+parallel form a concurrent wave; everything else stays a single
-   * step executed by the main agent (serially delegated when only `delegate`
-   * is set).
-   */
-  private buildExecutionUnits(order: PlanStep[]): ExecutionUnit[] {
-    const units: ExecutionUnit[] = [];
-    let i = 0;
-    while (i < order.length) {
-      const step = order[i];
-      if (step.delegate && step.parallel) {
-        const wave: PlanStep[] = [];
-        while (i < order.length && order[i].delegate && order[i].parallel) {
-          wave.push(order[i]);
-          i++;
-        }
-        units.push({ type: 'wave', steps: wave });
-      } else {
-        units.push({ type: 'single', step });
-        i++;
-      }
-    }
-    return units;
   }
 
   /**
@@ -290,23 +249,24 @@ export class PlanningLoop implements LoopStrategy {
    * map the outcome onto the same next-action vocabulary as executeStep.
    */
   private async executeSingleDelegatedStep(
+    state: PlanningRunState,
     step: PlanStep,
     plan: Plan,
   ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
-    const result = await this.executeDelegatedStep(step, plan);
+    const result = await this.executeDelegatedStep(state, step, plan);
     if (result.success) {
       return { next: 'continue' };
     }
 
-    this.setStepStatus(step, 'failed');
+    this.setStepStatus(state, step, 'failed');
     const failureAnalysis: FailureAnalysis = {
       category: 'tool_failure',
       affectedStepIds: [step.id],
       rootCause: `Sub-agent failed: ${result.error ?? 'unknown'}`,
       recommendation: 'Retry the delegated step or replan with a different decomposition.',
     };
-    this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
-    const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+    state.context.reasoning.addFailureAnalysis(failureAnalysis, step.id);
+    const judge = await this.taskJudge.judge(plan, state.context.reasoning.getSteps());
     if (judge.complete || judge.nextAction === 'finalize') {
       return { next: 'final' };
     }
@@ -324,6 +284,7 @@ export class PlanningLoop implements LoopStrategy {
    * On retry, only non-completed steps re-execute.
    */
   private async executeWave(
+    state: PlanningRunState,
     steps: PlanStep[],
     plan: Plan,
   ): Promise<{ next: 'continue' | 'retry' | 'replan' | 'final'; failureAnalysis?: FailureAnalysis }> {
@@ -331,16 +292,16 @@ export class PlanningLoop implements LoopStrategy {
     // re-runs what failed); their results are already in the reasoning chain.
     const toRun = steps.filter((step) => step.status !== 'completed');
     const results = await Promise.allSettled(
-      toRun.map((step) => this.executeDelegatedStep(step, plan)),
+      toRun.map((step) => this.executeDelegatedStep(state, step, plan)),
     );
 
     const failed: Array<{ step: PlanStep; reason: string }> = [];
     for (let i = 0; i < toRun.length; i++) {
       const outcome = results[i];
       if (outcome.status === 'fulfilled' && outcome.value.success) {
-        this.setStepStatus(toRun[i], 'completed');
+        this.setStepStatus(state, toRun[i], 'completed');
       } else {
-        this.setStepStatus(toRun[i], 'failed');
+        this.setStepStatus(state, toRun[i], 'failed');
         const reason =
           outcome.status === 'fulfilled'
             ? outcome.value.error ?? 'unknown sub-agent failure'
@@ -363,9 +324,9 @@ export class PlanningLoop implements LoopStrategy {
         .join(' | '),
       recommendation: 'Retry the failed sub-tasks or replan with a different decomposition.',
     };
-    this.reasoningChain.addFailureAnalysis(failureAnalysis);
+    state.context.reasoning.addFailureAnalysis(failureAnalysis);
 
-    const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+    const judge = await this.taskJudge.judge(plan, state.context.reasoning.getSteps());
     if (judge.complete || judge.nextAction === 'finalize') {
       return { next: 'final' };
     }
@@ -382,7 +343,11 @@ export class PlanningLoop implements LoopStrategy {
    * recorded into the reasoning chain and surfaced into the parent's context
    * so later steps and the final answer can build on it.
    */
-  private async executeDelegatedStep(step: PlanStep, plan: Plan): Promise<SubAgentResult> {
+  private async executeDelegatedStep(
+    state: PlanningRunState,
+    step: PlanStep,
+    plan: Plan,
+  ): Promise<SubAgentResult> {
 
     const allowedTools = step.parallel ? READ_ONLY_DELEGATION_TOOLS : undefined;
 
@@ -393,16 +358,16 @@ export class PlanningLoop implements LoopStrategy {
       expectedOutcome: step.expectedOutcome,
       allowedTools,
       stepId: step.id,
-      memoryText: this.memories,
+      memoryText: state.context.memoryText,
     });
 
-    this.reasoningChain.addThought(
+    state.context.reasoning.addThought(
       result.success
         ? `Delegated step completed: ${result.reply.slice(0, 200)}`
         : `Delegated step failed: ${result.error ?? 'unknown'}`,
       step.id,
     );
-    this.reasoningChain.commitStep(step.id);
+    state.context.reasoning.commitStep(step.id);
 
     this.contextManager.addMessage({
       role: 'user',
@@ -416,6 +381,7 @@ export class PlanningLoop implements LoopStrategy {
   }
 
   private async executeStep(
+    state: PlanningRunState,
     step: PlanStep,
     plan: Plan,
     runId?: string
@@ -440,7 +406,7 @@ export class PlanningLoop implements LoopStrategy {
     // return generated text there (provider surfaces both separately).
     const thought = (response.content.trim() ? response.content : (response.reasoning ?? '')).trim();
     if (thought) {
-      this.reasoningChain.addThought(thought, step.id);
+      state.context.reasoning.addThought(thought, step.id);
       this.recorder.record({ type: 'thought', content: thought });
       this.contextManager.addMessage({ role: 'assistant', content: thought, internal: true });
     }
@@ -462,9 +428,9 @@ export class PlanningLoop implements LoopStrategy {
       });
 
       for (const call of toolCalls) {
-        this.reasoningChain.addAction(call, step.id);
-        this.recorder.record({ type: 'tool_call', toolCall: call, stepId: step.id });
+        state.context.reasoning.addAction(call, step.id);
       }
+      this.toolRunner.recordCalls(toolCalls, { stepId: step.id });
 
       const deviation = this.detectToolDeviation(toolCalls, constraint);
       if (deviation) {
@@ -477,15 +443,9 @@ export class PlanningLoop implements LoopStrategy {
             success: false,
             error: 'Tool call rejected: deviates from step tool constraint; not executed.',
           };
-          this.recorder.record({
-            type: 'tool_result', toolResult: result, toolCallId: call.id, stepId: step.id,
-            status: 'rejected', durationMs: 0,
-          });
-          this.contextManager.addMessage({
-            role: 'tool',
-            content: JSON.stringify(result),
-            tool_call_id: call.id,
-            internal: true,
+          this.toolRunner.recordResult(call, result, {
+            stepId: step.id,
+            status: 'rejected',
           });
         }
         const failureAnalysis: FailureAnalysis = {
@@ -494,9 +454,9 @@ export class PlanningLoop implements LoopStrategy {
           rootCause: `Step required ${this.formatExpectedTools(constraint)} but model used: ${toolCalls.map((c) => c.name).join(', ')}`,
           recommendation: 'Retry the step with the expected tool or replan if the tool set is insufficient.',
         };
-        this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
-        this.setStepStatus(step, 'failed');
-        const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+        state.context.reasoning.addFailureAnalysis(failureAnalysis, step.id);
+        this.setStepStatus(state, step, 'failed');
+        const judge = await this.taskJudge.judge(plan, state.context.reasoning.getSteps());
         if (judge.complete || judge.nextAction === 'finalize') {
           return { next: 'final' };
         }
@@ -511,7 +471,6 @@ export class PlanningLoop implements LoopStrategy {
 
       for (let i = 0; i < toolCalls.length; i++) {
         const call = toolCalls[i];
-        const toolStartedAt = Date.now();
         const activeToolCall: ActiveToolCheckpoint = {
           id: call.id,
           name: call.name,
@@ -520,30 +479,15 @@ export class PlanningLoop implements LoopStrategy {
           status: 'prepared',
           recoveryPolicy: recoveryPolicyForTool(call.name),
         };
-        this.setActiveToolCall(activeToolCall);
-        let result: ToolResult;
-        if (!this.toolExecutor) {
-          result = { success: false, error: 'No tool executor available' };
-        } else {
-          this.checkSignal();
-          this.setActiveToolCall({ ...activeToolCall, status: 'running' });
-          result = await this.toolExecutor.execute(call);
-        }
-        this.reasoningChain.addObservation(result, step.id);
-        this.recorder.record({
-          type: 'tool_result', toolResult: result, toolCallId: call.id, stepId: step.id,
-          status: result.success ? 'succeeded' : 'failed', durationMs: Date.now() - toolStartedAt,
+        const result = await this.toolRunner.execute(call, {
+          runId,
+          stepId: step.id,
+          onPhase: (phase) => this.setActiveToolCall(state, { ...activeToolCall, status: phase }),
+          onResult: (toolResult) => state.context.reasoning.addObservation(toolResult, step.id),
         });
-        this.contextManager.addMessage({
-          role: 'tool',
-          content: JSON.stringify(result),
-          tool_call_id: call.id,
-          internal: true,
-        });
-        this.persistToolCall(runId, call, result);
 
         if (!result.success) {
-          this.setStepStatus(step, 'failed');
+          this.setStepStatus(state, step, 'failed');
           // Calls after the failed one never execute, but their tool_calls
           // are already in context. Pair them with placeholder tool messages
           // (same provider constraint as the deviation path above).
@@ -552,15 +496,9 @@ export class PlanningLoop implements LoopStrategy {
               success: false,
               error: 'Skipped: a preceding tool call failed.',
             };
-            this.recorder.record({
-              type: 'tool_result', toolResult: skippedResult, toolCallId: skipped.id,
-              stepId: step.id, status: 'skipped', durationMs: 0,
-            });
-            this.contextManager.addMessage({
-              role: 'tool',
-              content: JSON.stringify(skippedResult),
-              tool_call_id: skipped.id,
-              internal: true,
+            this.toolRunner.recordResult(skipped, skippedResult, {
+              stepId: step.id,
+              status: 'skipped',
             });
           }
           const failureAnalysis: FailureAnalysis = {
@@ -569,8 +507,8 @@ export class PlanningLoop implements LoopStrategy {
             rootCause: `Tool ${call.name} failed: ${result.error ?? 'unknown'}`,
             recommendation: 'Retry the tool call or replan to work around the failure.',
           };
-          this.reasoningChain.addFailureAnalysis(failureAnalysis, step.id);
-          const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+          state.context.reasoning.addFailureAnalysis(failureAnalysis, step.id);
+          const judge = await this.taskJudge.judge(plan, state.context.reasoning.getSteps());
           if (judge.complete || judge.nextAction === 'finalize') {
             return { next: 'final' };
           }
@@ -588,7 +526,7 @@ export class PlanningLoop implements LoopStrategy {
       }
     }
 
-    this.reasoningChain.commitStep(step.id);
+    state.context.reasoning.commitStep(step.id);
 
     // A step that satisfied a required-tool constraint was already validated
     // mechanically (deviation and tool failures are handled above), so skip
@@ -597,7 +535,7 @@ export class PlanningLoop implements LoopStrategy {
       return { next: 'continue' };
     }
 
-    const judge = await this.taskJudge.judge(plan, this.reasoningChain.getSteps());
+    const judge = await this.taskJudge.judge(plan, state.context.reasoning.getSteps());
 
     if (judge.complete || judge.nextAction === 'finalize') {
       return { next: 'final' };
@@ -616,13 +554,6 @@ export class PlanningLoop implements LoopStrategy {
     const requiredTool = step.requiredTool ?? step.toolName;
     const strict = step.strict ?? (requiredTool !== undefined);
     return { requiredTool, allowedTools: step.allowedTools, strict };
-  }
-
-  /** Recursively check whether every step (including nested children) completed. */
-  private allStepsCompleted(steps: PlanStep[]): boolean {
-    return steps.every(
-      (s) => s.status === 'completed' && (!s.children || this.allStepsCompleted(s.children))
-    );
   }
 
   private detectToolDeviation(
@@ -669,7 +600,12 @@ export class PlanningLoop implements LoopStrategy {
     return { reply: content };
   }
 
-  private async replan(userMessage: string, currentPlan: Plan, failureAnalysis?: FailureAnalysis): Promise<Plan> {
+  private async replan(
+    state: PlanningRunState,
+    userMessage: string,
+    currentPlan: Plan,
+    failureAnalysis?: FailureAnalysis,
+  ): Promise<Plan> {
     const reflection = failureAnalysis
       ? `The previous plan did not succeed. Category: ${failureAnalysis.category}. ` +
         `Root cause: ${failureAnalysis.rootCause ?? 'unknown'}. ` +
@@ -678,13 +614,13 @@ export class PlanningLoop implements LoopStrategy {
       : `The previous plan did not succeed. Plan: ${currentPlan.steps
           .map((s) => s.description)
           .join('; ')}`;
-    this.reasoningChain.addReflection(reflection);
+    state.context.reasoning.addReflection(reflection);
     this.recorder.record({ type: 'reflection', content: reflection });
 
     const newPlan = await this.planner.createPlan(
       userMessage,
       this.toolRegistry!.list(),
-      this.memories,
+      state.context.memoryText,
       currentPlan,
       failureAnalysis
     );
@@ -694,7 +630,7 @@ export class PlanningLoop implements LoopStrategy {
 
   private recordPlan(plan: Plan): void {
     this.recorder.record({ type: 'plan', plan });
-    for (const step of this.flattenPlanPostOrder(plan)) {
+    for (const step of flattenPlanPostOrder(plan)) {
       this.recorder.record({
         type: 'plan_step',
         stepId: step.id,
@@ -704,13 +640,18 @@ export class PlanningLoop implements LoopStrategy {
     }
   }
 
-  private setStepStatus(step: PlanStep, status: PlanStep['status'], attempt?: number): void {
+  private setStepStatus(
+    state: PlanningRunState,
+    step: PlanStep,
+    status: PlanStep['status'],
+    attempt?: number,
+  ): void {
     step.status = status;
     if (
       status === 'completed' &&
-      this.checkpointState?.activeToolCall?.stepId === step.id
+      state.checkpoint.activeToolCall?.stepId === step.id
     ) {
-      this.checkpointState.activeToolCall = undefined;
+      state.checkpoint.activeToolCall = undefined;
     }
     this.recorder.record({
       type: 'plan_step',
@@ -719,42 +660,34 @@ export class PlanningLoop implements LoopStrategy {
       status,
       attempt,
     });
-    this.saveCheckpoint();
-  }
-
-  private findStep(steps: PlanStep[], id: string): PlanStep | undefined {
-    for (const step of steps) {
-      if (step.id === id) return step;
-      const child = step.children ? this.findStep(step.children, id) : undefined;
-      if (child) return child;
-    }
-    return undefined;
+    this.saveCheckpoint(state);
   }
 
   private updateCheckpointProgress(
+    state: PlanningRunState,
     currentUnitIndex: number,
     replanAttempts: number,
     retryAttempts: number,
     plan: Plan,
   ): void {
-    if (!this.checkpointState) return;
-    this.checkpointState.currentUnitIndex = currentUnitIndex;
-    this.checkpointState.replanAttempts = replanAttempts;
-    this.checkpointState.retryAttempts = retryAttempts;
-    this.checkpointState.plan = plan;
-    this.saveCheckpoint();
+    state.checkpoint.currentUnitIndex = currentUnitIndex;
+    state.checkpoint.replanAttempts = replanAttempts;
+    state.checkpoint.retryAttempts = retryAttempts;
+    state.checkpoint.plan = plan;
+    this.saveCheckpoint(state);
   }
 
-  private setActiveToolCall(activeToolCall: ActiveToolCheckpoint | undefined): void {
-    if (!this.checkpointState) return;
-    this.checkpointState.activeToolCall = activeToolCall;
-    this.saveCheckpoint();
+  private setActiveToolCall(
+    state: PlanningRunState,
+    activeToolCall: ActiveToolCheckpoint | undefined,
+  ): void {
+    state.checkpoint.activeToolCall = activeToolCall;
+    this.saveCheckpoint(state);
   }
 
-  private saveCheckpoint(): void {
-    if (!this.checkpointState) return;
-    this.checkpointState.updatedAt = new Date().toISOString();
-    const { runId, ...checkpoint } = this.checkpointState;
+  private saveCheckpoint(state: PlanningRunState): void {
+    state.checkpoint.updatedAt = new Date().toISOString();
+    const { runId, ...checkpoint } = state.checkpoint;
     this.persistCheckpoint(runId, JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint);
   }
 

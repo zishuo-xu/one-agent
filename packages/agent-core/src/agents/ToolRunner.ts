@@ -1,0 +1,96 @@
+import type { ContextManager } from '../context/ContextManager.js';
+import type { ToolExecutor } from '../tools/executor.js';
+import type { ToolCall, ToolResult } from '../tools/types.js';
+import type { RunRecorder } from './RunRecorder.js';
+
+export interface ToolRunMetadata {
+  runId?: string;
+  stepId?: string;
+  attempt?: number;
+}
+
+export interface ToolExecutionOptions extends ToolRunMetadata {
+  onPhase?: (phase: 'prepared' | 'running', call: ToolCall) => void;
+  onResult?: (result: ToolResult) => void;
+}
+
+export interface ToolResultOptions extends ToolRunMetadata {
+  status: 'succeeded' | 'failed' | 'rejected' | 'skipped';
+  durationMs?: number;
+  persist?: boolean;
+  onResult?: (result: ToolResult) => void;
+}
+
+export interface ToolRunnerOptions {
+  executor?: ToolExecutor;
+  contextManager: ContextManager;
+  recorder: RunRecorder;
+  checkSignal: () => void;
+  persist?: (runId: string | undefined, call: ToolCall, result: ToolResult) => void;
+}
+
+/**
+ * The one protocol for turning a model ToolCall into durable execution facts.
+ * Loops decide when and why a tool should run; ToolRunner owns the invariant
+ * protocol: recordCalls announces model-selected calls; execute and
+ * recordResult then execute or reject them, pair results in model context,
+ * trace the outcome and persist final evidence.
+ */
+export class ToolRunner {
+  constructor(private readonly options: ToolRunnerOptions) {}
+
+  recordCalls(calls: ToolCall[], metadata: ToolRunMetadata = {}): void {
+    for (const call of calls) {
+      this.options.recorder.record({
+        type: 'tool_call',
+        toolCall: call,
+        stepId: metadata.stepId,
+        attempt: metadata.attempt,
+      });
+    }
+  }
+
+  async execute(call: ToolCall, options: ToolExecutionOptions = {}): Promise<ToolResult> {
+    const startedAt = Date.now();
+    options.onPhase?.('prepared', call);
+
+    let result: ToolResult;
+    if (!this.options.executor) {
+      result = { success: false, error: 'No tool executor available' };
+    } else {
+      this.options.checkSignal();
+      options.onPhase?.('running', call);
+      result = await this.options.executor.execute(call);
+    }
+
+    this.recordResult(call, result, {
+      ...options,
+      status: result.success ? 'succeeded' : 'failed',
+      durationMs: Date.now() - startedAt,
+      persist: true,
+    });
+    return result;
+  }
+
+  recordResult(call: ToolCall, result: ToolResult, options: ToolResultOptions): void {
+    options.onResult?.(result);
+    this.options.recorder.record({
+      type: 'tool_result',
+      toolResult: result,
+      toolCallId: call.id,
+      stepId: options.stepId,
+      attempt: options.attempt,
+      status: options.status,
+      durationMs: options.durationMs ?? 0,
+    });
+    this.options.contextManager.addMessage({
+      role: 'tool',
+      content: JSON.stringify(result),
+      tool_call_id: call.id,
+      internal: true,
+    });
+    if (options.persist) {
+      this.options.persist?.(options.runId, call, result);
+    }
+  }
+}

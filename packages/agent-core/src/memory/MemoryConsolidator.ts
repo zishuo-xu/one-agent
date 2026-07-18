@@ -4,6 +4,7 @@ import { MessageStore } from '../db/messageStore.js';
 import { ThreadStore } from '../db/threadStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryExtractor } from './MemoryExtractor.js';
+import type { AgentEvent } from '../agents/events.js';
 
 export interface MemoryConsolidationResult {
   threadId: string;
@@ -150,7 +151,7 @@ export class MemoryConsolidator {
   private record(
     threadId: string,
     phase: 'started' | 'completed' | 'failed',
-    data: Omit<Extract<import('../agents/AgentLoop.js').AgentLoopEvent, { type: 'memory_consolidation' }>, 'type' | 'phase'>,
+    data: Omit<Extract<AgentEvent, { type: 'memory_consolidation' }>, 'type' | 'phase'>,
   ): void {
     try {
       this.traceEventStore.create({
