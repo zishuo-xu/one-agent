@@ -477,7 +477,9 @@ export class AgentLoop extends EventEmitter {
       .filter(
         (message) =>
           !message.internal &&
-          (message.role === 'user' || message.role === 'assistant')
+          (message.role === 'user' || message.role === 'assistant') &&
+          !message.tool_calls?.length &&
+          !(message.role === 'user' && message.content.startsWith('Execute the following step'))
       );
   }
 

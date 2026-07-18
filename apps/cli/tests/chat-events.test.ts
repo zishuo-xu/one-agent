@@ -108,40 +108,41 @@ describe('createChatEventHandler streaming', () => {
     expect(tl.deltas).toEqual([]);
   });
 
-  it('streams reasoning_delta live via onDelta (unified with answer)', () => {
+  it('keeps reasoning_delta out of normal user output', () => {
     const tl = makeTimeline();
     const { handler, result } = createChatEventHandler(tl);
 
     handler({ type: 'reasoning_delta', content: 'The user said hello.' } as AgentLoopEvent);
     handler({ type: 'reasoning_delta', content: ' I should greet back.' } as AgentLoopEvent);
 
-    // Reasoning is streamed through onDelta as part of the same continuous
-    // output stream - no separate onReasoning channel, no dimming.
-    expect(tl.deltas).toEqual(['The user said hello.', ' I should greet back.']);
+    expect(tl.deltas).toEqual([]);
     expect(tl.reasoning).toEqual([]);
-    expect(result.hasStreamedLive).toBe(true);
-    expect(result.streamedContent).toBe('The user said hello. I should greet back.');
+    expect(tl.infos).toEqual([]);
+    expect(result.hasStreamedLive).toBe(false);
+    expect(result.streamedContent).toBe('');
   });
 
-  it('sets firstDeltaTime on first reasoning_delta', () => {
+  it('does not count reasoning_delta as answer timing', () => {
     const tl = makeTimeline();
     const { handler, result } = createChatEventHandler(tl);
-    const before = Date.now();
     handler({ type: 'reasoning_delta', content: 'thinking...' } as AgentLoopEvent);
-    expect(result.firstDeltaTime).toBeGreaterThanOrEqual(before);
+    expect(result.firstDeltaTime).toBe(0);
+    expect(result.answerStartTime).toBe(0);
+    expect(result.answerEndTime).toBe(0);
   });
 
-  it('streams reasoning and answer as continuous output without separator', () => {
-    const tl = makeTimeline();
+  it('shows reasoning in a separate verbose section without mixing it into the answer', () => {
+    const tl = makeTimeline(true);
     const { handler, result } = createChatEventHandler(tl);
 
     handler({ type: 'reasoning_delta', content: 'Let me think...' } as AgentLoopEvent);
     handler({ type: 'message_delta', content: 'Hello!' } as AgentLoopEvent);
 
-    // No separator inserted - reasoning and answer are unified into one
-    // continuous stream for a clean reading experience.
-    expect(tl.infos).not.toContain('\n');
-    expect(tl.deltas).toEqual(['Let me think...', 'Hello!']);
-    expect(result.streamedContent).toBe('Let me think...Hello!');
+    expect(tl.reasoning).toEqual(['Let me think...']);
+    expect(tl.infos.join('')).toContain('[reasoning]');
+    expect(tl.infos.join('')).toContain('[answer]');
+    expect(tl.deltas).toEqual(['Hello!']);
+    expect(result.streamedContent).toBe('Hello!');
+    expect(result.hasStreamedLive).toBe(true);
   });
 });

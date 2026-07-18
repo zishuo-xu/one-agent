@@ -24,6 +24,7 @@ export interface PersistedMessage {
   content: string;
   toolCalls?: string;
   toolCallId?: string;
+  internal: boolean;
   createdAt: string;
 }
 
@@ -144,13 +145,14 @@ export interface CreateMemoryInput {
 
 export function messageToPersisted(message: Message): Pick<
   PersistedMessage,
-  'role' | 'content' | 'toolCalls' | 'toolCallId'
+  'role' | 'content' | 'toolCalls' | 'toolCallId' | 'internal'
 > {
   return {
     role: message.role,
     content: message.content,
     toolCalls: message.tool_calls ? JSON.stringify(message.tool_calls) : undefined,
     toolCallId: message.tool_call_id,
+    internal: message.internal ?? false,
   };
 }
 
@@ -160,5 +162,6 @@ export function persistedToMessage(row: PersistedMessage): Message {
     content: row.content ?? '',
     tool_calls: row.toolCalls ? JSON.parse(row.toolCalls) : undefined,
     tool_call_id: row.toolCallId,
+    internal: row.internal || undefined,
   };
 }

@@ -17,6 +17,15 @@ describe('migrate', () => {
         model TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
       INSERT INTO trace_events (id, run_id, event_type, event_data)
       VALUES ('trace-1', 'run-1', 'message', '{}');
     `);
@@ -32,6 +41,8 @@ describe('migrate', () => {
     ).toEqual({ sequence: 0 });
     const runColumns = db.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>;
     expect(runColumns.some((column) => column.name === 'checkpoint')).toBe(true);
+    const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+    expect(messageColumns.some((column) => column.name === 'internal')).toBe(true);
   });
 
   it('adds idempotency_key to pre-existing tasks tables', () => {

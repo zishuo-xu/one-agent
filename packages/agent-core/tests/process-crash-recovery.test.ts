@@ -134,6 +134,13 @@ async function waitForRun(
         ).get() as RunRow | undefined;
         const checkpoint = run?.checkpoint ? JSON.parse(run.checkpoint) : undefined;
         if (run && predicate(run, checkpoint)) return run;
+      } catch (error) {
+        // The SQLite file can become visible a few milliseconds before the
+        // child finishes creating its schema. That is startup, not a failed
+        // recovery assertion, so keep polling only for this exact condition.
+        if (!(error instanceof Error && error.message.includes('no such table: agent_runs'))) {
+          throw error;
+        }
       } finally {
         db.close();
       }

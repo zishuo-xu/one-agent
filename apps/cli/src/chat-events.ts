@@ -65,6 +65,7 @@ export function createChatEventHandler(timeline: ChatTimeline): {
     answerStartTime: 0,
     answerEndTime: 0,
   };
+  let reasoningVisible = false;
 
   const handler = (event: AgentLoopEvent) => {
     if (event.type === 'plan') {
@@ -73,6 +74,7 @@ export function createChatEventHandler(timeline: ChatTimeline): {
         timeline.onInfo(`\n[plan] ${event.plan.steps.map((s) => s.description).join(' -> ')}\n`);
       }
     } else if (event.type === 'tool_call') {
+      reasoningVisible = false;
       timeline.progress.setLabel('Working');
       if (result.toolStartTime === 0) result.toolStartTime = Date.now();
       timeline.onInfo(`\n[tool_call] ${event.toolCall.name}\n`);
@@ -102,21 +104,27 @@ export function createChatEventHandler(timeline: ChatTimeline): {
         timeline.onInfo(`[sub-agent] ${taskLabel} … FAILED: ${event.error ?? 'unknown'}\n`);
       }
     } else if (event.type === 'reasoning_delta') {
-      // Stream reasoning live as part of the same continuous output -
-      // no dimming, no separator, just continuous text like the answer.
+      // Reasoning remains in Trace for every run. The normal CLI keeps the
+      // user-facing answer clean; verbose mode renders it in a separate lane.
+      if (!timeline.verbose) return;
       const cleanContent = sanitizeTerminalText(event.content);
       if (cleanContent) {
+        if (!reasoningVisible) {
+          timeline.onInfo('\n[reasoning]\n');
+          reasoningVisible = true;
+        }
         timeline.progress.stop();
-        if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
-        result.hasStreamedLive = true;
-        timeline.onDelta(cleanContent);
-        result.streamedContent += cleanContent;
+        timeline.onReasoning(cleanContent);
       }
     } else if (event.type === 'message_delta') {
       const cleanContent = sanitizeTerminalText(event.content);
       if (!cleanContent.trim()) {
         // Whitespace-only or empty delta: ignore for live output and timing.
         return;
+      }
+      if (reasoningVisible) {
+        timeline.onInfo('\n[answer]\n');
+        reasoningVisible = false;
       }
       if (result.firstDeltaTime === 0) result.firstDeltaTime = Date.now();
       if (result.answerStartTime === 0) result.answerStartTime = Date.now();
@@ -127,6 +135,10 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       timeline.onDelta(cleanContent);
       result.streamedContent += cleanContent;
     } else if (event.type === 'message') {
+      if (reasoningVisible) {
+        timeline.onInfo('\n[answer]\n');
+        reasoningVisible = false;
+      }
       if (result.answerEndTime === 0) result.answerEndTime = Date.now();
       if (result.streamedContent.length === 0 && event.content) {
         result.streamedContent = sanitizeTerminalText(event.content);

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT,
   tool_calls TEXT,
   tool_call_id TEXT,
+  internal INTEGER NOT NULL DEFAULT 0,
   sequence INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
@@ -164,6 +165,11 @@ export function migrate(instance: Database.Database): void {
   }
   try {
     instance.exec('ALTER TABLE messages ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists.
+  }
+  try {
+    instance.exec('ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0');
   } catch {
     // Column already exists.
   }

@@ -23,6 +23,7 @@ import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
 import type { MemoryStore } from '../src/db/memoryStore.js';
 import type { MemoryExtractor } from '../src/memory/MemoryExtractor.js';
+import { ContextManager } from '../src/context/ContextManager.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -62,6 +63,30 @@ describe('AgentLoop', () => {
       role: 'assistant',
       content: 'Hello from assistant',
     });
+  });
+
+  it('keeps internal and tool-call messages out of user-facing history', () => {
+    const contextManager = new ContextManager({ systemPrompt: 'test system prompt' });
+    contextManager.addMessage({ role: 'user', content: 'Visible question' });
+    contextManager.addMessage({
+      role: 'assistant',
+      content: 'Legacy internal tool thought',
+      tool_calls: [{
+        id: 'call-1',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{}' },
+      }],
+    });
+    contextManager.addMessage({ role: 'tool', content: 'tool output', tool_call_id: 'call-1' });
+    contextManager.addMessage({ role: 'user', content: 'Execute the following step from the plan.' });
+    contextManager.addMessage({ role: 'assistant', content: 'Visible answer' });
+
+    const agent = new AgentLoop({ contextManager, enablePlanning: false });
+
+    expect(agent.getUserFacingHistory()).toEqual([
+      { role: 'user', content: 'Visible question' },
+      { role: 'assistant', content: 'Visible answer' },
+    ]);
   });
 
   it('falls back to reasoning_content when content is whitespace', async () => {

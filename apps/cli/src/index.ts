@@ -20,6 +20,7 @@ import {
 } from '@one-agent/agent-core';
 import { WORKSPACE_ROOT } from './load-env.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
+import { formatContextDisplay } from './commands/context.js';
 import { sanitizeTerminalText } from './output.js';
 import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
@@ -42,6 +43,7 @@ const COMMANDS = [
   '/help',
   '/history',
   '/context',
+  '/context --verbose',
   '/reasoning',
   '/threads',
   '/runs',
@@ -373,25 +375,17 @@ async function main() {
       continue;
     }
 
-    if (trimmed === '/context') {
+    if (trimmed === '/context' || trimmed === '/context --verbose') {
       const context = agent.getContext();
       const info = agent.getContextInfo();
-      const nonSystem = context.filter((m) => m.role !== 'system');
-      const summary = context.find((m) => m.role === 'system' && m.content.startsWith('Earlier conversation summary:'));
-      const memory = context.find((m) => m.role === 'system' && m.content.startsWith('Relevant context from past conversations:'));
-      console.log(`Context: ${nonSystem.length} message(s) | ~${info.estimatedTokens} tokens${info.maxContextTokens ? ` / ${info.maxContextTokens} budget` : ''}${info.hasSummary ? ' | summarized' : ''} | ${info.tokenSource === 'real' ? 'real+est' : 'est'}`);
-      if (summary) {
-        console.log(`Summary: ${summary.content.slice(0, 200)}`);
-      }
-      if (memory) {
-        console.log(`Memory: ${memory.content.slice(0, 200)}`);
-      }
-      if (nonSystem.length > 0) {
-        console.log('Recent messages:');
-        for (const message of nonSystem.slice(-4)) {
-          const prefix = message.role === 'user' ? 'You' : 'Assistant';
-          console.log(`  ${prefix}: ${message.content.slice(0, 200)}`);
-        }
+      const lines = formatContextDisplay({
+        context,
+        userFacingHistory: agent.getUserFacingHistory(),
+        info,
+        verbose: trimmed.endsWith('--verbose'),
+      });
+      for (const line of lines) {
+        console.log(line);
       }
       continue;
     }
@@ -400,12 +394,13 @@ async function main() {
       const chain = agent.getReasoningChain();
       const steps = chain.getSteps();
       if (steps.length === 0) {
-        console.log('No reasoning trace for the current turn.');
+        console.log('No PlanningLoop reasoning for the current turn.');
+        console.log('Model reasoning is recorded in Trace; use /traces to inspect it.');
       } else {
         const thoughts = steps.filter((s) => s.thought).length;
         const actions = steps.filter((s) => s.action).length;
         const reflections = steps.filter((s) => s.reflection).length;
-        console.log(`Reasoning trace: ${steps.length} step(s), ${thoughts} thought(s), ${actions} action(s), ${reflections} reflection(s).`);
+        console.log(`Planning reasoning: ${steps.length} step(s), ${thoughts} thought(s), ${actions} action(s), ${reflections} reflection(s).`);
         for (let i = 0; i < steps.length; i++) {
           const step = steps[i];
           console.log(`Step ${i + 1}:`);

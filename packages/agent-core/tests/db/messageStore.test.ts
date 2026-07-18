@@ -39,9 +39,14 @@ describe('MessageStore', () => {
           function: { name: 'read_file', arguments: '{"path":"test.txt"}' },
         },
       ],
+      internal: true,
     };
     const saved = store.save(threadId, message);
     expect(saved.toolCalls).toContain('read_file');
+    expect(saved.internal).toBe(true);
+
+    const reloaded = store.getByThread(threadId)[0];
+    expect(reloaded.internal).toBe(true);
   });
 
   it('lists messages by thread in ascending order', () => {

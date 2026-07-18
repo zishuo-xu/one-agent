@@ -13,14 +13,15 @@ ${bold('Options')}:
   --workspace <dir>   Use the given directory as the agent workspace
   --plan              Enable planning mode for multi-step tool tasks
   --plan-auto         Let the agent decide per message whether to plan
-  --verbose           Show internal thoughts, plans, and reflections
+  --verbose           Show model reasoning, internal thoughts, plans, and reflections
   --trace             Start the trace web viewer at http://127.0.0.1:3001
 
 ${bold('REPL commands')}:
   /help               Show this command list
   /history            Show your messages and assistant replies
   /context            Show a summary of the current conversation context
-  /reasoning          Show the agent's reasoning trace for the last turn
+  /context --verbose  Include recent internal tool/context messages
+  /reasoning          Show PlanningLoop reasoning for the last turn
   /threads            List all threads
   /runs               List runs in the current thread
   /runs <run-id>      Show details for a specific run
@@ -32,7 +33,7 @@ ${bold('REPL commands')}:
   /exit, /quit        Exit the CLI
 
 ${dim('Without --thread/--new, the most recent thread is resumed automatically.')}
-${dim('Use --verbose to show internal thoughts, plans, and reflections.')}
+${dim('Model reasoning is always recorded in Trace; use --verbose to also show it live.')}
 ${dim('Use --plan to enable multi-step planning mode, or --plan-auto to let the agent decide.')}
 `.trim();
 

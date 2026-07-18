@@ -131,8 +131,9 @@ Completion Contract 只在 `EvalRunner` 中离线执行，用数据集 checkpoin
 
 - 输入消息并按回车：与 Agent 对话（回复后显示输入/输出 token 用量）
 - `/history`：查看当前会话历史
-- `/context`：查看当前上下文（含 token 估算、预算、是否已触发摘要）
-- `/reasoning`：查看当前运行的推理链
+- `/context`：查看用户可见上下文（含 token 估算、预算、摘要和记忆）
+- `/context --verbose`：同时查看最近的内部工具与上下文消息
+- `/reasoning`：查看当前运行的 PlanningLoop 结构化推理链
 - `/threads`：列出所有会话
 - `/runs`：列出当前会话的运行记录
 - `/traces`：查看最近运行的 trace 事件
@@ -150,7 +151,11 @@ pnpm dev:cli -- --thread <id>         # 恢复指定 thread
 pnpm dev:cli -- --trace               # 同时启动 trace-web 追踪可视化
 pnpm dev:cli -- --plan                # 开启规划模式（多步任务）
 pnpm dev:cli -- --plan-auto           # 自动判断：简单问题直接答、复杂问题才规划
+pnpm dev:cli -- --verbose             # 分区展示模型 reasoning 与内部规划信息
 ```
+
+默认 CLI 只流式展示最终答案；模型 `reasoning_delta` 始终进入 Trace，但不会混入用户回复。
+启用 `--verbose` 后，reasoning 会在独立的 `[reasoning]` 区域展示，最终答案仍保持独立。
 
 ## 断点恢复 v1
 

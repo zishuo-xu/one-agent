@@ -42,6 +42,12 @@ describe('help text', () => {
   it('documents /help', () => {
     expect(HELP_TEXT).toContain('/help');
   });
+
+  it('documents reasoning visibility and verbose context', () => {
+    expect(HELP_TEXT).toContain('/context --verbose');
+    expect(HELP_TEXT).toContain('PlanningLoop reasoning');
+    expect(HELP_TEXT).toContain('Model reasoning is always recorded in Trace');
+  });
 });
 
 describe('error categorization', () => {

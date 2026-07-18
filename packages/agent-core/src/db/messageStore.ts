@@ -11,6 +11,7 @@ interface MessageRow {
   content: string;
   tool_calls: string | null;
   tool_call_id: string | null;
+  internal: number;
   sequence: number;
   created_at: string;
 }
@@ -23,6 +24,7 @@ function rowToPersistedMessage(row: MessageRow): PersistedMessage {
     content: row.content,
     toolCalls: row.tool_calls ?? undefined,
     toolCallId: row.tool_call_id ?? undefined,
+    internal: row.internal === 1,
     createdAt: normalizeUtcDateTime(row.created_at),
   };
 }
@@ -45,8 +47,8 @@ export class MessageStore {
 
     this.db
       .prepare(
-        `INSERT INTO messages (id, thread_id, role, content, tool_calls, tool_call_id, sequence, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        `INSERT INTO messages (id, thread_id, role, content, tool_calls, tool_call_id, internal, sequence, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
       )
       .run(
         id,
@@ -55,6 +57,7 @@ export class MessageStore {
         persisted.content,
         persisted.toolCalls ?? null,
         persisted.toolCallId ?? null,
+        persisted.internal ? 1 : 0,
         sequence
       );
 
