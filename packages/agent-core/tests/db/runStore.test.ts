@@ -81,6 +81,11 @@ describe('RunStore', () => {
     expect(store.getRecoverableByThread(threadId).map((item) => item.id)).toEqual([run.id]);
   });
 
+  it('does not advertise a running run without a recovery fact', () => {
+    store.create({ threadId, model: 'gpt-test' });
+    expect(store.getRecoverableByThread(threadId)).toEqual([]);
+  });
+
   it('completes a run', () => {
     const run = store.create({ threadId, model: 'gpt-test' });
     store.complete(run.id);

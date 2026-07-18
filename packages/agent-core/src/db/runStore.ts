@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { AgentRun, CreateRunInput } from './types.js';
+import type { RunCheckpoint } from '../agents/checkpoint.js';
 
 interface RunRow {
   id: string;
@@ -18,7 +19,30 @@ interface RunRow {
   checkpoint: string | null;
 }
 
-function rowToAgentRun(row: RunRow): AgentRun {
+function recoveryPointFromTrace(
+  db: Database.Database,
+  runId: string,
+): RunCheckpoint | undefined {
+  const row = db
+    .prepare(
+      `SELECT event_data FROM trace_events
+       WHERE run_id = ? AND event_type = 'recovery_point'
+       ORDER BY sequence DESC, created_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(runId) as { event_data: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const event = JSON.parse(row.event_data) as {
+      type?: string;
+      checkpoint?: RunCheckpoint;
+    };
+    return event.type === 'recovery_point' ? event.checkpoint : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rowToAgentRun(row: RunRow, db: Database.Database): AgentRun {
   return {
     id: row.id,
     threadId: row.thread_id,
@@ -32,7 +56,11 @@ function rowToAgentRun(row: RunRow): AgentRun {
     traceStatus: row.trace_status,
     droppedTraceEvents: row.dropped_trace_events,
     traceError: row.trace_error ?? undefined,
-    checkpoint: row.checkpoint ? JSON.parse(row.checkpoint) : undefined,
+    // New runs recover from their ordered Trace. The column is only a
+    // backward-compatibility fallback for runs created before recovery_point.
+    checkpoint:
+      recoveryPointFromTrace(db, row.id) ??
+      (row.checkpoint ? JSON.parse(row.checkpoint) : undefined),
   };
 }
 
@@ -73,7 +101,7 @@ export class RunStore {
       .prepare('SELECT * FROM agent_runs WHERE id = ?')
       .get(id) as RunRow | undefined;
 
-    return row ? rowToAgentRun(row) : undefined;
+    return row ? rowToAgentRun(row, this.db) : undefined;
   }
 
   getByThread(threadId: string): AgentRun[] {
@@ -83,7 +111,7 @@ export class RunStore {
       )
       .all(threadId) as RunRow[];
 
-    return rows.map(rowToAgentRun);
+    return rows.map((row) => rowToAgentRun(row, this.db));
   }
 
   update(id: string, updates: Partial<AgentRun>): void {
@@ -149,22 +177,36 @@ export class RunStore {
     const rows = this.db
       .prepare(
         `SELECT * FROM agent_runs
-         WHERE thread_id = ? AND status = 'running' AND checkpoint IS NOT NULL
+         WHERE thread_id = ? AND status = 'running'
+           AND (
+             checkpoint IS NOT NULL OR EXISTS (
+               SELECT 1 FROM trace_events
+               WHERE trace_events.run_id = agent_runs.id
+                 AND trace_events.event_type = 'recovery_point'
+             )
+           )
          ORDER BY start_time DESC`
       )
       .all(threadId) as RunRow[];
-    return rows.map(rowToAgentRun);
+    return rows.map((row) => rowToAgentRun(row, this.db));
   }
 
   getWaitingByThread(threadId: string): AgentRun | undefined {
     const row = this.db
       .prepare(
         `SELECT * FROM agent_runs
-         WHERE thread_id = ? AND status = 'waiting_for_input' AND checkpoint IS NOT NULL
+         WHERE thread_id = ? AND status = 'waiting_for_input'
+           AND (
+             checkpoint IS NOT NULL OR EXISTS (
+               SELECT 1 FROM trace_events
+               WHERE trace_events.run_id = agent_runs.id
+                 AND trace_events.event_type = 'recovery_point'
+             )
+           )
          ORDER BY start_time DESC LIMIT 1`
       )
       .get(threadId) as RunRow | undefined;
-    return row ? rowToAgentRun(row) : undefined;
+    return row ? rowToAgentRun(row, this.db) : undefined;
   }
 
   /** Atomically claim a waiting run so the same answer cannot resume it twice. */

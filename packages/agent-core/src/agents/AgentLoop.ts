@@ -283,7 +283,7 @@ export class AgentLoop extends EventEmitter {
       maxReplanAttempts: this.maxReplanAttempts,
       maxRetryAttempts: this.maxRetryAttempts,
       checkSignal: () => this.checkSignal(),
-      saveCheckpoint: (runId, checkpoint) => this.saveCheckpoint(runId, checkpoint),
+      recordRecoveryPoint: (runId, checkpoint) => this.recordRecoveryPoint(runId, checkpoint),
     };
     this.simpleLoop = new SimpleLoop(infra);
     this.planningLoop = new PlanningLoop(infra);
@@ -578,7 +578,7 @@ export class AgentLoop extends EventEmitter {
         // question is part of the user-visible conversation and survives
         // /history plus process restarts like any normal assistant message.
         this.contextManager.addMessage({ role: 'assistant', content: result.inputRequest.question });
-        this.saveCheckpoint(runId, result.checkpoint);
+        this.recordRecoveryPoint(runId, result.checkpoint);
         this.recorder.record({ type: 'input_required', request: result.inputRequest });
         this.recorder.record({
           type: 'run',
@@ -792,9 +792,11 @@ export class AgentLoop extends EventEmitter {
     this.toolCallStore.create(input);
   }
 
-  private saveCheckpoint(runId: string | undefined, checkpoint: RunCheckpoint): void {
+  private recordRecoveryPoint(runId: string | undefined, checkpoint: RunCheckpoint): void {
     if (!runId || !this.runStore) return;
-    this.runStore.update(runId, { checkpoint });
+    // The ordered Trace is the single recovery source for new runs. This
+    // mandatory write replaces the old agent_runs.checkpoint mirror.
+    this.recorder.recordRecoveryPoint(checkpoint);
   }
 
   private formatMemories(memories: Memory[]): string {

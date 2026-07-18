@@ -66,4 +66,42 @@ describe('TraceEventStore', () => {
     store.deleteByRun(runId);
     expect(store.getByRun(runId)).toHaveLength(0);
   });
+
+  it('keeps an exact recovery fact internally while sanitizing public Trace reads', () => {
+    store.create({
+      runId,
+      threadId,
+      eventType: 'recovery_point',
+      eventData: {
+        type: 'recovery_point',
+        checkpoint: {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          originalMessage: 'Deploy',
+          loopMode: 'simple',
+          recoveryCount: 0,
+          pendingInput: {
+            id: 'approval-1',
+            kind: 'tool_approval',
+            question: 'Approve?',
+            createdAt: new Date().toISOString(),
+            approval: {
+              toolCall: { id: 'call-1', name: 'run_command', arguments: { api_key: 'secret-value' } },
+              fingerprint: 'fingerprint',
+            },
+          },
+        },
+      },
+    });
+
+    expect(JSON.stringify(store.getByRun(runId))).not.toContain('secret-value');
+    const raw = db.prepare(
+      `SELECT event_data FROM trace_events
+       WHERE run_id = ? AND event_type = 'recovery_point'`
+    ).get(runId) as { event_data: string };
+    expect(raw.event_data).toContain('secret-value');
+    expect(runStore.getById(runId)?.checkpoint).toMatchObject({
+      pendingInput: { approval: { toolCall: { arguments: { api_key: 'secret-value' } } } },
+    });
+  });
 });

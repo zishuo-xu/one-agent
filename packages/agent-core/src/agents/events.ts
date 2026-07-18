@@ -3,6 +3,7 @@ import type { ModelCallTraceEvent, TokenUsage } from '../model/types.js';
 import type { FailureAnalysis, Plan } from '../planning/types.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
 import type { UserInputRequest } from './requestUserInputTool.js';
+import type { RunCheckpoint } from './checkpoint.js';
 
 /**
  * Public facts emitted while an agent runs.
@@ -94,6 +95,12 @@ export type AgentEvent =
       error?: string;
     }
   | { type: 'message'; content: string }
+  /**
+   * Durable recovery fact stored in the same ordered Trace as every other
+   * execution event. It is read only when a run must resume; there is no
+   * separately maintained checkpoint record for new runs.
+   */
+  | { type: 'recovery_point'; checkpoint: RunCheckpoint }
   | { type: 'input_required'; request: UserInputRequest }
   | { type: 'input_received'; requestId: string };
 

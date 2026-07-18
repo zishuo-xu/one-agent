@@ -98,6 +98,21 @@ export class RunRecorder {
     this.persistTraceEvent(event);
   }
 
+  /**
+   * Persist a recovery point as a mandatory Trace fact. Unlike observational
+   * events, losing this event would make the recorded history unsafe to
+   * resume, so persistence failure stops the current state transition.
+   */
+  recordRecoveryPoint(checkpoint: Extract<AgentEvent, { type: 'recovery_point' }>['checkpoint']): void {
+    const event: AgentEvent = { type: 'recovery_point', checkpoint };
+    this.events.push(event);
+    this.onEvent?.(event);
+
+    if (!this.traceEventStore) return;
+    this.flushDeltaTraceBuffers();
+    this.persistTraceEvent(event, new Date().toISOString(), true);
+  }
+
   accumulateUsage(usage?: TokenUsage, options?: { trackPromptSize?: boolean }): void {
     if (!usage) return;
     this.tokenUsage.promptTokens += usage.promptTokens;
@@ -150,7 +165,11 @@ export class RunRecorder {
     this.deltaTraceBuffers.clear();
   }
 
-  private persistTraceEvent(event: AgentEvent, occurredAt = new Date().toISOString()): void {
+  private persistTraceEvent(
+    event: AgentEvent,
+    occurredAt = new Date().toISOString(),
+    durable = false,
+  ): void {
     const sequence = this.sequence++;
     try {
       this.traceEventStore!.create({
@@ -158,16 +177,20 @@ export class RunRecorder {
         taskId: this.taskId,
         threadId: this.threadId,
         eventType: event.type,
-        eventData: sanitizeTraceEvent(event),
+        // Recovery points are the exact facts used to continue execution.
+        // TraceEventStore sanitizes public reads, while RunStore reads this
+        // raw row only for recovery.
+        eventData: durable ? event : sanitizeTraceEvent(event),
         model: config.model,
         sequence,
         createdAt: occurredAt,
       });
       this.persistedTraceEvents++;
     } catch (error) {
-      // Trace persistence should not break the main loop.
       this.droppedTraceEvents++;
       this.traceError = error instanceof Error ? error.message : String(error);
+      if (durable) throw error;
+      // Observational Trace persistence should not break the main loop.
     }
   }
 }

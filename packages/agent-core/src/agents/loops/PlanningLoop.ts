@@ -51,7 +51,7 @@ export class PlanningLoop implements LoopStrategy {
   private readonly maxReplanAttempts: number;
   private readonly maxRetryAttempts: number;
   private readonly checkSignal: () => void;
-  private readonly persistCheckpoint: LoopInfrastructure['saveCheckpoint'];
+  private readonly persistRecoveryPoint: LoopInfrastructure['recordRecoveryPoint'];
   constructor(infra: LoopInfrastructure) {
     this.contextManager = infra.contextManager;
     this.modelCaller = infra.modelCaller;
@@ -64,7 +64,7 @@ export class PlanningLoop implements LoopStrategy {
     this.maxReplanAttempts = infra.maxReplanAttempts;
     this.maxRetryAttempts = infra.maxRetryAttempts;
     this.checkSignal = infra.checkSignal;
-    this.persistCheckpoint = infra.saveCheckpoint;
+    this.persistRecoveryPoint = infra.recordRecoveryPoint;
   }
 
   async run(context: RunContext): Promise<LoopResult> {
@@ -122,7 +122,7 @@ export class PlanningLoop implements LoopStrategy {
       },
     };
     this.recordPlan(plan);
-    this.saveCheckpoint(state);
+    this.recordRecoveryPoint(state);
 
     // Execution units: single steps run in the main agent; consecutive
     // delegate+parallel steps are grouped into waves that run concurrently
@@ -218,7 +218,7 @@ export class PlanningLoop implements LoopStrategy {
       if (executionResult.next === 'waiting_for_input') {
         if (unit.type === 'single') this.setStepStatus(state, unit.step, 'pending');
         state.checkpoint.pendingInput = executionResult.inputRequest;
-        this.saveCheckpoint(state);
+        this.recordRecoveryPoint(state);
         const { runId: _runId, ...checkpoint } = state.checkpoint;
         return {
           status: 'waiting_for_input',
@@ -742,7 +742,7 @@ export class PlanningLoop implements LoopStrategy {
       status,
       attempt,
     });
-    this.saveCheckpoint(state);
+    this.recordRecoveryPoint(state);
   }
 
   private updateCheckpointProgress(
@@ -756,7 +756,7 @@ export class PlanningLoop implements LoopStrategy {
     state.checkpoint.replanAttempts = replanAttempts;
     state.checkpoint.retryAttempts = retryAttempts;
     state.checkpoint.plan = plan;
-    this.saveCheckpoint(state);
+    this.recordRecoveryPoint(state);
   }
 
   private setActiveToolCall(
@@ -764,13 +764,13 @@ export class PlanningLoop implements LoopStrategy {
     activeToolCall: ActiveToolCheckpoint | undefined,
   ): void {
     state.checkpoint.activeToolCall = activeToolCall;
-    this.saveCheckpoint(state);
+    this.recordRecoveryPoint(state);
   }
 
-  private saveCheckpoint(state: PlanningRunState): void {
+  private recordRecoveryPoint(state: PlanningRunState): void {
     state.checkpoint.updatedAt = new Date().toISOString();
     const { runId, ...checkpoint } = state.checkpoint;
-    this.persistCheckpoint(runId, JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint);
+    this.persistRecoveryPoint(runId, JSON.parse(JSON.stringify(checkpoint)) as RunCheckpoint);
   }
 
   private buildStepPrompt(

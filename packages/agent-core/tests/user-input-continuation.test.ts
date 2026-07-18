@@ -61,6 +61,14 @@ describe('durable user-input continuation', () => {
       originalMessage: 'Deploy the service',
       pendingInput: { question: 'Which environment?' },
     });
+    const physicalRun = db.prepare('SELECT checkpoint FROM agent_runs WHERE id = ?')
+      .get(waitingRun!.id) as { checkpoint: string | null };
+    expect(physicalRun.checkpoint).toBeNull();
+    const recoveryPointCount = db.prepare(
+      `SELECT COUNT(*) AS count FROM trace_events
+       WHERE run_id = ? AND event_type = 'recovery_point'`
+    ).get(waitingRun!.id) as { count: number };
+    expect(recoveryPointCount.count).toBe(1);
 
     const reopenedAgent = new AgentLoop({
       threadId,

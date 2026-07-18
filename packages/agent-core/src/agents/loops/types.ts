@@ -23,7 +23,7 @@ export interface LoopInfrastructure {
   maxReplanAttempts: number;
   maxRetryAttempts: number;
   checkSignal: () => void;
-  saveCheckpoint: (runId: string | undefined, checkpoint: RunCheckpoint) => void;
+  recordRecoveryPoint: (runId: string | undefined, checkpoint: RunCheckpoint) => void;
 }
 
 /** One execution strategy. Add a new loop mode by implementing this interface. */

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { TraceEvent, CreateTraceEventInput } from './types.js';
+import { sanitizeTraceEvent } from '../agents/traceSanitizer.js';
 
 interface TraceEventRow {
   id: string;
@@ -21,7 +22,9 @@ function rowToTraceEvent(row: TraceEventRow): TraceEvent {
     taskId: row.task_id,
     threadId: row.thread_id,
     eventType: row.event_type,
-    eventData: JSON.parse(row.event_data) as TraceEvent['eventData'],
+    // Public Trace consumers never receive raw secrets from durable recovery
+    // points. Recovery itself is an internal RunStore read of the same row.
+    eventData: sanitizeTraceEvent(JSON.parse(row.event_data) as TraceEvent['eventData']),
     model: row.model,
     sequence: row.sequence,
     createdAt: row.created_at,

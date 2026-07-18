@@ -12,7 +12,6 @@ const fixture = fileURLToPath(new URL('./fixtures/recovery-crash-child.mjs', imp
 interface RunRow {
   id: string;
   status: string;
-  checkpoint: string | null;
 }
 
 beforeAll(() => {
@@ -38,9 +37,9 @@ describe('process crash recovery', () => {
     expect(resumed.ok).toBe(true);
 
     const db = new Database(harness.dbPath);
-    const runs = db.prepare('SELECT id, status, checkpoint FROM agent_runs ORDER BY start_time ASC').all() as RunRow[];
+    const runs = db.prepare('SELECT id, status FROM agent_runs ORDER BY start_time ASC').all() as RunRow[];
     expect(runs.map((run) => run.status)).toEqual(['interrupted', 'completed']);
-    const newCheckpoint = JSON.parse(runs[1].checkpoint!);
+    const newCheckpoint = readRecoveryPoint(db, runs[1].id)!;
     expect(newCheckpoint.resumedFromRunId).toBe(oldRun.id);
     expect(newCheckpoint.plan.steps[0].status).toBe('completed');
     const resumedTrace = db.prepare(
@@ -86,7 +85,7 @@ describe('process crash recovery', () => {
     expect(readFileSync(path.join(harness.workspace, 'write-count.txt'), 'utf8').trim().split('\n')).toHaveLength(1);
 
     const db = new Database(harness.dbPath);
-    const runs = db.prepare('SELECT id, status, checkpoint FROM agent_runs').all() as RunRow[];
+    const runs = db.prepare('SELECT id, status FROM agent_runs').all() as RunRow[];
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe('recovery_required');
     db.close();
@@ -130,9 +129,9 @@ async function waitForRun(
       const db = new Database(dbPath, { readonly: true });
       try {
         const run = db.prepare(
-          'SELECT id, status, checkpoint FROM agent_runs ORDER BY start_time DESC LIMIT 1'
+          'SELECT id, status FROM agent_runs ORDER BY start_time DESC LIMIT 1'
         ).get() as RunRow | undefined;
-        const checkpoint = run?.checkpoint ? JSON.parse(run.checkpoint) : undefined;
+        const checkpoint = run ? readRecoveryPoint(db, run.id) : undefined;
         if (run && predicate(run, checkpoint)) return run;
       } catch (error) {
         // The SQLite file can become visible a few milliseconds before the
@@ -147,7 +146,19 @@ async function waitForRun(
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error('Timed out waiting for the child process checkpoint');
+  throw new Error('Timed out waiting for the child process recovery point');
+}
+
+function readRecoveryPoint(
+  db: Database.Database,
+  runId: string,
+): Record<string, any> | undefined {
+  const row = db.prepare(
+    `SELECT event_data FROM trace_events
+     WHERE run_id = ? AND event_type = 'recovery_point'
+     ORDER BY sequence DESC, created_at DESC, rowid DESC LIMIT 1`
+  ).get(runId) as { event_data: string } | undefined;
+  return row ? JSON.parse(row.event_data).checkpoint : undefined;
 }
 
 async function killProcess(child: ChildProcess): Promise<void> {
