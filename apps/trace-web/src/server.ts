@@ -30,6 +30,122 @@ export interface RunOverview {
     resumedFromRunId?: string;
     resumedByRunIds: string[];
   };
+  approvals: ToolApprovalView[];
+}
+
+export interface ToolApprovalView {
+  requestId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  requestedAt: string;
+  requestRunId: string;
+  responseRunId?: string;
+  resolvedAt?: string;
+  decision: 'waiting' | 'resolving' | 'approved' | 'rejected';
+  execution: 'pending' | 'not_executed' | 'succeeded' | 'failed';
+  executionError?: string;
+}
+
+/**
+ * Project persisted approval facts into a human-readable cross-Run timeline.
+ * This is a read-only Trace view: no approval or Run state is inferred back
+ * into the Runtime, and incomplete chains remain visibly pending.
+ */
+export function buildToolApprovalTimeline(traces: TraceEvent[]): ToolApprovalView[] {
+  return traces.flatMap((requestEvent): ToolApprovalView[] => {
+    const requestData = requestEvent.eventData;
+    if (
+      requestData.type !== 'input_required' ||
+      requestData.request.kind !== 'tool_approval' ||
+      !requestData.request.approval ||
+      !requestEvent.runId
+    ) return [];
+
+    const request = requestData.request;
+    const frozenCall = requestData.request.approval.toolCall;
+    const responseEvent = traces.find(
+      (event) =>
+        Boolean(event.runId) &&
+        event.eventData.type === 'input_received' &&
+        event.eventData.requestId === request.id,
+    );
+    if (!responseEvent?.runId) {
+      return [{
+        requestId: request.id,
+        toolName: frozenCall.name,
+        arguments: frozenCall.arguments,
+        requestedAt: requestEvent.createdAt,
+        requestRunId: requestEvent.runId,
+        decision: 'waiting',
+        execution: 'pending',
+      }];
+    }
+
+    const responseRunTraces = traces.filter((event) => event.runId === responseEvent.runId);
+    const rejected = responseRunTraces.find(
+      (event) =>
+        event.eventData.type === 'tool_result' &&
+        event.eventData.toolCallId === frozenCall.id &&
+        event.eventData.status === 'rejected',
+    );
+    if (rejected?.eventData.type === 'tool_result') {
+      return [{
+        requestId: request.id,
+        toolName: frozenCall.name,
+        arguments: frozenCall.arguments,
+        requestedAt: requestEvent.createdAt,
+        requestRunId: requestEvent.runId,
+        responseRunId: responseEvent.runId,
+        resolvedAt: rejected.createdAt,
+        decision: 'rejected',
+        execution: 'not_executed',
+        executionError: rejected.eventData.toolResult.error,
+      }];
+    }
+
+    const approvedPolicy = responseRunTraces.find(
+      (event) =>
+        event.eventData.type === 'tool_policy' &&
+        event.eventData.toolName === frozenCall.name &&
+        event.eventData.toolCallId.startsWith(`${frozenCall.id}:approved:`) &&
+        event.eventData.approved === true,
+    );
+    if (approvedPolicy?.eventData.type !== 'tool_policy') {
+      return [{
+        requestId: request.id,
+        toolName: frozenCall.name,
+        arguments: frozenCall.arguments,
+        requestedAt: requestEvent.createdAt,
+        requestRunId: requestEvent.runId,
+        responseRunId: responseEvent.runId,
+        resolvedAt: responseEvent.createdAt,
+        decision: 'resolving',
+        execution: 'pending',
+      }];
+    }
+
+    const approvedToolCallId = approvedPolicy.eventData.toolCallId;
+    const result = responseRunTraces.find(
+      (event) =>
+        event.eventData.type === 'tool_result' &&
+        event.eventData.toolCallId === approvedToolCallId,
+    );
+    const failed = result?.eventData.type === 'tool_result' && !result.eventData.toolResult.success;
+    return [{
+      requestId: request.id,
+      toolName: frozenCall.name,
+      arguments: frozenCall.arguments,
+      requestedAt: requestEvent.createdAt,
+      requestRunId: requestEvent.runId,
+      responseRunId: responseEvent.runId,
+      resolvedAt: result?.createdAt ?? approvedPolicy.createdAt,
+      decision: 'approved',
+      execution: result ? (failed ? 'failed' : 'succeeded') : 'pending',
+      executionError: failed && result?.eventData.type === 'tool_result'
+        ? result.eventData.toolResult.error
+        : undefined,
+    }];
+  });
 }
 
 /** Build a read-only summary from persisted facts; it never changes Run state. */
@@ -66,6 +182,9 @@ export function buildRunOverview(
       );
     })
     .map((candidate) => candidate.id);
+  const approvals = buildToolApprovalTimeline(threadTraces).filter(
+    (approval) => approval.requestRunId === run.id || approval.responseRunId === run.id,
+  );
 
   return {
     run,
@@ -92,6 +211,7 @@ export function buildRunOverview(
       resumedFromRunId,
       resumedByRunIds,
     },
+    approvals,
   };
 }
 
@@ -155,6 +275,15 @@ export function buildTraceWebServer(): FastifyInstance {
       return reply.status(404).send({ error: `Thread not found: ${id}` });
     }
     return traceEventStore.getByThread(id);
+  });
+
+  fastify.get<{ Params: { id: string } }>('/api/threads/:id/approvals', async (request, reply) => {
+    const { id } = request.params;
+    const thread = threadStore.getById(id);
+    if (!thread) {
+      return reply.status(404).send({ error: `Thread not found: ${id}` });
+    }
+    return buildToolApprovalTimeline(traceEventStore.getByThread(id));
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/traces', async (request, reply) => {
@@ -222,6 +351,7 @@ function renderViewerPage(): string {
       --model_call: #06b6d4;
       --plan_step: #a78bfa;
       --strategy_switch: #f59e0b;
+      --tool_policy: #f97316;
       --warning: #f97316;
     }
     * { box-sizing: border-box; }
@@ -337,6 +467,7 @@ function renderViewerPage(): string {
     .event.model_call { border-left-color: var(--model_call); }
     .event.plan_step { border-left-color: var(--plan_step); }
     .event.strategy_switch { border-left-color: var(--strategy_switch); }
+    .event.tool_policy, .event.input_required, .event.input_received { border-left-color: var(--tool_policy); }
     .event-header {
       display: flex;
       align-items: center;
@@ -437,6 +568,51 @@ function renderViewerPage(): string {
       text-decoration: underline;
       text-underline-offset: 2px;
     }
+    .approval-panel {
+      display: none;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(124, 45, 18, 0.14);
+    }
+    .approval-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .approval-panel-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+    .approval-list { display: grid; gap: 8px; }
+    .approval-card {
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--warning);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .approval-card.approved { border-left-color: var(--tool_result); }
+    .approval-card.rejected { border-left-color: var(--failed); }
+    .approval-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .approval-tool { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-weight: 650; }
+    .approval-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 10px 0 8px; }
+    .approval-step {
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .approval-step.done { color: #6ee7b7; border-color: #047857; background: #064e3b; }
+    .approval-step.failed { color: #fca5a5; border-color: #b91c1c; background: #7f1d1d; }
+    .approval-step.waiting { color: #fdba74; border-color: #c2410c; background: #7c2d12; }
+    .approval-arrow { color: var(--muted); font-size: 11px; }
+    .approval-args {
+      color: var(--muted);
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     /* Visual timeline bar */
     .timeline-bar {
       display: flex;
@@ -474,6 +650,7 @@ function renderViewerPage(): string {
     .timeline-seg.model_call { background: var(--model_call); }
     .timeline-seg.plan_step { background: var(--plan_step); }
     .timeline-seg.strategy_switch { background: var(--strategy_switch); }
+    .timeline-seg.tool_policy, .timeline-seg.input_required, .timeline-seg.input_received { background: var(--tool_policy); }
     /* Filter buttons */
     .filters {
       display: flex;
@@ -506,6 +683,7 @@ function renderViewerPage(): string {
     .filter-btn.model_call { border-color: var(--model_call); }
     .filter-btn.plan_step { border-color: var(--plan_step); }
     .filter-btn.strategy_switch { border-color: var(--strategy_switch); }
+    .filter-btn.tool_policy, .filter-btn.input_required, .filter-btn.input_received { border-color: var(--tool_policy); }
     /* Collapsible events */
     .event { cursor: pointer; }
     .event .event-full { display: none; margin-top: 8px; }
@@ -589,6 +767,7 @@ function renderViewerPage(): string {
         </div>
       </div>
       <div id="run-overview" class="run-overview"></div>
+      <div id="approval-panel" class="approval-panel"></div>
       <div id="filters" class="filters" style="padding: 8px 16px; display: none;"></div>
       <div id="timeline-bar-container" style="padding: 0 16px; display: none;">
         <div id="timeline-bar" class="timeline-bar"></div>
@@ -656,6 +835,7 @@ function renderViewerPage(): string {
         fetchJson(\`/api/runs/\${id}/traces\`),
       ]);
       renderRunOverview(overview);
+      renderApprovalTimeline(overview.approvals, 'Approvals related to this run');
       renderTraces(traces, 'Run ' + id.slice(0, 8));
     }
 
@@ -664,7 +844,11 @@ function renderViewerPage(): string {
       selectedRunId = null;
       document.querySelectorAll('#runs .item').forEach(el => el.classList.remove('active'));
       document.getElementById('run-overview').style.display = 'none';
-      const traces = await fetchJson(\`/api/threads/\${selectedThreadId}/traces\`);
+      const [traces, approvals] = await Promise.all([
+        fetchJson(\`/api/threads/\${selectedThreadId}/traces\`),
+        fetchJson(\`/api/threads/\${selectedThreadId}/approvals\`),
+      ]);
+      renderApprovalTimeline(approvals, 'Tool approval timeline');
       renderTraces(traces, 'All traces for thread');
     }
 
@@ -716,6 +900,58 @@ function renderViewerPage(): string {
       return \`<span class="run-link" onclick="selectRun(\${escapeHtml(JSON.stringify(id))})">\${escapeHtml(id.slice(0, 8))}</span>\`;
     }
 
+    function renderApprovalTimeline(approvals, title) {
+      const container = document.getElementById('approval-panel');
+      if (!Array.isArray(approvals) || approvals.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+      }
+      const cards = approvals.map(approval => {
+        const decision = approval.decision === 'approved'
+          ? { label: 'Approved', className: 'done' }
+          : approval.decision === 'rejected'
+            ? { label: 'Rejected', className: 'failed' }
+            : approval.decision === 'resolving'
+              ? { label: 'Response received', className: 'waiting' }
+              : { label: 'Awaiting decision', className: 'waiting' };
+        const execution = approval.execution === 'succeeded'
+          ? { label: 'Executed', className: 'done' }
+          : approval.execution === 'failed'
+            ? { label: 'Execution failed', className: 'failed' }
+            : approval.execution === 'not_executed'
+              ? { label: 'Not executed', className: 'failed' }
+              : { label: approval.decision === 'approved' ? 'Executing' : 'Not started', className: 'waiting' };
+        const runMeta = 'requested in ' + runLink(approval.requestRunId)
+          + (approval.responseRunId ? ' · answered in ' + runLink(approval.responseRunId) : '');
+        const args = JSON.stringify(approval.arguments ?? {}, null, 2);
+        return \`
+          <div class="approval-card \${escapeHtml(approval.decision)}">
+            <div class="approval-card-head">
+              <span class="approval-tool">\${escapeHtml(approval.toolName)}</span>
+              <span class="item-meta">\${runMeta}</span>
+            </div>
+            <div class="approval-flow" aria-label="Approval flow">
+              <span class="approval-step done">Requested</span>
+              <span class="approval-arrow">→</span>
+              <span class="approval-step \${decision.className}">\${decision.label}</span>
+              <span class="approval-arrow">→</span>
+              <span class="approval-step \${execution.className}">\${execution.label}</span>
+            </div>
+            <div class="approval-args">\${escapeHtml(args)}\${approval.executionError ? '\\n' + escapeHtml(approval.executionError) : ''}</div>
+          </div>
+        \`;
+      }).join('');
+      container.innerHTML = \`
+        <div class="approval-panel-head">
+          <div class="approval-panel-title">\${escapeHtml(title)}</div>
+          <div class="item-meta">\${approvals.length} request\${approvals.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="approval-list">\${cards}</div>
+      \`;
+      container.style.display = 'block';
+    }
+
     function summarizeEvent(e) {
       const d = e.eventData ?? {};
       switch (e.eventType) {
@@ -763,6 +999,18 @@ function renderViewerPage(): string {
           }
           return { label: 'ok' + (d.durationMs !== undefined ? ' · ' + d.durationMs + 'ms' : ''), preview: typeof data === 'string' ? data.slice(0, 200) : '' };
         }
+        case 'tool_policy':
+          return {
+            label: d.approved ? 'approved' : (d.decision ?? '?'),
+            preview: (d.toolName ?? '?') + (d.reason ? ' · ' + d.reason : ''),
+          };
+        case 'input_required':
+          return {
+            label: d.request?.kind ?? 'input',
+            preview: d.request?.question ?? '',
+          };
+        case 'input_received':
+          return { label: 'response received', preview: 'request ' + (d.requestId ?? '?') };
         case 'message':
           return { label: '', preview: (d.content ?? '').slice(0, 300) };
         case 'verification': {

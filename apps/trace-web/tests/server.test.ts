@@ -236,6 +236,132 @@ describe('trace web server', () => {
     expect(body[0].eventType).toBe('plan');
   });
 
+  it('GET /api/threads/:id/approvals projects approved, rejected, and waiting chains across runs', async () => {
+    const db = getSharedConnection();
+    const thread = new ThreadStore(db).create({});
+    const runStore = new RunStore(db);
+    const traceStore = new TraceEventStore(db);
+    const requestRun = runStore.create({ threadId: thread.id, model: 'test', status: 'waiting_for_input' });
+    const approvedRun = runStore.create({ threadId: thread.id, model: 'test', status: 'completed' });
+    const rejectedRequestRun = runStore.create({ threadId: thread.id, model: 'test', status: 'waiting_for_input' });
+    const rejectedRun = runStore.create({ threadId: thread.id, model: 'test', status: 'completed' });
+    const waitingRun = runStore.create({ threadId: thread.id, model: 'test', status: 'waiting_for_input' });
+    const base = (runId: string) => ({ runId, threadId: thread.id, model: 'test' });
+
+    traceStore.create({
+      ...base(requestRun.id),
+      eventType: 'input_required',
+      eventData: {
+        type: 'input_required',
+        request: {
+          id: 'approval-approved',
+          kind: 'tool_approval',
+          question: 'Allow command?',
+          createdAt: new Date().toISOString(),
+          approval: {
+            toolCall: { id: 'command-1', name: 'run_command', arguments: { command: 'pwd' } },
+            fingerprint: 'fingerprint-1',
+          },
+        },
+      },
+    });
+    traceStore.create({
+      ...base(approvedRun.id),
+      eventType: 'input_received',
+      eventData: { type: 'input_received', requestId: 'approval-approved' },
+    });
+    traceStore.create({
+      ...base(approvedRun.id),
+      eventType: 'tool_policy',
+      eventData: {
+        type: 'tool_policy', toolCallId: 'command-1:approved:1', toolName: 'run_command',
+        decision: 'allow', approved: true,
+      },
+    });
+    traceStore.create({
+      ...base(approvedRun.id),
+      eventType: 'tool_result',
+      eventData: {
+        type: 'tool_result', toolCallId: 'command-1:approved:1', status: 'succeeded',
+        toolResult: { success: true, data: { stdout: '/workspace' } },
+      },
+    });
+
+    traceStore.create({
+      ...base(rejectedRequestRun.id),
+      eventType: 'input_required',
+      eventData: {
+        type: 'input_required',
+        request: {
+          id: 'approval-rejected',
+          kind: 'tool_approval',
+          question: 'Allow deletion?',
+          createdAt: new Date().toISOString(),
+          approval: {
+            toolCall: { id: 'delete-1', name: 'delete_file', arguments: { path: 'keep.txt' } },
+            fingerprint: 'fingerprint-2',
+          },
+        },
+      },
+    });
+    traceStore.create({
+      ...base(rejectedRun.id),
+      eventType: 'input_received',
+      eventData: { type: 'input_received', requestId: 'approval-rejected' },
+    });
+    traceStore.create({
+      ...base(rejectedRun.id),
+      eventType: 'tool_result',
+      eventData: {
+        type: 'tool_result', toolCallId: 'delete-1', status: 'rejected',
+        toolResult: { success: false, error: 'Tool execution rejected by user.' },
+      },
+    });
+
+    traceStore.create({
+      ...base(waitingRun.id),
+      eventType: 'input_required',
+      eventData: {
+        type: 'input_required',
+        request: {
+          id: 'approval-waiting',
+          kind: 'tool_approval',
+          question: 'Allow deletion?',
+          createdAt: new Date().toISOString(),
+          approval: {
+            toolCall: { id: 'delete-2', name: 'delete_file', arguments: { path: 'old.txt' } },
+            fingerprint: 'fingerprint-3',
+          },
+        },
+      },
+    });
+
+    const server = buildServer();
+    const response = await server.inject({ method: 'GET', url: `/api/threads/${thread.id}/approvals` });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'approval-approved', decision: 'approved', execution: 'succeeded',
+        requestRunId: requestRun.id, responseRunId: approvedRun.id,
+      }),
+      expect.objectContaining({
+        requestId: 'approval-rejected', decision: 'rejected', execution: 'not_executed',
+        requestRunId: rejectedRequestRun.id, responseRunId: rejectedRun.id,
+      }),
+      expect.objectContaining({
+        requestId: 'approval-waiting', decision: 'waiting', execution: 'pending',
+        requestRunId: waitingRun.id,
+      }),
+    ]));
+  });
+
+  it('GET /api/threads/:id/approvals returns 404 for a missing thread', async () => {
+    const server = buildServer();
+    const response = await server.inject({ method: 'GET', url: '/api/threads/nonexistent/approvals' });
+    expect(response.statusCode).toBe(404);
+  });
+
   it('GET /api/runs/:id/traces round-trips the embedded sub-agent event stream', async () => {
     const db = getSharedConnection();
     const threadStore = new ThreadStore(db);
@@ -298,5 +424,8 @@ describe('trace web server', () => {
     expect(response.body).toContain('renderRunOverview');
     expect(response.body).toContain('data-run-id="${escapeHtml(r.id)}"');
     expect(response.body).toContain("el.dataset.runId === id");
+    expect(response.body).toContain('renderApprovalTimeline');
+    expect(response.body).toContain('/api/threads/${selectedThreadId}/approvals');
+    expect(response.body).toContain('Approval flow');
   });
 });

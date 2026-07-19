@@ -93,6 +93,7 @@ one-agent trace          # 全局命令，只启动只读 Trace Viewer
 
 Trace Viewer 会按 Thread 和 Run 展示执行时间线。选中单次 Run 后，顶部总览会汇总状态、Trace 健康度、
 耗时、token、模型调用、工具调用、重试次数和事件数量；中断前后的 Run 可以沿恢复关系互相跳转。
+工具审批会以“请求 → 批准/拒绝 → 执行结果”的跨 Run 时间线单独展示，等待中的审批也会明确标记。
 
 ### 全局安装（输入 `one-agent` 启动）
 
