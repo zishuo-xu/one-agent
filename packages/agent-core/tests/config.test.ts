@@ -1,47 +1,61 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { config } from '../src/config.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
+  config,
+  configureSystem,
+  createDefaultSystemConfig,
+  loadSystemConfig,
+  redactSystemConfig,
+} from '../src/config.js';
 
-describe('config', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.resetModules();
+describe('JSON system configuration', () => {
+  afterEach(() => configureSystem({}));
+  it('provides one typed table with stable defaults', () => {
+    const defaults = createDefaultSystemConfig();
+    expect(defaults.api.port).toBe(3000);
+    expect(defaults.api.host).toBe('127.0.0.1');
+    expect(defaults.context.maxTokens).toBe(4096);
+    expect(defaults.model.model).toBe('gpt-3.5-turbo');
   });
 
-  it('has default values', () => {
-    expect(config.port).toBe(3000);
-    expect(config.host).toBe('127.0.0.1');
-    expect(config.model).toBeDefined();
-    expect(config.systemPrompt).toBeDefined();
-    expect(config.openai).toBeDefined();
+  it('loads partial JSON and resolves the database path against the workspace', () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'one-agent-config-'));
+    const configPath = path.join(workspaceRoot, 'one-agent.config.json');
+    writeFileSync(configPath, JSON.stringify({ context: { maxTokens: 8192 } }));
+
+    const loaded = loadSystemConfig({ workspaceRoot, configPath });
+
+    expect(loaded.context.maxTokens).toBe(8192);
+    expect(loaded.context.recentTokenBudget).toBe(2048);
+    expect(loaded.databasePath).toBe(path.join(workspaceRoot, 'data.db'));
   });
 
-  it('throws loudly on a non-numeric MAX_CONTEXT_TOKENS instead of poisoning budgets with NaN', async () => {
-    vi.stubEnv('MAX_CONTEXT_TOKENS', 'not-a-number');
-    vi.resetModules();
-    await expect(import('../src/config.js')).rejects.toThrow(
-      'Invalid numeric value for MAX_CONTEXT_TOKENS'
-    );
+  it('rejects unknown fields and invalid values with their JSON path', () => {
+    expect(() => configureSystem({ context: { maxTokens: 'many' } })).toThrow();
+    expect(() => configureSystem({ context: { maxTokens: 4096, typo: true } })).toThrow();
   });
 
-  it('accepts valid numeric env overrides', async () => {
-    vi.stubEnv('MAX_CONTEXT_TOKENS', '8192');
-    vi.resetModules();
-    const fresh = await import('../src/config.js');
-    expect(fresh.config.maxContextTokens).toBe(8192);
-  });
-
-  it('selects the native Anthropic Provider through configuration only', async () => {
-    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
-    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
-    vi.stubEnv('ANTHROPIC_MODEL', 'claude-test');
-    vi.resetModules();
-
-    const fresh = await import('../src/config.js');
-
-    expect(fresh.config.model).toBe('claude-test');
-    expect(fresh.config.modelProvider).toMatchObject({
-      name: 'anthropic',
-      model: 'claude-test',
+  it('selects Anthropic and redacts every configured secret', () => {
+    const loaded = configureSystem({
+      model: {
+        provider: 'anthropic',
+        apiKey: 'primary-secret',
+        model: 'claude-test',
+        fallback: {
+          provider: 'openai-compatible',
+          apiKey: 'fallback-secret',
+          model: 'fallback-test',
+        },
+      },
+      tools: { search: { apiKey: 'search-secret' } },
     });
+
+    expect(loaded.modelProvider).toMatchObject({ name: 'fallback', model: 'claude-test' });
+    const redacted = redactSystemConfig(config);
+    expect(redacted.model.apiKey).toBe('[REDACTED]');
+    expect(redacted.model.fallback?.apiKey).toBe('[REDACTED]');
+    expect(redacted.tools.search.apiKey).toBe('[REDACTED]');
   });
 });

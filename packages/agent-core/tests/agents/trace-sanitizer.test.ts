@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { sanitizeTraceEvent } from '../../src/agents/traceSanitizer.js';
-
-const previousMode = process.env.TRACE_CONTENT;
+import { configureSystem } from '../../src/config.js';
 
 afterEach(() => {
-  if (previousMode === undefined) delete process.env.TRACE_CONTENT;
-  else process.env.TRACE_CONTENT = previousMode;
+  configureSystem({});
 });
 
 describe('trace sanitizer', () => {
   it('redacts credential-shaped keys and secret strings by default', () => {
-    delete process.env.TRACE_CONTENT;
+    configureSystem({ trace: { contentMode: 'redacted' } });
     const event = sanitizeTraceEvent({
       type: 'tool_call',
       toolCall: {
@@ -27,13 +25,13 @@ describe('trace sanitizer', () => {
   });
 
   it('keeps structure but omits large content fields in metadata mode', () => {
-    process.env.TRACE_CONTENT = 'metadata';
+    configureSystem({ trace: { contentMode: 'metadata' } });
     const event = sanitizeTraceEvent({ type: 'message', content: 'hello world' });
     expect(event).toEqual({ type: 'message', content: '[OMITTED 11 chars]' });
   });
 
   it('leaves the event untouched in full mode', () => {
-    process.env.TRACE_CONTENT = 'full';
+    configureSystem({ trace: { contentMode: 'full' } });
     const event = { type: 'message', content: 'Bearer visible-token' };
     expect(sanitizeTraceEvent(event)).toBe(event);
   });

@@ -42,16 +42,13 @@ describe('createBuiltInTools', () => {
     }
   });
 
-  it('omits tools listed in DISABLED_TOOLS', () => {
+  it('omits tools listed in the unified tool configuration', () => {
     const sandbox = new Sandbox(buildWorkspaceRoot());
-    process.env.DISABLED_TOOLS = 'run_command, delete_file';
-    try {
-      const names = createBuiltInTools(sandbox).map((t) => t.name);
-      expect(names).not.toContain('run_command');
-      expect(names).not.toContain('delete_file');
-      expect(names).toContain('read_file');
-    } finally {
-      delete process.env.DISABLED_TOOLS;
-    }
+    const names = createBuiltInTools(sandbox, {
+      disabled: ['run_command', 'delete_file'],
+    }).map((t) => t.name);
+    expect(names).not.toContain('run_command');
+    expect(names).not.toContain('delete_file');
+    expect(names).toContain('read_file');
   });
 });

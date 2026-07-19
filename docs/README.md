@@ -71,4 +71,4 @@
 4. 历史文档必须带统一状态提示，并链接到本索引和当前事实源；
 5. 临时任务产物、模型生成报告和用户 workspace 文件不进入项目文档索引，除非经过人工确认并明确纳入项目范围；
 6. 文档修改与对应实现使用同一提交；纯治理修改使用独立 `docs:` 提交并说明未改变 Runtime。
-7. 新增或变更配置必须同步更新 `configuration-reference.md`；常用环境变量同时更新 `.env.example`。
+7. 新增或变更配置必须同步更新 SystemConfig Schema、`configuration-reference.md` 和 `one-agent.config.example.json`。

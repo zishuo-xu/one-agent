@@ -1,15 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import dotenv from 'dotenv';
+import { config, loadSystemConfig } from '@one-agent/agent-core';
 import { resolveWorkspaceRoot } from './workspace.js';
 import { startTraceWebServer } from './server.js';
 
 function parseArgs(): { port: number; host: string } {
   const args = process.argv.slice(2);
   const portIndex = args.indexOf('--port');
-  const port = portIndex >= 0 && args[portIndex + 1] ? Number(args[portIndex + 1]) : 3001;
+  const port = portIndex >= 0 && args[portIndex + 1] ? Number(args[portIndex + 1]) : config.trace.port;
   const hostIndex = args.indexOf('--host');
-  const host = hostIndex >= 0 && args[hostIndex + 1] ? args[hostIndex + 1] : '127.0.0.1';
+  const host = hostIndex >= 0 && args[hostIndex + 1] ? args[hostIndex + 1] : config.trace.host;
   return { port, host };
 }
 
@@ -20,12 +20,7 @@ async function main(): Promise<void> {
     fs.mkdirSync(workspaceRoot, { recursive: true });
   }
 
-  const envPath = path.join(workspaceRoot, '.env');
-  if (fs.existsSync(envPath)) {
-    dotenv.config({ path: envPath });
-  }
-
-  process.env.DATABASE_PATH = process.env.DATABASE_PATH ?? path.join(workspaceRoot, 'data.db');
+  loadSystemConfig({ workspaceRoot });
 
   const { port, host } = parseArgs();
   await startTraceWebServer({ port, host });

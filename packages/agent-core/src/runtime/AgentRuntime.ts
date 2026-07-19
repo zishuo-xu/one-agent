@@ -23,6 +23,7 @@ import { ToolRegistry } from '../tools/registry.js';
 import { Sandbox } from '../tools/sandbox.js';
 import { DefaultToolPolicy, type ToolPolicy } from '../tools/policy.js';
 import { config } from '../config.js';
+import { modelName } from '../configAccess.js';
 import type { ModelProvider, RequiredModelCapability } from '../model/types.js';
 import { assertModelCapabilities } from '../model/capabilities.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
@@ -94,18 +95,15 @@ export class AgentRuntime {
   createAgent(options: CreateRuntimeAgentOptions = {}): AgentLoop {
     const tools = new ToolRegistry();
     tools.registerMany(this.tools.list());
-    const memoryToolDisabled = (process.env.DISABLED_TOOLS ?? '')
-      .split(',')
-      .some((name) => name.trim() === MANAGE_MEMORY_TOOL_NAME);
+    const disabledTools = config.tools?.disabled ?? [];
+    const memoryToolDisabled = disabledTools.includes(MANAGE_MEMORY_TOOL_NAME);
     if (!memoryToolDisabled && !tools.has(MANAGE_MEMORY_TOOL_NAME)) {
       tools.register(createManageMemoryTool({
         memoryStore: this.stores.memories,
         threadId: options.threadId,
       }));
     }
-    const inputToolDisabled = (process.env.DISABLED_TOOLS ?? '')
-      .split(',')
-      .some((name) => name.trim() === REQUEST_USER_INPUT_TOOL_NAME);
+    const inputToolDisabled = disabledTools.includes(REQUEST_USER_INPUT_TOOL_NAME);
     if (options.userInput !== false && !inputToolDisabled && !tools.has(REQUEST_USER_INPUT_TOOL_NAME)) {
       tools.register(createRequestUserInputTool());
     }
@@ -114,7 +112,7 @@ export class AgentRuntime {
     const provider =
       this.modelProvider ??
       config.modelProvider ??
-      new OpenAICompatibleProvider(config.openai, config.model);
+      new OpenAICompatibleProvider(config.openai, modelName());
     const required: RequiredModelCapability[] = ['streaming'];
     if (tools.list().length > 0) required.push('toolCalling');
     assertModelCapabilities(
@@ -142,7 +140,10 @@ export class AgentRuntime {
 
   private createTools(workspaceRoot: string): ToolRegistry {
     const tools = new ToolRegistry();
-    tools.registerMany(createBuiltInTools(new Sandbox(workspaceRoot)));
+    tools.registerMany(createBuiltInTools(new Sandbox(workspaceRoot), {
+      disabled: config.tools?.disabled,
+      search: config.tools?.search,
+    }));
     return tools;
   }
 }

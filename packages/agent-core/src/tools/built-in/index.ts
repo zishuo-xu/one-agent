@@ -35,17 +35,15 @@ const factories: Array<(sandbox: Sandbox) => ToolDefinition> = [
   createSearchFilesTool,
   createGetTimeTool,
   createRunCommandTool,
-  createWebSearchTool,
 ];
 
-export function createBuiltInTools(sandbox: Sandbox): ToolDefinition[] {
-  // Operators can disable tools by name (e.g. DISABLED_TOOLS=run_command,delete_file)
-  // when exposing the agent over an API where shell access would be unsafe.
-  const disabled = (process.env.DISABLED_TOOLS ?? '')
-    .split(',')
-    .map((name) => name.trim())
-    .filter(Boolean);
-  return factories
-    .map((factory) => factory(sandbox))
+export interface BuiltInToolOptions {
+  disabled?: string[];
+  search?: { apiUrl?: string; apiKey?: string };
+}
+
+export function createBuiltInTools(sandbox: Sandbox, options: BuiltInToolOptions = {}): ToolDefinition[] {
+  const disabled = options.disabled ?? [];
+  return [...factories.map((factory) => factory(sandbox)), createWebSearchTool(sandbox, options.search)]
     .filter((tool) => !disabled.includes(tool.name));
 }

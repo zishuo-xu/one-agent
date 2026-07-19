@@ -26,6 +26,7 @@ import {
 } from './assertions.js';
 import { Plan } from '../planning/types.js';
 import { config } from '../config.js';
+import { modelName } from '../configAccess.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import { MockProvider } from '../model/MockProvider.js';
 import { createConnection } from '../db/connection.js';
@@ -146,7 +147,7 @@ export class EvalRunner {
         modelProvider:
           options.mode === 'mock'
             ? new MockProvider(task.mockResponses!)
-            : new OpenAICompatibleProvider(config.openai, config.model),
+            : new OpenAICompatibleProvider(config.openai, modelName()),
         ...(threadId && traceDb ? { threadId, db: traceDb } : {}),
       });
       const completionVerifier = new EvidenceCompletionVerifier({

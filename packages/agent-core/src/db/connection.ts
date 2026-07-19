@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { config } from '../config.js';
 
 let db: Database.Database | null = null;
 
@@ -141,8 +142,7 @@ export function createConnection(options: DatabaseOptions): Database.Database {
 
 export function getSharedConnection(): Database.Database {
   if (!db) {
-    const dbPath = process.env.DATABASE_PATH ?? 'workspace/data.db';
-    db = createConnection({ path: dbPath });
+    db = createConnection({ path: config.databasePath });
   }
   return db;
 }

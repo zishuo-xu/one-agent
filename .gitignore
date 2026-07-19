@@ -3,6 +3,7 @@ node_modules/
 *.log
 .env
 .env.local
+one-agent.config.json
 dist/
 build/
 coverage/

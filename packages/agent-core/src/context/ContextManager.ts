@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { contextSettings, modelName, modelTimeoutMs } from '../configAccess.js';
 import { Message } from '../agents/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
@@ -40,8 +41,9 @@ export class ContextManager {
     this.systemPrompt = options.systemPrompt;
     this.maxRecentMessages = options.maxRecentMessages ?? 10;
     this.summaryTrigger = options.summaryTrigger ?? 20;
-    this.maxContextTokens = options.maxContextTokens ?? config.maxContextTokens;
-    this.recentTokenBudget = options.recentTokenBudget ?? config.recentTokenBudget;
+    const contextConfig = contextSettings();
+    this.maxContextTokens = options.maxContextTokens ?? contextConfig.maxTokens;
+    this.recentTokenBudget = options.recentTokenBudget ?? contextConfig.recentTokenBudget;
     this.modelProvider = options.modelProvider;
     this.messages.push({ role: 'system', content: this.systemPrompt });
     this.lastSummarizedIndex = 1; // system prompt is at index 0, considered summarized
@@ -253,7 +255,7 @@ export class ContextManager {
       this.modelProvider ??
       config.utilityModelProvider ??
       config.modelProvider ??
-      new OpenAICompatibleProvider(config.openai, config.model)
+      new OpenAICompatibleProvider(config.openai, modelName())
     );
   }
 
@@ -287,7 +289,7 @@ export class ContextManager {
     try {
       const response = await provider.complete({
         messages: requestMessages,
-        timeoutMs: config.timeoutMs,
+        timeoutMs: modelTimeoutMs(),
       });
       if (response.usage) this.onUsage?.(response.usage);
       this.onTrace?.({

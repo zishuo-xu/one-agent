@@ -64,21 +64,21 @@ describe('help text', () => {
 });
 
 describe('error categorization', () => {
-  it('suggests protocol-neutral MODEL_TIMEOUT_MS on timeout errors', () => {
+  it('suggests the unified JSON timeout field on timeout errors', () => {
     const err = categorizeError(new Error('Request timed out after 30000ms'));
-    expect(err.detail).toContain('MODEL_TIMEOUT_MS');
+    expect(err.detail).toContain('model.timeoutMs');
     expect(err.detail).toContain('30000');
   });
 
   it('points to API key on 401', () => {
     const err = categorizeError(new Error('401 Unauthorized'));
-    expect(err.detail).toContain('OPENAI_API_KEY');
+    expect(err.detail).toContain('model.apiKey');
   });
 
   it('points to BASE_URL and model on 404', () => {
     const err = categorizeError(new Error('404 model_not_found'));
-    expect(err.detail).toContain('OPENAI_BASE_URL');
-    expect(err.detail).toContain('OPENAI_MODEL');
+    expect(err.detail).toContain('model.baseUrl');
+    expect(err.detail).toContain('model.model');
   });
 
   it('suggests wait time on 429 with retry-after', () => {

@@ -117,7 +117,7 @@ export async function chatRoutes(
   });
 
   fastify.get('/api/health', async () => {
-    return { status: 'ok', model: config.model };
+    return { status: 'ok', model: config.model.model };
   });
 
   fastify.get('/api/threads', async () => {

@@ -4,10 +4,15 @@ import { buildServer } from '../src/server.js';
 
 vi.mock('../../../packages/agent-core/dist/config.js', () => ({
   config: {
-    port: 3000,
-    host: '127.0.0.1',
-    model: 'gpt-test',
-    systemPrompt: 'You are a test assistant.',
+    api: { port: 3000, host: '127.0.0.1', logLevel: 'silent' },
+    model: { model: 'gpt-test', timeoutMs: 30000, apiKey: 'test-key' },
+    runtime: { systemPrompt: 'You are a test assistant.', maxRetries: 2, maxToolIterations: 5, maxReplanAttempts: 3, maxRetryAttempts: 2 },
+    context: { maxTokens: 4096, recentTokenBudget: 2048 },
+    subAgent: { enabled: true, maxDepth: 1, maxTasksPerRun: 8, maxConcurrency: 4, maxTotalTokens: 50000, taskTimeoutMs: 60000, maxToolIterations: 5 },
+    tools: { disabled: [], search: {} },
+    trace: { contentMode: 'redacted' },
+    taskQueue: { maxConcurrency: 2, taskTimeoutMs: 300000, maxRetries: 3, retryDelayMs: 1000 },
+    databasePath: ':memory:',
     openai: {
       chat: {
         completions: {
@@ -24,7 +29,6 @@ const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
 describe('chat routes', () => {
   beforeEach(() => {
-    process.env.DATABASE_PATH = ':memory:';
     resetSharedConnection();
     mockCreate.mockReset();
   });

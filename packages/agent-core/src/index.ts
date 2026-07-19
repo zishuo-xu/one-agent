@@ -1,5 +1,13 @@
-export { config } from './config.js';
-export type { Config } from './config.js';
+export {
+  CONFIG_FILE_NAME,
+  config,
+  createDefaultSystemConfig,
+  configureSystem,
+  loadSystemConfig,
+  redactSystemConfig,
+  systemConfigSchema,
+} from './config.js';
+export type { Config, ResolvedConfig, SystemConfig } from './config.js';
 export { AgentLoop } from './agents/AgentLoop.js';
 export type { AgentLoopOptions } from './agents/AgentLoop.js';
 export type { AgentEvent, AgentLoopEvent } from './agents/events.js';
@@ -45,7 +53,7 @@ export {
   OpenAICompatibleProvider,
   FallbackProvider,
   defaultShouldFallback,
-  createProviderFromEnv,
+  createProviderFromConfig,
   diagnoseModelProviders,
 } from './model/index.js';
 export type {

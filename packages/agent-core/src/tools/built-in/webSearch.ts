@@ -8,7 +8,10 @@ interface SearchResult {
   url: string;
 }
 
-export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
+export function createWebSearchTool(
+  _sandbox: Sandbox,
+  searchConfig: { apiUrl?: string; apiKey?: string } = {},
+): ToolDefinition {
   return {
     name: 'web_search',
     readOnly: true,
@@ -28,7 +31,7 @@ export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
       // (DuckDuckGo Instant Answer) was removed: api.duckduckgo.com returns
       // 200 with an empty body to Node's TLS fingerprint, so it never
       // actually worked from this runtime.
-      const results = await searchWithConfigApi(query, limit) ??
+      const results = await searchWithConfigApi(searchConfig, query, limit) ??
         (await searchDuckDuckGoHtml(query, limit));
 
       if (!results || results.length === 0) {
@@ -53,9 +56,12 @@ export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
   };
 }
 
-async function searchWithConfigApi(query: string, limit: number): Promise<SearchResult[] | null> {
-  const apiUrl = process.env.SEARCH_API_URL;
-  const apiKey = process.env.SEARCH_API_KEY;
+async function searchWithConfigApi(
+  searchConfig: { apiUrl?: string; apiKey?: string },
+  query: string,
+  limit: number,
+): Promise<SearchResult[] | null> {
+  const { apiUrl, apiKey } = searchConfig;
   if (!apiUrl) {
     return null;
   }

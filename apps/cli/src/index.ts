@@ -1,10 +1,11 @@
-import './load-env.js';
+import './load-config.js';
 import { parseArgs } from './args.js';
+import { config } from '@one-agent/agent-core';
 
 async function dispatch(): Promise<void> {
   let args;
   try {
-    args = parseArgs();
+    args = parseArgs(undefined, config.runtime.loop);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error('Run "one-agent --help" for usage.');

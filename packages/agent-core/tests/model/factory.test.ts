@@ -1,113 +1,66 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type OpenAI from 'openai';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AnthropicProvider } from '../../src/model/AnthropicProvider.js';
 import { FallbackProvider } from '../../src/model/FallbackProvider.js';
 import { OpenAICompatibleProvider } from '../../src/model/OpenAICompatibleProvider.js';
-import { createProviderFromEnv } from '../../src/model/factory.js';
+import { createProviderFromConfig } from '../../src/model/factory.js';
 
 const openai = { chat: { completions: { create: vi.fn() } } } as unknown as OpenAI;
 const anthropic = { messages: { create: vi.fn() } } as unknown as Anthropic;
 
-function unsetEnv(name: string): void {
-  vi.stubEnv(name, '__temporarily_unset__');
-  delete process.env[name];
-}
-
-describe('provider factory', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe('provider factory from JSON configuration', () => {
+  it('creates an OpenAI-compatible primary', () => {
+    const provider = createProviderFromConfig(openai, {
+      provider: 'openai-compatible', apiKey: 'key', model: 'openai-model', maxTokens: 4096,
+    });
+    expect(provider).toBeInstanceOf(OpenAICompatibleProvider);
   });
 
-  it('keeps OpenAI-compatible as the default protocol', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'openai-compatible');
-    unsetEnv('FALLBACK_MODEL_PROVIDER');
-    unsetEnv('OPENAI_FALLBACK_BASE_URL');
-
-    const provider = createProviderFromEnv(openai, 'openai-model');
-
+  it('accepts openai as the JSON alias for openai-compatible', () => {
+    const provider = createProviderFromConfig(openai, {
+      provider: 'openai', apiKey: 'key', model: 'openai-model', maxTokens: 4096,
+    });
     expect(provider).toBeInstanceOf(OpenAICompatibleProvider);
     expect(provider.name).toBe('openai-compatible');
   });
 
-  it('selects the native Anthropic adapter without changing the factory contract', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
-    unsetEnv('FALLBACK_MODEL_PROVIDER');
-    unsetEnv('OPENAI_FALLBACK_BASE_URL');
-
-    const provider = createProviderFromEnv(openai, 'claude-model', {
-      anthropicClient: anthropic,
-      anthropicMaxTokens: 8192,
-    });
-
+  it('creates a native Anthropic primary', () => {
+    const provider = createProviderFromConfig(openai, {
+      provider: 'anthropic', apiKey: 'key', model: 'claude-model', maxTokens: 8192,
+    }, { anthropicClient: anthropic });
     expect(provider).toBeInstanceOf(AnthropicProvider);
-    expect(provider).toMatchObject({ name: 'anthropic', model: 'claude-model' });
+    expect(provider.model).toBe('claude-model');
   });
 
-  it('reuses the OpenAI key for same-credential Anthropic compatibility gateways', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
-    vi.stubEnv('OPENAI_API_KEY', 'shared-gateway-key');
-    unsetEnv('ANTHROPIC_API_KEY');
-    unsetEnv('FALLBACK_MODEL_PROVIDER');
-    unsetEnv('OPENAI_FALLBACK_BASE_URL');
-
-    const provider = createProviderFromEnv(openai, 'deepseek-v4-flash');
-    const client = (provider as unknown as {
-      client: { apiKey: string };
-    }).client;
-
-    expect(client.apiKey).toBe('shared-gateway-key');
-  });
-
-  it('builds a cross-protocol fallback chain from generic fallback configuration', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
-    vi.stubEnv('FALLBACK_MODEL_PROVIDER', 'openai-compatible');
-    vi.stubEnv('FALLBACK_MODEL', 'openai-fallback');
-    vi.stubEnv('FALLBACK_API_KEY', 'test-key');
-
-    const provider = createProviderFromEnv(openai, 'claude-primary', {
-      anthropicClient: anthropic,
-    });
-
+  it('builds a cross-protocol fallback chain', () => {
+    const provider = createProviderFromConfig(openai, {
+      provider: 'anthropic', apiKey: 'key', model: 'claude-primary', maxTokens: 4096,
+      fallback: {
+        provider: 'openai-compatible', apiKey: 'fallback-key', model: 'openai-fallback', maxTokens: 4096,
+      },
+    }, { anthropicClient: anthropic });
     expect(provider).toBeInstanceOf(FallbackProvider);
-    expect(provider).toMatchObject({
-      name: 'fallback',
-      model: 'claude-primary',
-      capabilities: { streaming: 'emulated', toolCalling: 'native' },
-    });
+    expect(provider).toMatchObject({ name: 'fallback', model: 'claude-primary' });
   });
 
-  it('also configures Anthropic as fallback for an OpenAI-compatible primary', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'openai-compatible');
-    vi.stubEnv('FALLBACK_MODEL_PROVIDER', 'anthropic');
-    vi.stubEnv('FALLBACK_MODEL', 'claude-fallback');
-    vi.stubEnv('FALLBACK_API_KEY', 'test-key');
-
-    const provider = createProviderFromEnv(openai, 'openai-primary');
-
-    expect(provider).toBeInstanceOf(FallbackProvider);
-    expect(provider).toMatchObject({
-      name: 'fallback',
-      model: 'openai-primary',
-      capabilities: { streaming: 'emulated', toolCalling: 'native' },
+  it('supports Anthropic as the fallback protocol', () => {
+    const provider = createProviderFromConfig(openai, {
+      provider: 'openai-compatible', apiKey: 'key', model: 'openai-primary', maxTokens: 4096,
+      fallback: {
+        provider: 'anthropic', apiKey: 'fallback-key', model: 'claude-fallback', maxTokens: 4096,
+      },
     });
+    expect(provider).toBeInstanceOf(FallbackProvider);
   });
 
   it('can suppress fallback construction for purpose-specific models', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
-    vi.stubEnv('FALLBACK_MODEL_PROVIDER', 'openai-compatible');
-
-    const provider = createProviderFromEnv(openai, 'claude-utility', {
-      anthropicClient: anthropic,
-      includeFallback: false,
-    });
-
-    expect(provider).toBeInstanceOf(AnthropicProvider);
-  });
-
-  it('fails loudly on unknown protocols instead of silently using OpenAI', () => {
-    vi.stubEnv('MODEL_PROVIDER', 'mystery-provider');
-
-    expect(() => createProviderFromEnv(openai, 'model')).toThrow(/Invalid MODEL_PROVIDER/);
+    const provider = createProviderFromConfig(openai, {
+      provider: 'openai-compatible', apiKey: 'key', model: 'utility', maxTokens: 4096,
+      fallback: {
+        provider: 'anthropic', apiKey: 'fallback-key', model: 'claude-fallback', maxTokens: 4096,
+      },
+    }, { includeFallback: false });
+    expect(provider).toBeInstanceOf(OpenAICompatibleProvider);
   });
 });

@@ -4,21 +4,13 @@ import { taskRoutes } from './routes/tasks.js';
 import { memoryRoutes } from './routes/memory.js';
 import { traceRoutes } from './routes/traces.js';
 import { AgentRuntime } from '@one-agent/agent-core';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const WORKSPACE_ROOT = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../workspace',
-);
-
-process.env.DATABASE_PATH =
-  process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db');
+import { config } from '@one-agent/agent-core';
+import { WORKSPACE_ROOT } from './workspace.js';
 
 export async function buildServer() {
   const fastify = Fastify({
     logger: {
-      level: process.env.LOG_LEVEL ?? 'info',
+      level: config.api.logLevel,
     },
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   resetSharedConnection,
+  configureSystem,
   getSharedConnection,
   ThreadStore,
   RunStore,
@@ -18,7 +19,7 @@ describe('trace web server', () => {
   }
 
   beforeEach(() => {
-    process.env.DATABASE_PATH = ':memory:';
+    configureSystem({ storage: { databasePath: ':memory:' } });
     resetSharedConnection();
   });
 

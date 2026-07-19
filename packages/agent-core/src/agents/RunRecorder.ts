@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { modelName } from '../configAccess.js';
 import type { TokenUsage } from '../model/types.js';
 import type { TraceEventStore } from '../db/traceEventStore.js';
 import type { AgentEvent } from './events.js';
@@ -181,7 +182,7 @@ export class RunRecorder {
         // TraceEventStore sanitizes public reads, while RunStore reads this
         // raw row only for recovery.
         eventData: durable ? event : sanitizeTraceEvent(event),
-        model: config.model,
+        model: modelName(),
         sequence,
         createdAt: occurredAt,
       });

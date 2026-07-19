@@ -1,4 +1,4 @@
-import './load-env.js';
+import './load-config.js';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { createServer as createNetServer } from 'node:net';
@@ -9,13 +9,14 @@ import type { ChildProcess } from 'node:child_process';
 import {
   AgentRuntime,
   config,
+  createDefaultSystemConfig,
   RunStore,
   TraceEventStore,
   MessageStore,
   getSharedConnection,
 } from '@one-agent/agent-core';
 import type { AgentRun, AgentRunResult, RunCheckpoint } from '@one-agent/agent-core';
-import { WORKSPACE_ROOT } from './load-env.js';
+import { CONFIG_PATH, WORKSPACE_ROOT } from './load-config.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
 import { formatMemoryDetail, formatMemoryList, resolveMemory } from './commands/memory.js';
@@ -33,9 +34,6 @@ import {
   padEnd,
   shortId,
 } from './format.js';
-
-process.env.DATABASE_PATH =
-  process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db');
 
 const COMMANDS = [
   '/help',
@@ -59,56 +57,111 @@ const COMMANDS = [
   '/quit',
 ];
 
-function createEnvTemplate(): void {
-  const envPath = path.join(WORKSPACE_ROOT, '.env');
-  if (fs.existsSync(envPath)) {
-    console.log(`A .env file already exists at ${envPath}.`);
-    console.log('Please edit it directly if you need to update your keys.');
+function parseLegacyEnv(filePath: string): Record<string, string> {
+  const entries: Record<string, string> = {};
+  for (const line of fs.readFileSync(filePath, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!match) continue;
+    let value = match[2];
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    entries[match[1]] = value;
+  }
+  return entries;
+}
+
+function numericValue(values: Record<string, string>, key: string): number | undefined {
+  if (!values[key]) return undefined;
+  const parsed = Number(values[key]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function applyLegacyConfig(template: ReturnType<typeof createDefaultSystemConfig>, values: Record<string, string>): void {
+  const anthropic = values.MODEL_PROVIDER === 'anthropic';
+  template.model.provider = anthropic ? 'anthropic' : 'openai-compatible';
+  template.model.apiKey = anthropic
+    ? values.ANTHROPIC_API_KEY ?? values.OPENAI_API_KEY ?? 'your-api-key'
+    : values.OPENAI_API_KEY ?? 'your-api-key';
+  template.model.baseUrl = anthropic ? values.ANTHROPIC_BASE_URL : values.OPENAI_BASE_URL;
+  template.model.model = anthropic
+    ? values.ANTHROPIC_MODEL ?? template.model.model
+    : values.OPENAI_MODEL ?? template.model.model;
+  template.model.maxTokens = numericValue(values, 'ANTHROPIC_MAX_TOKENS') ?? template.model.maxTokens;
+  template.model.timeoutMs = numericValue(values, 'MODEL_TIMEOUT_MS')
+    ?? numericValue(values, 'OPENAI_TIMEOUT_MS')
+    ?? template.model.timeoutMs;
+  template.model.planningModel = values.PLANNING_MODEL;
+  template.model.utilityModel = values.UTILITY_MODEL;
+
+  const fallbackProvider = values.FALLBACK_MODEL_PROVIDER
+    ?? (values.OPENAI_FALLBACK_BASE_URL ? 'openai-compatible' : undefined);
+  if (fallbackProvider) {
+    template.model.fallback = {
+      provider: fallbackProvider === 'anthropic' ? 'anthropic' : 'openai-compatible',
+      baseUrl: values.FALLBACK_BASE_URL
+        ?? (fallbackProvider === 'anthropic' ? values.ANTHROPIC_FALLBACK_BASE_URL : values.OPENAI_FALLBACK_BASE_URL),
+      apiKey: values.FALLBACK_API_KEY
+        ?? (fallbackProvider === 'anthropic' ? values.ANTHROPIC_FALLBACK_API_KEY : values.OPENAI_FALLBACK_API_KEY)
+        ?? template.model.apiKey,
+      model: values.FALLBACK_MODEL ?? values.OPENAI_FALLBACK_MODEL ?? template.model.model,
+      maxTokens: numericValue(values, 'FALLBACK_MAX_TOKENS')
+        ?? numericValue(values, 'ANTHROPIC_FALLBACK_MAX_TOKENS')
+        ?? 4096,
+    };
+  }
+
+  template.runtime.systemPrompt = values.SYSTEM_PROMPT ?? template.runtime.systemPrompt;
+  template.context.maxTokens = numericValue(values, 'MAX_CONTEXT_TOKENS') ?? template.context.maxTokens;
+  template.context.recentTokenBudget = numericValue(values, 'RECENT_TOKEN_BUDGET') ?? template.context.recentTokenBudget;
+  template.tools.disabled = values.DISABLED_TOOLS?.split(',').map((name) => name.trim()).filter(Boolean) ?? [];
+  template.tools.search.apiUrl = values.SEARCH_API_URL;
+  template.tools.search.apiKey = values.SEARCH_API_KEY;
+  if (values.TRACE_CONTENT === 'metadata' || values.TRACE_CONTENT === 'full') {
+    template.trace.contentMode = values.TRACE_CONTENT;
+  }
+  template.storage.databasePath = values.DATABASE_PATH ?? template.storage.databasePath;
+  template.api.host = values.HOST ?? template.api.host;
+  template.api.port = numericValue(values, 'PORT') ?? template.api.port;
+  template.api.logLevel = values.LOG_LEVEL ?? template.api.logLevel;
+  template.taskQueue.maxRetries = numericValue(values, 'TASK_MAX_RETRIES') ?? template.taskQueue.maxRetries;
+  template.taskQueue.retryDelayMs = numericValue(values, 'TASK_RETRY_DELAY_MS') ?? template.taskQueue.retryDelayMs;
+  template.cli.color = !values.NO_COLOR;
+}
+
+function createConfigFile(): void {
+  if (fs.existsSync(CONFIG_PATH)) {
+    console.log(`A configuration file already exists at ${CONFIG_PATH}.`);
+    console.log('Please edit it directly if you need to update the system configuration.');
     return;
   }
-  const template = [
-    '# one-agent configuration',
-    '# Full reference: docs/configuration-reference.md in the One Agent repository',
-    'MODEL_PROVIDER=openai-compatible',
-    'OPENAI_API_KEY=your-api-key',
-    'OPENAI_BASE_URL=https://api.openai.com/v1',
-    'OPENAI_MODEL=gpt-3.5-turbo',
-    '# Optional: native Anthropic protocol (ANTHROPIC_API_KEY falls back to OPENAI_API_KEY)',
-    '# ANTHROPIC_API_KEY=',
-    '# ANTHROPIC_BASE_URL=https://api.anthropic.com',
-    '# ANTHROPIC_MODEL=claude-sonnet-4-5',
-    '# Optional: protocol-neutral per-request timeout in ms (default 30000)',
-    '# MODEL_TIMEOUT_MS=60000',
-    '# Optional: context window token budget (default 4096)',
-    '# MAX_CONTEXT_TOKENS=8192',
-    '# Optional: recent message token budget (default 2048)',
-    '# RECENT_TOKEN_BUDGET=4096',
-    '# Optional: Tavily/Brave/DuckDuckGo search configuration',
-    '# SEARCH_API_URL=',
-    '# SEARCH_API_KEY=',
-  ].join('\n');
-  fs.writeFileSync(envPath, template, 'utf-8');
-  console.log(`Created ${envPath}`);
-  console.log('Please open it and set your OPENAI_API_KEY, then run one-agent again.');
+  const template = createDefaultSystemConfig();
+  const legacyEnvPath = path.join(WORKSPACE_ROOT, '.env');
+  if (fs.existsSync(legacyEnvPath)) {
+    applyLegacyConfig(template, parseLegacyEnv(legacyEnvPath));
+  } else {
+    template.model.apiKey = 'your-api-key';
+  }
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(template, null, 2)}\n`, { mode: 0o600 });
+  console.log(`Created ${CONFIG_PATH}`);
+  if (fs.existsSync(legacyEnvPath)) {
+    console.log('Imported existing .env values. The legacy .env file is no longer read by One Agent.');
+  }
+  if (!isUsableApiKey(template.model.apiKey)) {
+    console.log('Please open it and set model.apiKey, then run one-agent again.');
+  }
 }
 
 function validateApiKey(): boolean {
-  const anthropic = process.env.MODEL_PROVIDER?.trim().toLowerCase() === 'anthropic';
-  const configuredKey = anthropic
-    ? process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY
-    : process.env.OPENAI_API_KEY;
-  const primaryKey = anthropic ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  const expectedKey = anthropic ? 'ANTHROPIC_API_KEY (or OPENAI_API_KEY fallback)' : 'OPENAI_API_KEY';
-  if (isUsableApiKey(configuredKey)) {
+  if (isUsableApiKey(config.model.apiKey)) {
     return true;
   }
-  console.error(`Error: ${expectedKey} is missing or still uses the template placeholder.`);
+  console.error('Error: model.apiKey is missing or still uses the template placeholder.');
   console.error(`Workspace: ${WORKSPACE_ROOT}`);
   console.error('');
   console.error('To fix this, either:');
-  console.error(`  1. Run "one-agent --init" to create a .env template in ${WORKSPACE_ROOT}, then edit it.`);
-  console.error(`  2. Create ${path.join(WORKSPACE_ROOT, '.env')} manually with ${primaryKey}=...`);
-  console.error(`  3. Set ${expectedKey} as an environment variable.`);
+  console.error(`  1. Run "one-agent --init" to create ${CONFIG_PATH}, then edit it.`);
+  console.error(`  2. Copy one-agent.config.example.json to ${CONFIG_PATH}.`);
   console.error('');
   console.error('Run "one-agent --help" for more options.');
   return false;
@@ -213,11 +266,10 @@ async function startTraceViewer(background: boolean): Promise<ChildProcess | nul
     detached: false,
     env: {
       ...process.env,
-      DATABASE_PATH: process.env.DATABASE_PATH ?? path.join(WORKSPACE_ROOT, 'data.db'),
     },
   });
   console.log(cyan(`Trace viewer: http://127.0.0.1:${tracePort}`));
-  console.log(dim(`Trace database: ${process.env.DATABASE_PATH}`));
+  console.log(dim(`Trace database: ${config.databasePath}`));
   return child;
 }
 
@@ -279,7 +331,7 @@ function createProgressIndicator(label = 'Thinking'): {
 async function main() {
   let args;
   try {
-    args = parseArgs();
+    args = parseArgs(undefined, config.runtime.loop);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     console.error('Run "one-agent --help" for usage.');
@@ -310,7 +362,7 @@ async function main() {
   }
 
   if (init) {
-    createEnvTemplate();
+    createConfigFile();
     return;
   }
 
@@ -342,13 +394,9 @@ async function main() {
     process.exit(1);
   }
 
-  const selectedProvider = process.env.MODEL_PROVIDER?.trim().toLowerCase();
-  const endpointVariable = selectedProvider === 'anthropic'
-    ? 'ANTHROPIC_BASE_URL'
-    : 'OPENAI_BASE_URL';
-  if (!process.env[endpointVariable]) {
+  if (!config.model.baseUrl) {
     console.warn(
-      `Warning: ${endpointVariable} is not set. The client will use the Provider's default endpoint.`
+      'Warning: model.baseUrl is not set. The client will use the Provider default endpoint.'
     );
   }
 
@@ -798,7 +846,7 @@ async function main() {
 
       let currentRunId: string | undefined;
 
-      const progress = createProgressIndicator(`正在请求 ${config.model}…`);
+      const progress = createProgressIndicator(`正在请求 ${config.model.model}…`);
       progress.start();
       const startTime = Date.now();
 

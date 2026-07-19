@@ -5,6 +5,7 @@ import {
   QueueWorker,
 } from '@one-agent/agent-core';
 import type { TaskStatus } from '@one-agent/agent-core';
+import { config } from '@one-agent/agent-core';
 
 export interface CreateTaskBody {
   message: string;
@@ -20,9 +21,10 @@ export async function taskRoutes(
   const taskStore = runtime.stores.tasks;
   const taskQueue = new TaskQueue({
     store: taskStore,
-    maxConcurrency: 2,
-    maxRetries: Number(process.env.TASK_MAX_RETRIES ?? 3),
-    retryDelayMs: Number(process.env.TASK_RETRY_DELAY_MS ?? 1000),
+    maxConcurrency: config.taskQueue.maxConcurrency,
+    taskTimeoutMs: config.taskQueue.taskTimeoutMs,
+    maxRetries: config.taskQueue.maxRetries,
+    retryDelayMs: config.taskQueue.retryDelayMs,
   });
   function createAgent(options: { threadId?: string; taskId?: string; signal?: AbortSignal }) {
     return runtime.createAgent({

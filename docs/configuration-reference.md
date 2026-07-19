@@ -1,163 +1,129 @@
-# One Agent 配置清单
+# One Agent 统一配置表
 
 > 文档状态：当前有效
 > 最后更新：2026-07-19
 
-本清单是 One Agent 配置项的唯一索引。它统一说明配置名、默认值、所属层、来源和覆盖方式，但**不是新的全局配置中心**：模型层、Runtime、执行层和各入口仍只读取自己拥有的配置，避免一个配置对象跨层传播。
+One Agent 的系统配置统一保存在 workspace 根目录的 `one-agent.config.json`。模型密钥也在该文件中，不再读取 `.env` 或业务环境变量。仓库只提交不含真实密钥的 `one-agent.config.example.json`，真实配置已加入 `.gitignore`，CLI 创建文件时使用仅当前用户可读写的权限。
 
-## 1. 配置来源与优先级
+## 1. 读取流程
 
-CLI 与 Trace Viewer 按以下顺序选择 workspace：
+```text
+one-agent.config.json
+        ↓
+ConfigLoader：读取 JSON、补全默认值、严格校验
+        ↓
+SystemConfig：当前进程唯一配置表
+        ↓
+AgentRuntime：向模型、上下文、工具、Trace、Sub-Agent 等组件装配配置
+```
+
+除操作系统运行环境外，业务组件不再直接读取 `process.env`。未知字段、错误类型和非法范围会在启动时报告；不会静默忽略拼写错误。相对数据库路径以 workspace 为基准解析。
+
+workspace 选择顺序为：
 
 1. `--workspace <path>`；
-2. `ONE_AGENT_WORKSPACE`；
-3. 当前目录（仅当目录内存在 `.env`）；
-4. `~/.one-agent`。
+2. 当前目录（存在 `one-agent.config.json` 或仓库示例文件）；
+3. `~/.one-agent`。
 
-选定 workspace 后读取其中的 `.env`。进程启动前已经设置的环境变量优先于 `.env`。CLI、Trace Viewer 默认使用 `<workspace>/data.db`；API 在仓库开发模式下读取根目录 `.env`，workspace 固定为仓库的 `workspace/`。
+CLI 的 `--loop`、`--thread`、`--new`、`--verbose` 以及 Trace Viewer 的 `--host`、`--port` 只覆盖本次进程，不写回 JSON。
 
-`.env.example` 是可复制的常用模板，本文件是包含兼容项和代码级参数的完整清单。密钥只应放在本地 `.env` 或进程环境中，不进入 Git、Trace 或文档。
+## 2. 配置结构
 
-## 2. 环境变量
+完整可复制示例见 [`one-agent.config.example.json`](../one-agent.config.example.json)。所有分组均可省略；省略后由 Schema 补全默认值。
 
-### 2.1 主模型与用途模型（模型层）
+### 2.1 `model`
 
-| 配置 | 默认值 | 必填条件 | 说明 |
+| 字段 | 默认值 | 说明 |
+|---|---:|---|
+| `provider` | `openai-compatible` | `openai-compatible`、别名 `openai`，或 `anthropic` |
+| `baseUrl` | 对应 SDK 默认地址 | 模型 Endpoint |
+| `apiKey` | 空 | 主模型密钥；保存在本地真实配置中 |
+| `model` | `gpt-3.5-turbo` | 主模型名称 |
+| `maxTokens` | `4096` | Anthropic 输出上限 |
+| `timeoutMs` | `30000` | 单次模型请求超时 |
+| `planningModel` | 主模型 | Planner 与 Task Judge 的模型名称 |
+| `utilityModel` | 主模型 | 摘要与记忆整理的模型名称 |
+| `fallback` | 不启用 | 可选备用模型对象，字段为 `provider/baseUrl/apiKey/model/maxTokens` |
+
+主备协议可以不同。备用模型只在 `fallback` 对象存在时启用；示例文件默认不启用，避免占位密钥被误用。
+
+### 2.2 `runtime` 与 `context`
+
+| 字段 | 默认值 | 所属层 | 说明 |
 |---|---:|---|---|
-| `MODEL_PROVIDER` | `openai-compatible` | 否 | `openai-compatible`、别名 `openai`，或 `anthropic` |
-| `OPENAI_BASE_URL` | OpenAI SDK 默认地址 | OpenAI Compatible 网关按需 | 主模型 Endpoint |
-| `OPENAI_API_KEY` | 空 | OpenAI Compatible 必填；Anthropic 可作后备凭据 | 主模型密钥 |
-| `OPENAI_MODEL` | `gpt-3.5-turbo` | 否 | OpenAI Compatible 主模型 |
-| `ANTHROPIC_BASE_URL` | Anthropic SDK 默认地址 | Anthropic 网关按需 | 原生 Anthropic Messages Endpoint |
-| `ANTHROPIC_API_KEY` | 复用 `OPENAI_API_KEY` | 两者均未配置时必填 | Anthropic 主模型密钥 |
-| `ANTHROPIC_MODEL` | 无 | `MODEL_PROVIDER=anthropic` 时必填 | Anthropic 主模型 |
-| `ANTHROPIC_MAX_TOKENS` | `4096` | 否 | Anthropic 单次输出上限，必须为正整数 |
-| `MODEL_TIMEOUT_MS` | `30000` | 否 | 所有主模型协议的单次请求超时 |
-| `PLANNING_MODEL` | 主模型 | 否 | Planner 与 Task Judge 使用的模型名；协议和凭据沿用主模型 |
-| `UTILITY_MODEL` | 主模型 | 否 | 摘要与记忆整理使用的模型名；协议和凭据沿用主模型 |
+| `runtime.systemPrompt` | 内置提示词 | Runtime 装配层 | 主 Agent 系统提示词 |
+| `runtime.loop` | `auto` | 执行策略层 | 默认 Loop；CLI `--loop` 可临时覆盖 |
+| `runtime.maxRetries` | `2` | 模型调用层 | 模型调用重试次数 |
+| `runtime.maxToolIterations` | `5` | AgentLoop | 工具迭代上限 |
+| `runtime.maxReplanAttempts` | `3` | PlanningLoop | 重新规划上限 |
+| `runtime.maxRetryAttempts` | `2` | PlanningLoop | 步骤重试上限 |
+| `context.maxTokens` | `4096` | 上下文层 | 上下文压缩预算 |
+| `context.recentTokenBudget` | `2048` | 上下文层 | 近期未摘要消息预算 |
 
-### 2.2 备用模型（模型层）
+### 2.3 `subAgent`
 
-仅设置 `FALLBACK_MODEL_PROVIDER` 才启用正式的协议无关备用链；旧版 `OPENAI_FALLBACK_BASE_URL` 也会为兼容目的启用 OpenAI Compatible 备用模型。
-
-| 配置 | 默认值 | 说明 |
+| 字段 | 默认值 | 说明 |
 |---|---:|---|
-| `FALLBACK_MODEL_PROVIDER` | 无（不启用） | `openai-compatible` / `openai` / `anthropic` |
-| `FALLBACK_BASE_URL` | 对应 SDK 默认地址 | 备用 Endpoint |
-| `FALLBACK_API_KEY` | 按协议回退到旧变量或主模型 Key | 备用密钥 |
-| `FALLBACK_MODEL` | `OPENAI_FALLBACK_MODEL`，再回退主模型 | 备用模型名 |
-| `FALLBACK_MAX_TOKENS` | `4096` | Anthropic 备用模型输出上限 |
-
-以下变量只为旧配置兼容，新配置不要继续使用：
-
-| 兼容变量 | 正式替代项 |
-|---|---|
-| `OPENAI_TIMEOUT_MS` | `MODEL_TIMEOUT_MS` |
-| `OPENAI_FALLBACK_BASE_URL` | `FALLBACK_BASE_URL` |
-| `OPENAI_FALLBACK_API_KEY` | `FALLBACK_API_KEY` |
-| `OPENAI_FALLBACK_MODEL` | `FALLBACK_MODEL` |
-| `ANTHROPIC_FALLBACK_BASE_URL` | `FALLBACK_BASE_URL` |
-| `ANTHROPIC_FALLBACK_API_KEY` | `FALLBACK_API_KEY` |
-| `ANTHROPIC_FALLBACK_MAX_TOKENS` | `FALLBACK_MAX_TOKENS` |
-
-### 2.3 Runtime、上下文与工具
-
-| 配置 | 默认值 | 所属层 | 说明 |
-|---|---:|---|---|
-| `SYSTEM_PROMPT` | 内置中文助手提示词 | Runtime 装配层 | 主 Agent 系统提示词 |
-| `MAX_CONTEXT_TOKENS` | `4096` | 上下文层 | 超过预算时触发上下文压缩 |
-| `RECENT_TOKEN_BUDGET` | `2048` | 上下文层 | 保留近期未摘要消息的 token 预算 |
-| `DISABLED_TOOLS` | 空 | 工具装配层 | 逗号分隔的禁用工具名 |
-| `SEARCH_API_URL` | 无 | 工具层 | 搜索服务地址；未配置时使用 DuckDuckGo |
-| `SEARCH_API_KEY` | 无 | 工具层 | 搜索服务密钥 |
-
-### 2.4 持久化、Trace 与服务入口
-
-| 配置 | 默认值 | 所属层 | 说明 |
-|---|---:|---|---|
-| `ONE_AGENT_WORKSPACE` | 见 workspace 优先级 | CLI / Trace 入口层 | 默认 workspace；`--workspace` 优先 |
-| `DATABASE_PATH` | CLI/Trace 为 `<workspace>/data.db`；core 直用为 `workspace/data.db` | 持久化层 | SQLite 文件路径；测试可用 `:memory:` |
-| `TRACE_CONTENT` | `redacted` | Trace 层 | `redacted`、`metadata` 或 `full`；生产环境不建议 `full` |
-| `PORT` | `3000` | API 入口层 | REST API 监听端口 |
-| `HOST` | `127.0.0.1` | API 入口层 | REST API 监听地址 |
-| `LOG_LEVEL` | `info` | API / Trace 入口层 | Fastify 日志级别 |
-| `TASK_MAX_RETRIES` | `3` | API 任务队列层 | 异步任务最大重试次数 |
-| `TASK_RETRY_DELAY_MS` | `1000` | API 任务队列层 | 异步任务重试间隔 |
-| `NO_COLOR` | 未设置 | CLI 展示层 | 设置任意非空值即关闭 ANSI 颜色 |
-
-Trace Viewer 的监听地址不读取 `PORT` / `HOST`，而由 `one-agent trace --port <port> --host <host>` 控制，默认 `127.0.0.1:3001`。这样 API 与只读 Viewer 可以同时启动且不会争用端口。
-
-## 3. 代码级 Runtime 参数
-
-这些参数服务于嵌入、测试和特定入口，不是 `.env` 配置。它们由对应组件拥有，只有调用方显式构造组件时才覆盖默认值。
-
-### 3.1 `AgentRuntime.createAgent(...)`（装配层）
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `planning` | 入口决定；CLI 为 `auto` | 选择 `simple`、`planning` 或自动路由 |
-| `subAgents` | `true` | 是否装配只读 `spawn_agent` 工具 |
-| `subAgentBudget` | 见下表 | 覆盖当前父 Run 的委派预算 |
-| `userInput` | `true` | 是否装配持久化询问能力；非交互 worker 可关闭 |
-| `threadId` / `taskId` | 无 | 关联持久化会话和异步任务 |
-| `signal` | 无 | 取消当前执行 |
-
-### 3.2 `AgentLoop`（执行层）
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `maxRetries` | `2` | 模型调用失败后的重试次数 |
-| `timeoutMs` | `MODEL_TIMEOUT_MS` | 单次模型请求超时 |
-| `maxToolIterations` | `5` | 一次 Loop 的工具迭代上限 |
-| `maxReplanAttempts` | `3` | PlanningLoop 重新规划上限 |
-| `maxRetryAttempts` | `2` | PlanningLoop 步骤重试上限 |
-| `maxSubAgentDepth` | `1` | 委派深度上限；子 Agent 不再递归委派 |
-
-依赖注入参数（Provider、Store、Planner、Judge、ContextManager、ToolPolicy、StrategyController 等）用于替换组件，不属于面向用户的调优旋钮。
-
-### 3.3 Sub-Agent 委派预算（执行层）
-
-| 参数 | 默认值 | 作用 |
-|---|---:|---|
-| `maxTasksPerRun` | `8` | 一个父 Run 最多接受的子任务数 |
-| `maxConcurrency` | `4` | 同一父 Run 的子任务并发上限 |
-| `maxTotalTokens` | `50000` | 达到已观测累计 token 后拒绝新委派 |
-| `taskTimeoutMs` | `60000` | 单个子任务执行超时 |
+| `enabled` | `true` | 是否装配只读委派能力 |
+| `maxDepth` | `1` | 委派深度上限 |
+| `maxTasksPerRun` | `8` | 每个父 Run 最多接受的子任务 |
+| `maxConcurrency` | `4` | 子任务并发上限 |
+| `maxTotalTokens` | `50000` | 达到累计观测 token 后拒绝新委派 |
+| `taskTimeoutMs` | `60000` | 单个子任务超时 |
 | `maxToolIterations` | `5` | 单个子 Agent 的工具迭代上限 |
 
-### 3.4 策略控制与异步任务（各自执行层）
+运行中策略升级由 `strategy.maxInitialToolBatch`（默认 `2`）和 `strategy.maxSwitches`（默认 `1`）控制，只允许在工具执行前安全地从 SimpleLoop 升级。
 
-| 组件参数 | 默认值 | 作用 |
+### 2.4 `tools`
+
+| 字段 | 默认值 | 说明 |
 |---|---:|---|
-| `StrategyController.maxInitialToolBatch` | `2` | SimpleLoop 首批工具超过该数量时可升级 PlanningLoop |
-| `StrategyController.maxSwitches` | `1` | 单 Run 的策略升级次数上限 |
-| `TaskQueue.maxConcurrency` | core 默认 `1`；API 固定 `2` | 异步任务并发数 |
-| `TaskQueue.taskTimeoutMs` | `300000` | 单个异步任务超时 |
-| `TaskQueue.maxRetries` | `3` | core 默认重试次数；API 可由环境变量覆盖 |
-| `TaskQueue.retryDelayMs` | `1000` | core 默认重试间隔；API 可由环境变量覆盖 |
+| `disabled` | `[]` | 禁用工具名数组，例如 `["run_command", "delete_file"]` |
+| `search.apiUrl` | 无 | Tavily、Brave 或通用搜索服务地址；未配置时使用 DuckDuckGo |
+| `search.apiKey` | 无 | 搜索服务密钥 |
 
-## 4. CLI 启动参数
+文件 API 和常见直接 shell 命令不能读取或改写 `one-agent.config.json` 与旧 `.env`。但 `run_command` 的静态护栏不是操作系统级安全沙箱；当配置与工具 workspace 位于同一目录时，应只在可信的本地环境启用它，API/共享部署应把 `run_command` 加入 `tools.disabled`。
 
-这些参数只影响本次进程，不写回 `.env`：
+### 2.5 `trace`、`storage` 与服务入口
 
-| 参数 | 默认值 | 作用 |
+| 字段 | 默认值 | 说明 |
 |---|---:|---|
-| `--workspace <path>` | workspace 解析规则 | 指定 workspace |
-| `--loop auto\|simple\|planning` | `auto` | 选择运行策略 |
-| `--new` | 否 | 创建新 Thread |
-| `--thread <id>` | 最近 Thread | 进入指定 Thread |
-| `--verbose` | 否 | 分区显示 reasoning 与内部规划信息 |
-| `--init` | 否 | 在 workspace 创建最小 `.env` 模板 |
-| `trace --port <port>` | `3001` | Trace Viewer 端口 |
-| `trace --host <host>` | `127.0.0.1` | Trace Viewer 地址 |
+| `trace.contentMode` | `redacted` | `redacted`、`metadata` 或 `full`；生产环境不建议 `full` |
+| `trace.host` | `127.0.0.1` | Trace Viewer 默认地址 |
+| `trace.port` | `3001` | Trace Viewer 默认端口 |
+| `trace.logLevel` | `info` | Viewer 日志级别 |
+| `storage.databasePath` | `data.db` | SQLite 路径；相对路径基于 workspace |
+| `api.host` | `127.0.0.1` | REST API 地址 |
+| `api.port` | `3000` | REST API 端口 |
+| `api.logLevel` | `info` | API 日志级别 |
+| `taskQueue.maxConcurrency` | `2` | API 异步任务并发数 |
+| `taskQueue.taskTimeoutMs` | `300000` | 单任务超时 |
+| `taskQueue.maxRetries` | `3` | 最大重试次数 |
+| `taskQueue.retryDelayMs` | `1000` | 重试间隔 |
+| `cli.color` | `true` | 是否输出 ANSI 颜色 |
 
-`--plan`、`--plan-auto` 和 `--trace` 是兼容参数，不应出现在新脚本中。
+## 3. 创建与迁移
 
-## 5. 配置治理规则
+首次使用：
 
-1. 新增环境变量时，同一提交更新本清单；属于常用配置时同时更新 `.env.example`；
-2. 新增代码级调优参数时，必须有明确的所属组件和默认值，不把配置跨多个层读取；
-3. 环境变量使用协议无关命名；旧名称只做有限兼容并在本清单标记；
-4. 默认值以代码为最终依据，文档修改必须通过配置相关测试与构建；
-5. Eval 数据集、并发和超时属于评测命令参数，不混入 Runtime 配置；
-6. 配置清单只治理输入，不负责运行时自动优化或动态改写配置。
+```bash
+cp one-agent.config.example.json one-agent.config.json
+# 编辑 model.apiKey、model.model 和可选 model.baseUrl
+```
+
+也可以运行：
+
+```bash
+one-agent --init
+```
+
+如果 workspace 中存在旧 `.env`，`--init` 会在本地一次性导入已识别的旧配置和密钥，创建 JSON 后不删除旧文件；之后 One Agent 不再读取 `.env`。确认 JSON 工作正常后，开发人员可自行移除旧文件。
+
+## 4. 配置治理规则
+
+1. 新增可调参数必须加入 `SystemConfig` Schema、示例 JSON和本清单；
+2. 默认值只在 Schema 中定义，组件不重复维护另一套业务默认值；
+3. 每项配置归属一个明确领域，组件只使用自己需要的配置分组；
+4. 真实配置和密钥不进入 Git、Trace、日志或 Agent 文件工具；
+5. 配置启动时加载一次并视为只读，不在运行中自动优化或改写；
+6. Eval 命令参数属于离线评测输入，不混入 Runtime 配置表。

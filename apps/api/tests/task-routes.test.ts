@@ -4,6 +4,7 @@ import {
   SqliteTaskStore,
   getSharedConnection,
   config,
+  configureSystem,
   OpenAICompatibleProvider,
 } from '@one-agent/agent-core';
 import { buildServer } from '../src/server.js';
@@ -19,7 +20,7 @@ const originalProvider = config.modelProvider;
 
 function stubModelClient(): void {
   config.openai = { chat: { completions: { create: mockCreate } } } as never;
-  config.modelProvider = new OpenAICompatibleProvider(config.openai as never, config.model);
+  config.modelProvider = new OpenAICompatibleProvider(config.openai as never, config.model.model);
 }
 
 async function waitForStatus(
@@ -41,7 +42,7 @@ async function waitForStatus(
 
 describe('task routes', () => {
   beforeEach(() => {
-    process.env.DATABASE_PATH = ':memory:';
+    configureSystem({ storage: { databasePath: ':memory:' } });
     resetSharedConnection();
     mockCreate.mockReset();
     stubModelClient();

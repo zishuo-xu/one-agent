@@ -1,6 +1,13 @@
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import {
+  modelName,
+  modelTimeoutMs,
+  runtimeSettings,
+  strategySettings,
+  subAgentSettings,
+} from '../configAccess.js';
 import Database from 'better-sqlite3';
 import { ToolExecutor } from '../tools/executor.js';
 import { ToolRegistry } from '../tools/registry.js';
@@ -145,7 +152,9 @@ export class AgentLoop extends EventEmitter {
 
   constructor(options: AgentLoopOptions = {}) {
     super();
-    const baseSystemPrompt = options.systemPrompt ?? config.systemPrompt;
+    const runtimeConfig = runtimeSettings();
+    const subAgentConfig = subAgentSettings();
+    const baseSystemPrompt = options.systemPrompt ?? runtimeConfig.systemPrompt;
     const systemInstructions = [baseSystemPrompt];
     if (options.tools?.has(MANAGE_MEMORY_TOOL_NAME)) {
       systemInstructions.push(MANAGE_MEMORY_SYSTEM_INSTRUCTION);
@@ -154,16 +163,16 @@ export class AgentLoop extends EventEmitter {
       systemInstructions.push(REQUEST_USER_INPUT_SYSTEM_INSTRUCTION);
     }
     this.systemPrompt = systemInstructions.join(' ');
-    this.maxRetries = options.maxRetries ?? 2;
-    this.maxToolIterations = options.maxToolIterations ?? 5;
-    this.maxReplanAttempts = options.maxReplanAttempts ?? 3;
-    this.maxRetryAttempts = options.maxRetryAttempts ?? 2;
+    this.maxRetries = options.maxRetries ?? runtimeConfig.maxRetries;
+    this.maxToolIterations = options.maxToolIterations ?? runtimeConfig.maxToolIterations;
+    this.maxReplanAttempts = options.maxReplanAttempts ?? runtimeConfig.maxReplanAttempts;
+    this.maxRetryAttempts = options.maxRetryAttempts ?? runtimeConfig.maxRetryAttempts;
     this.enablePlanning = options.enablePlanning ?? false;
     this.timeoutMs =
-      options.timeoutMs ?? (typeof config.timeoutMs === 'number' ? config.timeoutMs : 30000);
+      options.timeoutMs ?? modelTimeoutMs();
     this.threadId = options.threadId;
     this.taskId = options.taskId;
-    this.strategyController = options.strategyController ?? new StrategyController();
+    this.strategyController = options.strategyController ?? new StrategyController(strategySettings());
     this.toolRegistry = options.tools;
     this.toolExecutor = this.toolRegistry ? new ToolExecutor(this.toolRegistry) : undefined;
     this.signal = options.signal;
@@ -172,15 +181,15 @@ export class AgentLoop extends EventEmitter {
     this.modelProvider =
       options.modelProvider ??
       config.modelProvider ??
-      new OpenAICompatibleProvider(config.openai, config.model);
+      new OpenAICompatibleProvider(config.openai, modelName());
 
     // Sub-agent support: below the depth cap, offer the spawn_agent tool on a
     // cloned registry (never mutate the shared one). Sub-agents are built at
     // depth + 1, so at the cap they cannot spawn further agents — recursion
     // is impossible by construction.
     this.subAgentDepth = options.subAgentDepth ?? 0;
-    this.maxSubAgentDepth = options.maxSubAgentDepth ?? 1;
-    const subAgentsEnabled = options.subAgents ?? true;
+    this.maxSubAgentDepth = options.maxSubAgentDepth ?? subAgentConfig.maxDepth;
+    const subAgentsEnabled = options.subAgents ?? subAgentConfig.enabled;
     if (subAgentsEnabled && this.toolRegistry && this.subAgentDepth < this.maxSubAgentDepth) {
       // Sub-agents run on the utility model when configured (cheaper); an
       // explicitly pinned provider (tests, eval) always wins.
@@ -191,7 +200,11 @@ export class AgentLoop extends EventEmitter {
         modelProvider: subAgentProvider,
         signal: () => this.signal,
         budget: {
-          maxToolIterations: this.maxToolIterations,
+          maxTasksPerRun: subAgentConfig.maxTasksPerRun,
+          maxConcurrency: subAgentConfig.maxConcurrency,
+          maxTotalTokens: subAgentConfig.maxTotalTokens,
+          taskTimeoutMs: subAgentConfig.taskTimeoutMs,
+          maxToolIterations: subAgentConfig.maxToolIterations,
           ...options.subAgentBudget,
         },
       });

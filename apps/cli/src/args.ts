@@ -14,7 +14,10 @@ export interface CliArgs {
   deprecatedFlags: string[];
 }
 
-export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
+export function parseArgs(
+  argv: string[] = process.argv.slice(2),
+  defaultLoop: LoopMode = 'auto',
+): CliArgs {
   const threadIndex = argv.indexOf('--thread');
   const threadId =
     threadIndex >= 0 && argv[threadIndex + 1] && !argv[threadIndex + 1].startsWith('-')
@@ -56,7 +59,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     argv.includes('--trace') ? '--trace' : '',
   ].filter(Boolean);
   const loop = (explicitLoop as LoopMode | undefined) ??
-    (legacyPlan ? 'planning' : 'auto');
+    (legacyPlan ? 'planning' : defaultLoop);
 
   return {
     command: positional === 'trace' || positional === 'doctor' ? positional : 'chat',

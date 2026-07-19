@@ -44,7 +44,7 @@ export async function runDoctorCommand(): Promise<void> {
   console.log('');
 
   const report = await core.diagnoseModelProviders(core.config.modelProvider, {
-    timeoutMs: Math.min(core.config.timeoutMs, 15000),
+    timeoutMs: Math.min(core.config.model.timeoutMs, 15000),
   });
 
   for (const provider of report.providers) {

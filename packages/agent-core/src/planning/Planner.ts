@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { modelName } from '../configAccess.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
 import { ToolDefinition } from '../tools/types.js';
@@ -57,7 +58,7 @@ export class Planner {
         ? new OpenAICompatibleProvider(config.openai, options.model)
         : config.planningModelProvider ??
           config.modelProvider ??
-          new OpenAICompatibleProvider(config.openai, config.model));
+          new OpenAICompatibleProvider(config.openai, modelName()));
     this.timeoutMs = options.timeoutMs ?? 30000;
   }
 

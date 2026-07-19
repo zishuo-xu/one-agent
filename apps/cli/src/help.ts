@@ -12,7 +12,7 @@ ${bold('Usage')}:
 ${bold('Options')}:
   --help, -h          Show this help message
   --version, -v       Show version
-  --init              Create a .env template in the workspace
+  --init              Create one-agent.config.json in the workspace
   --new               Start a new thread (do not resume the most recent one)
   --new-thread        Alias of --new
   --thread <id>       Resume a specific thread

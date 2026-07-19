@@ -33,31 +33,29 @@ one-agent/
 ## 环境准备
 
 ```bash
-cp .env.example .env
-# 编辑 .env，选择 Provider 并填写对应 API Key / Model
+cp one-agent.config.example.json one-agent.config.json
+# 编辑 one-agent.config.json，填写 model.apiKey / model.model / model.baseUrl
 ```
 
-`.env.example` 提供常用模板；完整配置、默认值、所属层和兼容变量见
+`one-agent.config.json` 是代码唯一读取的系统配置表，包含模型密钥、Runtime、上下文、工具、Trace、数据库和服务参数；真实文件已被 Git 忽略。完整字段、默认值和所属层见
 [配置清单](./docs/configuration-reference.md)。
 
 当前有两种协议适配器：OpenAI Compatible（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）
 和原生 Anthropic Messages API。默认使用 OpenAI Compatible；原生 Anthropic 配置示例：
 
-```bash
-MODEL_PROVIDER=anthropic
-# DeepSeek 示例；直接使用 Anthropic 官方 API 时可省略 ANTHROPIC_BASE_URL
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=your-claude-model
-ANTHROPIC_MAX_TOKENS=4096
+```json
+{
+  "model": {
+    "provider": "anthropic",
+    "baseUrl": "https://api.deepseek.com/anthropic",
+    "apiKey": "sk-...",
+    "model": "your-claude-model",
+    "maxTokens": 4096
+  }
+}
 ```
 
-如果同一个兼容服务用一份 Key 同时提供 OpenAI 与 Anthropic 协议，可以省略
-`ANTHROPIC_API_KEY`，此时会复用 `OPENAI_API_KEY`。
-
-可通过 `FALLBACK_MODEL_PROVIDER`、`FALLBACK_API_KEY`、`FALLBACK_MODEL` 和可选的
-`FALLBACK_BASE_URL` 配置备用协议，支持 Anthropic 与 OpenAI Compatible 双向组合。
-原有 `OPENAI_FALLBACK_*` 配置继续兼容。主模型出现 5xx / 429 / 网络错误时自动 failover。
+可在 `model.fallback` 中配置备用协议、Endpoint、Key 和模型，支持 Anthropic 与 OpenAI Compatible 双向组合。主模型出现 5xx / 429 / 网络错误时自动 failover。
 
 `ModelProvider` 不只统一请求与响应，还必须声明 `streaming`、`toolCalling`、
 `structuredOutput`、`reasoning` 和可选上下文窗口。能力分为 `native`、`emulated`、
@@ -105,8 +103,8 @@ pnpm link --global
 
 # 首次运行前准备 API key
 mkdir -p ~/.one-agent
-cp ../../.env.example ~/.one-agent/.env
-# 编辑 ~/.one-agent/.env，填入 OPENAI_API_KEY
+cp ../../one-agent.config.example.json ~/.one-agent/one-agent.config.json
+# 编辑 ~/.one-agent/one-agent.config.json，填入 model.apiKey
 
 # 在非仓库目录任意位置启动
 one-agent
@@ -115,7 +113,7 @@ one-agent
 one-agent --workspace ~/my-agent
 ```
 
-注意：如果在仓库根目录运行 `one-agent`，由于当前目录存在 `.env`，会优先使用仓库目录作为 workspace。要体验全局默认行为，请在非仓库目录启动。
+注意：如果在仓库根目录运行 `one-agent`，由于当前目录存在配置或示例文件，会优先使用仓库目录作为 workspace。要体验全局默认行为，请在非仓库目录启动。
 
 ### 启动 REST API（可选）
 
@@ -149,7 +147,7 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 每个父 Run 共用一份 Sub-Agent 预算：默认最多接受 8 个子任务、最多 4 个并发、单个子任务 60 秒、
 累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
 
-API 部署时可用 `DISABLED_TOOLS=run_command,delete_file` 禁用高风险工具。
+API 部署时可在配置表中设置 `tools.disabled: ["run_command", "delete_file"]` 禁用高风险工具。
 
 ## Trace 与离线 Eval
 
@@ -171,7 +169,7 @@ Auto Planning 会先用成本敏感的分类器选择策略；对话、记忆问
 
 每个 run 还会保存 `traceStatus`、`droppedTraceEvents` 和 `traceError`。普通观察 Trace 写入失败不会改变任务结果，
 但会明确暴露记录不完整；恢复点属于必须持久化的事实，写入失败时不会继续推进状态。默认
-`TRACE_CONTENT=redacted` 会在查询和 Viewer 中清理凭据；也可配置为 `metadata` 或 `full`。
+`trace.contentMode: "redacted"` 会在查询和 Viewer 中清理凭据；也可配置为 `metadata` 或 `full`。
 
 Completion Contract 只在 `EvalRunner` 中离线执行，用数据集 checkpoint 检查工具证据与 workspace 终态。
 它不会进入 CLI/API 的正常执行路径，也不会在 Agent 回复前增加一次同步验证。

@@ -79,9 +79,7 @@ describe('web_search tool', () => {
   });
 
   it('falls back to DuckDuckGo when a configured provider is unreachable', async () => {
-    process.env.SEARCH_API_URL = 'https://api.tavily.com/search';
-    process.env.SEARCH_API_KEY = 'test-key';
-    try {
+    {
       const html = `
         <div class="result">
           <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F">Example</a>
@@ -101,14 +99,13 @@ describe('web_search tool', () => {
         });
       globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-      const tool = createWebSearchTool(new Sandbox('/tmp'));
+      const tool = createWebSearchTool(new Sandbox('/tmp'), {
+        apiUrl: 'https://api.tavily.com/search', apiKey: 'test-key',
+      });
       const result = await tool.execute({ query: 'example', limit: 1 });
 
       expect(result.results).toHaveLength(1);
       expect(result.results[0].url).toBe('https://example.com/');
-    } finally {
-      delete process.env.SEARCH_API_URL;
-      delete process.env.SEARCH_API_KEY;
     }
   });
 
@@ -129,11 +126,11 @@ describe('web_search tool', () => {
     });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-    process.env.SEARCH_API_URL = 'https://api.search.brave.io/api/web/search?q={query}&count={limit}';
-    process.env.SEARCH_API_KEY = 'brave-key';
-
-    try {
-      const tool = createWebSearchTool(new Sandbox('/tmp'));
+    {
+      const tool = createWebSearchTool(new Sandbox('/tmp'), {
+        apiUrl: 'https://api.search.brave.io/api/web/search?q={query}&count={limit}',
+        apiKey: 'brave-key',
+      });
       const result = await tool.execute({ query: 'Node.js LTS', limit: 2 });
 
       expect(result.results).toHaveLength(2);
@@ -147,9 +144,6 @@ describe('web_search tool', () => {
           }),
         })
       );
-    } finally {
-      delete process.env.SEARCH_API_URL;
-      delete process.env.SEARCH_API_KEY;
     }
   });
 
@@ -168,11 +162,10 @@ describe('web_search tool', () => {
     });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
 
-    process.env.SEARCH_API_URL = 'https://api.tavily.com/search';
-    process.env.SEARCH_API_KEY = 'tavily-key';
-
-    try {
-      const tool = createWebSearchTool(new Sandbox('/tmp'));
+    {
+      const tool = createWebSearchTool(new Sandbox('/tmp'), {
+        apiUrl: 'https://api.tavily.com/search', apiKey: 'tavily-key',
+      });
       const result = await tool.execute({ query: 'Node.js LTS', limit: 2 });
 
       expect(result.results).toHaveLength(2);
@@ -189,9 +182,6 @@ describe('web_search tool', () => {
           body: expect.stringContaining('Node.js LTS'),
         })
       );
-    } finally {
-      delete process.env.SEARCH_API_URL;
-      delete process.env.SEARCH_API_KEY;
     }
   });
 });

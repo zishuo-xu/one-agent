@@ -139,7 +139,7 @@ export interface EvalRunnerOptions {
   /**
    * When set, each task runs in its own persisted thread in this SQLite file
    * so failures can be inspected afterwards in trace-web
-   * (DATABASE_PATH=<path> pnpm dev:trace-web). Failed tasks mark their run
+   * (`one-agent trace --workspace <path>`). Failed tasks mark their run
    * as failed with the assertion errors and prefix the thread title [FAIL].
    */
   traceDbPath?: string;

@@ -46,8 +46,6 @@ describe('built-in file tools', () => {
       'settings.conf': 'port=3000\n',
       'config.xml': '<config />\n',
       'project.toml': '[project]\nname = "demo"\n',
-      '.env': 'APP_ENV=test\n',
-      '.env.local': 'DEBUG=true\n',
       'Dockerfile': 'FROM scratch\n',
       'logs/error.log.1': 'previous error\n',
     };
@@ -59,6 +57,12 @@ describe('built-in file tools', () => {
       fs.writeFileSync(absolutePath, content, 'utf-8');
       expect(tool.execute({ path: relativePath })).toEqual({ content });
     }
+  });
+
+  it('does not expose configuration files that may contain credentials', () => {
+    const tool = createReadFileTool(sandbox);
+    expect(() => tool.execute({ path: 'one-agent.config.json' })).toThrow('Protected configuration');
+    expect(() => tool.execute({ path: '.env' })).toThrow('Protected configuration');
   });
 
   it('read_file throws when file missing', () => {

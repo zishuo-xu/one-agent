@@ -27,7 +27,7 @@ export function categorizeError(error: unknown, runId?: string, verbose = false)
   ) {
     return {
       summary: red('请求超时或网络失败'),
-      detail: '请检查网络连接，或在 .env 中增大 MODEL_TIMEOUT_MS（当前默认 30000ms）。',
+      detail: '请检查网络连接，或在 one-agent.config.json 中增大 model.timeoutMs（默认 30000ms）。',
       traceHint: traceHintFor(runId),
     };
   }
@@ -36,7 +36,7 @@ export function categorizeError(error: unknown, runId?: string, verbose = false)
   if (message.includes('401') || message.includes('403') || message.includes('Unauthorized') || message.includes('Forbidden')) {
     return {
       summary: red('API 认证失败'),
-      detail: '请检查 OPENAI_API_KEY 是否正确，以及该 key 是否有权限访问所选模型。',
+      detail: '请检查 one-agent.config.json 中的 model.apiKey，以及该 key 是否有权限访问所选模型。',
       traceHint: traceHintFor(runId),
     };
   }
@@ -45,7 +45,7 @@ export function categorizeError(error: unknown, runId?: string, verbose = false)
   if (message.includes('404') || message.includes('Not Found') || message.includes('model_not_found')) {
     return {
       summary: red('模型或接口不存在'),
-      detail: '请检查 OPENAI_BASE_URL 和 OPENAI_MODEL 是否正确。',
+      detail: '请检查 one-agent.config.json 中的 model.baseUrl 和 model.model。',
       traceHint: traceHintFor(runId),
     };
   }

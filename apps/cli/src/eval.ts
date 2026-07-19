@@ -1,4 +1,4 @@
-import './load-env.js';
+import './load-config.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -112,7 +112,7 @@ async function main() {
   if (traceDbPath) {
     console.log('');
     console.log(`Traces saved to ${traceDbPath}`);
-    console.log(`View failures: DATABASE_PATH=${traceDbPath} pnpm dev:trace-web`);
+    console.log(`View failures: set storage.databasePath to ${traceDbPath}, then run one-agent trace`);
   }
 
   process.exit(summary.failed === 0 ? 0 : 1);

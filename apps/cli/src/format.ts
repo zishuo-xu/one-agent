@@ -1,6 +1,8 @@
 import process from 'node:process';
 
-export const supportsColor = Boolean(!process.env.NO_COLOR && process.stdout.isTTY);
+import { config } from '@one-agent/agent-core';
+
+export const supportsColor = Boolean(config.cli.color && process.stdout.isTTY);
 
 export function color(code: string, text: string): string {
   if (!supportsColor) return text;

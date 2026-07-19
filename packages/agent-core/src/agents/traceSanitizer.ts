@@ -1,3 +1,5 @@
+import { config } from '../config.js';
+
 type TraceContentMode = 'metadata' | 'redacted' | 'full';
 
 const SENSITIVE_KEY = /^(?:password|passwd|pass|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token)$/i;
@@ -34,9 +36,7 @@ function sanitize(value: unknown, mode: TraceContentMode, key?: string): unknown
 
 /** Sanitize only the persisted copy; live execution events remain untouched. */
 export function sanitizeTraceEvent<T>(event: T): T {
-  const configured = process.env.TRACE_CONTENT?.toLowerCase();
-  const mode: TraceContentMode =
-    configured === 'full' || configured === 'metadata' ? configured : 'redacted';
+  const mode: TraceContentMode = config.trace?.contentMode ?? 'redacted';
   if (mode === 'full') return event;
   return sanitize(event, mode) as T;
 }

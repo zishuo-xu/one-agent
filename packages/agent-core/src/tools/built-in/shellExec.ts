@@ -12,8 +12,8 @@ const MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
 /**
  * Minimal environment for child processes. The agent's own environment
- * carries API keys (OPENAI_API_KEY, SEARCH_API_KEY, …); forwarding it would
- * make `run_command: env` a credential exfiltration channel. Only innocuous
+ * may carry unrelated host secrets; forwarding it would make `run_command: env`
+ * a credential exfiltration channel. Only innocuous
  * vars commands genuinely need are passed through — secrets are excluded by
  * construction.
  */
@@ -45,6 +45,7 @@ function buildChildEnv(): NodeJS.ProcessEnv {
  * acts with the user's own permissions" — see docs/phase13-tool-ecosystem.md.
  */
 const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /(?:^|[\s/'"])(?:one-agent\.config\.json|\.env(?:\.[^\s/'"]+)?)(?:[\s/'"]|$)/i, reason: 'access to protected configuration' },
   { pattern: /\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*\s+)?(-[a-zA-Z]*f[a-zA-Z]*\s+)?(\/|~|\$HOME)(\s|$)/, reason: 'recursive delete of root/home' },
   { pattern: /\bsudo\b/, reason: 'privilege escalation via sudo' },
   { pattern: /\b(mkfs|fdisk|parted)\b/, reason: 'disk formatting/partitioning' },

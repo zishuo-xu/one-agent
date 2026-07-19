@@ -12,27 +12,24 @@ export function parseWorkspaceArg(argv: string[]): string | undefined {
 
 export function resolveWorkspaceRoot(options?: {
   argv?: string[];
-  env?: NodeJS.ProcessEnv;
   cwd?: string;
-  repoEnv?: string;
+  repoConfig?: string;
 }): string {
   const argv = options?.argv ?? process.argv.slice(2);
-  const env = options?.env ?? process.env;
   const cwd = options?.cwd ?? process.cwd();
 
   const fromArg = parseWorkspaceArg(argv);
   if (fromArg) return fromArg;
 
-  if (env.ONE_AGENT_WORKSPACE) {
-    return path.resolve(env.ONE_AGENT_WORKSPACE);
-  }
-
-  if (fs.existsSync(path.join(cwd, '.env'))) {
+  if (
+    fs.existsSync(path.join(cwd, 'one-agent.config.json')) ||
+    fs.existsSync(path.join(cwd, 'one-agent.config.example.json'))
+  ) {
     return cwd;
   }
 
-  if (options?.repoEnv && fs.existsSync(options.repoEnv)) {
-    return path.dirname(options.repoEnv);
+  if (options?.repoConfig && fs.existsSync(options.repoConfig)) {
+    return path.dirname(options.repoConfig);
   }
 
   return path.join(os.homedir(), '.one-agent');

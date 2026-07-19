@@ -5,6 +5,7 @@ import {
   ThreadStore,
   TraceEventStore,
   MessageStore,
+  config,
 } from '@one-agent/agent-core';
 import type { AgentRun, TraceEvent } from '@one-agent/agent-core';
 
@@ -97,7 +98,7 @@ export function buildRunOverview(
 export function buildTraceWebServer(): FastifyInstance {
   const fastify = Fastify({
     logger: {
-      level: process.env.LOG_LEVEL ?? 'info',
+      level: config.trace.logLevel,
     },
   });
 

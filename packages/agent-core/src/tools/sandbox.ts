@@ -18,6 +18,10 @@ export class Sandbox {
     if (normalized.includes('..')) {
       throw new Error(`Path traversal is not allowed: ${relativePath}`);
     }
+    const basename = path.basename(normalized).toLowerCase();
+    if (basename === 'one-agent.config.json' || basename === '.env' || basename.startsWith('.env.')) {
+      throw new Error(`Protected configuration file is not accessible to Agent tools: ${relativePath}`);
+    }
     return path.join(this.root, normalized);
   }
 
@@ -35,8 +39,6 @@ export class Sandbox {
     // environment dotfiles are normally plain text. Rotated logs use a
     // numeric suffix, so path.extname alone would otherwise see only ".1".
     return ext === ''
-      || basename === '.env'
-      || basename.startsWith('.env.')
       || allowed.has(ext)
       || /\.log\.\d+$/.test(basename);
   }

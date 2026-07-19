@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { resetSharedConnection } from '@one-agent/agent-core';
+import { configureSystem, resetSharedConnection } from '@one-agent/agent-core';
 import { buildServer } from '../src/server.js';
 
 vi.mock('openai', () => ({
@@ -14,7 +14,7 @@ vi.mock('openai', () => ({
 
 describe('memory routes', () => {
   beforeEach(() => {
-    process.env.DATABASE_PATH = ':memory:';
+    configureSystem({ storage: { databasePath: ':memory:' } });
     resetSharedConnection();
   });
 
