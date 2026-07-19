@@ -226,7 +226,10 @@ function printWaitingHint(
     ? readRecoveryPoint(traceEventStore, waiting)?.pendingInput
     : undefined;
   if (!waiting || !request) return;
-  console.log(cyan(`This thread is waiting for your answer (${shortId(waiting.id)}):`));
+  const heading = request.kind === 'plan_approval'
+    ? 'A plan is waiting for your review'
+    : 'This thread is waiting for your answer';
+  console.log(cyan(`${heading} (${shortId(waiting.id)}):`));
   if (includeQuestion) console.log(request.question);
   if (request.options?.length) {
     request.options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));

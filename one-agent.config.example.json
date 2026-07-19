@@ -14,7 +14,8 @@
     "maxRetries": 2,
     "maxToolIterations": 5,
     "maxReplanAttempts": 3,
-    "maxRetryAttempts": 2
+    "maxRetryAttempts": 2,
+    "planApproval": true
   },
   "context": {
     "maxTokens": 4096,

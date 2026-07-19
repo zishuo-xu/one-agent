@@ -43,6 +43,7 @@ export const systemConfigSchema = z.object({
     maxToolIterations: positiveInteger.default(5),
     maxReplanAttempts: nonNegativeInteger.default(3),
     maxRetryAttempts: nonNegativeInteger.default(2),
+    planApproval: z.boolean().default(true),
   }).strict().default({}),
   context: z.object({
     maxTokens: positiveInteger.default(4096),

@@ -110,6 +110,24 @@ describe('AgentRuntime', () => {
     db.close();
   });
 
+  it('requires plan review only for interactive runtime agents', () => {
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-plan-review-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: provider(FULL_CAPABILITIES),
+    });
+
+    const interactive = runtime.createAgent({ planning: true });
+    const worker = runtime.createAgent({ planning: true, userInput: false });
+    type PlanningInternals = { planningLoop: { requirePlanApproval: boolean } };
+
+    expect((interactive as unknown as PlanningInternals).planningLoop.requirePlanApproval).toBe(true);
+    expect((worker as unknown as PlanningInternals).planningLoop.requirePlanApproval).toBe(false);
+    db.close();
+  });
+
   it('accepts the native Anthropic adapter without Runtime-specific logic', () => {
     const db = createConnection({ path: ':memory:' });
     const anthropic = new AnthropicProvider(

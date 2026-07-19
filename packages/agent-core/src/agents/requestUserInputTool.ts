@@ -11,7 +11,7 @@ export const REQUEST_USER_INPUT_SYSTEM_INSTRUCTION =
 export interface UserInputRequest {
   id: string;
   /** Missing on v1 checkpoints; absence is treated as clarification. */
-  kind?: 'clarification' | 'tool_approval';
+  kind?: 'clarification' | 'tool_approval' | 'plan_approval';
   question: string;
   options?: string[];
   createdAt: string;
@@ -20,6 +20,10 @@ export interface UserInputRequest {
     fingerprint: string;
     stepId?: string;
     attempt?: number;
+  };
+  planReview?: {
+    revision: number;
+    maxRevisions: number;
   };
 }
 

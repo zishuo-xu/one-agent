@@ -67,7 +67,8 @@ export class Planner {
     tools: ToolDefinition[],
     memories?: string,
     previousPlan?: Plan,
-    failureAnalysis?: FailureAnalysis
+    failureAnalysis?: FailureAnalysis,
+    revisionFeedback?: string,
   ): Promise<Plan> {
     const toolDescriptions = tools
       .map((tool) => `- ${tool.name}: ${tool.description}`)
@@ -90,6 +91,11 @@ export class Planner {
         `Please create a revised plan that addresses the root cause.\n`
       : '';
 
+    const revisionSection = revisionFeedback
+      ? `\nThe user reviewed the previous plan and requested this change:\n${revisionFeedback}\n` +
+        'Create one revised plan that follows this feedback while preserving the original request.\n'
+      : '';
+
     const prompt =
       'Create a step-by-step plan to accomplish the following request.\n\n' +
       'Request:\n' +
@@ -97,6 +103,7 @@ export class Planner {
       memorySection +
       previousPlanSection +
       failureSection +
+      revisionSection +
       '\nAvailable tools:\n' +
       `${toolDescriptions || '(none)'}\n\n` +
       'Delegation:\n' +
@@ -156,6 +163,16 @@ export class Planner {
     } catch (error) {
       return this.fallbackPlan(userRequest, String(error));
     }
+  }
+
+  async revisePlan(
+    userRequest: string,
+    tools: ToolDefinition[],
+    feedback: string,
+    previousPlan: Plan,
+    memories?: string,
+  ): Promise<Plan> {
+    return this.createPlan(userRequest, tools, memories, previousPlan, undefined, feedback);
   }
 
   private async callModelWithJsonFormat(prompt: string): Promise<string> {

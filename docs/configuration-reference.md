@@ -57,6 +57,7 @@ CLI 的 `--loop`、`--thread`、`--new`、`--verbose` 以及 Trace Viewer 的 `-
 | `runtime.maxToolIterations` | `5` | AgentLoop | 工具迭代上限 |
 | `runtime.maxReplanAttempts` | `3` | PlanningLoop | 重新规划上限 |
 | `runtime.maxRetryAttempts` | `2` | PlanningLoop | 步骤重试上限 |
+| `runtime.planApproval` | `true` | PlanningLoop | 交互式规划任务执行前是否要求用户确认计划 |
 | `context.maxTokens` | `4096` | 上下文层 | 上下文压缩预算 |
 | `context.recentTokenBudget` | `2048` | 上下文层 | 近期未摘要消息预算 |
 
@@ -73,6 +74,10 @@ CLI 的 `--loop`、`--thread`、`--new`、`--verbose` 以及 Trace Viewer 的 `-
 | `maxToolIterations` | `5` | 单个子 Agent 的工具迭代上限 |
 
 运行中策略升级由 `strategy.maxInitialToolBatch`（默认 `2`）和 `strategy.maxSwitches`（默认 `1`）控制，只允许在工具执行前安全地从 SimpleLoop 升级。
+
+`runtime.planApproval` 只控制规划层的整份计划确认：用户可批准、拒绝，或提交一次修改意见后再次确认。
+它不会替代 `tools.requireApproval` 对每个高风险工具调用的执行层审批。`runtime.loop=simple` 时没有计划可确认；
+非交互式 TaskQueue 会跳过计划确认，避免后台任务永久等待。
 
 ### 2.4 `tools`
 

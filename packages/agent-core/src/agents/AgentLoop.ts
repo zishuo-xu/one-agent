@@ -20,6 +20,7 @@ import { Planner } from '../planning/Planner.js';
 import { ReasoningChain } from '../planning/ReasoningChain.js';
 import type { Plan } from '../planning/types.js';
 import { TaskJudge } from '../planning/TaskJudge.js';
+import { parsePlanReviewAnswer } from '../planning/planReview.js';
 import { getSharedConnection } from '../db/connection.js';
 import { RunStore } from '../db/runStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
@@ -96,6 +97,8 @@ export interface AgentLoopOptions {
   toolPolicy?: ToolPolicy;
   /** In-run direct-to-planning transition policy. */
   strategyController?: StrategyController;
+  /** Pause after planning so an interactive user can approve the frozen plan. */
+  requirePlanApproval?: boolean;
 }
 
 interface ExecutionRecovery {
@@ -316,6 +319,7 @@ export class AgentLoop extends EventEmitter {
       maxToolIterations: this.maxToolIterations,
       maxReplanAttempts: this.maxReplanAttempts,
       maxRetryAttempts: this.maxRetryAttempts,
+      requirePlanApproval: options.requirePlanApproval ?? false,
       checkSignal: () => this.checkSignal(),
       recordRecoveryPoint: (runId, checkpoint) => this.recordRecoveryPoint(runId, checkpoint),
     };
@@ -415,6 +419,13 @@ export class AgentLoop extends EventEmitter {
     if (pendingInput?.kind === 'tool_approval' && !parseToolApprovalAnswer(normalizedAnswer)) {
       throw new Error('Tool approval requires an explicit approve or reject answer.');
     }
+    if (pendingInput?.kind === 'plan_approval') {
+      const review = parsePlanReviewAnswer(normalizedAnswer);
+      const limits = pendingInput.planReview;
+      if (review.decision === 'revise' && limits && limits.revision >= limits.maxRevisions) {
+        throw new Error('The plan has already been revised once. Reply approve or reject.');
+      }
+    }
     if (!this.runStore.claimWaiting(runId)) {
       throw new Error(`Run ${runId} was already continued or cancelled.`);
     }
@@ -470,7 +481,10 @@ export class AgentLoop extends EventEmitter {
     if (recovery?.addUserMessage !== false) {
       this.contextManager.addMessage({ role: 'user', content: message });
     }
-    if (recovery?.inputAnswer) {
+    const shouldAddInputAnswer =
+      !recovery?.pendingInput?.kind ||
+      recovery.pendingInput.kind === 'clarification';
+    if (recovery?.inputAnswer && shouldAddInputAnswer) {
       this.contextManager.addMessage({ role: 'user', content: recovery.inputAnswer });
     }
     this.recorder.reset();
@@ -513,7 +527,10 @@ export class AgentLoop extends EventEmitter {
     const approval = await this.continueApprovedTool(execution.runId, recovery);
     if (approval.terminalResult) return approval.terminalResult;
 
-    const memoryText = this.recallMemory(recovery?.inputAnswer ?? message);
+    const memoryQuery = recovery?.pendingInput?.kind === 'clarification'
+      ? recovery.inputAnswer ?? message
+      : message;
+    const memoryText = this.recallMemory(memoryQuery);
 
     // Planning requires both the opt-in and a tool registry; in 'auto' mode
     // a cheap classifier decides per message whether planning is worth it.
@@ -540,6 +557,8 @@ export class AgentLoop extends EventEmitter {
             checkpoint: recovery.checkpoint,
             resumedFromRunId: recovery.resumedFromRunId,
             approvedToolResult: approval.approvedToolResult,
+            pendingInput: recovery.pendingInput,
+            inputAnswer: recovery.inputAnswer,
           }
         : undefined,
     };

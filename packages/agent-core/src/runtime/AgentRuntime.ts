@@ -46,6 +46,8 @@ export interface CreateRuntimeAgentOptions {
   subAgentBudget?: Partial<DelegationBudget>;
   /** Offer durable clarification. Disable for non-interactive workers. */
   userInput?: boolean;
+  /** Review PlanningLoop plans before execution. Defaults to the system config for interactive agents. */
+  planApproval?: boolean;
 }
 
 /**
@@ -136,6 +138,8 @@ export class AgentRuntime {
       traceEventStore: this.stores.traces,
       memoryStore: this.stores.memories,
       toolPolicy: options.userInput === false ? undefined : this.toolPolicy,
+      requirePlanApproval:
+        options.userInput !== false && (options.planApproval ?? config.runtime.planApproval),
       modelProvider: this.modelProvider,
     });
   }

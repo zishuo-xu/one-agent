@@ -22,6 +22,7 @@ export interface LoopInfrastructure {
   maxToolIterations: number;
   maxReplanAttempts: number;
   maxRetryAttempts: number;
+  requirePlanApproval: boolean;
   checkSignal: () => void;
   recordRecoveryPoint: (runId: string | undefined, checkpoint: RunCheckpoint) => void;
 }

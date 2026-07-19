@@ -236,6 +236,12 @@ one-agent trace                       # 独立启动只读 Trace Viewer
 需要审批的工具名单由 `one-agent.config.json` 的 `tools.requireApproval` 配置，默认值为
 `["delete_file", "run_command"]`；危险性规则不放在 Prompt、Loop、CLI 或 API 中。
 
+交互式 PlanningLoop 在生成计划后、执行任何步骤前还会进入一次“计划预览与确认”。CLI 会展示步骤、
+拟用工具和子 Agent 标记；输入 `approve` 开始执行，输入 `reject` 直接结束且不调用工具，也可以提交一次
+修改意见让 Planner 重新生成计划并再次确认。等待状态保存在 Trace 中，所以关闭 CLI 后重新进入同一 Thread
+仍能继续。它属于规划决策层，与执行层逐次进行的危险工具审批相互独立；SimpleLoop 和后台 TaskQueue 不受影响。
+可通过 `runtime.planApproval` 统一开关，默认开启。
+
 ## 断点恢复 v1
 
 PlanningLoop 会把最新计划、步骤状态、重试次数和执行中的工具作为 `recovery_point` 写入

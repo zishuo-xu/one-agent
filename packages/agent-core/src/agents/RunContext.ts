@@ -63,5 +63,7 @@ export interface RunContext {
       stepId?: string;
       result: ToolResult;
     };
+    pendingInput?: UserInputRequest;
+    inputAnswer?: string;
   };
 }

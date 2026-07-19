@@ -27,6 +27,13 @@ export type AgentEvent =
   | ModelCallTraceEvent
   | { type: 'plan'; plan: Plan }
   | {
+      type: 'plan_review';
+      phase: 'requested' | 'approved' | 'rejected' | 'revision_requested';
+      requestId: string;
+      revision: number;
+      feedback?: string;
+    }
+  | {
       type: 'plan_step';
       stepId: string;
       parentStepId?: string;

@@ -352,6 +352,7 @@ function renderViewerPage(): string {
       --plan_step: #a78bfa;
       --strategy_switch: #f59e0b;
       --tool_policy: #f97316;
+      --plan_review: #c084fc;
       --warning: #f97316;
     }
     * { box-sizing: border-box; }
@@ -468,6 +469,7 @@ function renderViewerPage(): string {
     .event.plan_step { border-left-color: var(--plan_step); }
     .event.strategy_switch { border-left-color: var(--strategy_switch); }
     .event.tool_policy, .event.input_required, .event.input_received { border-left-color: var(--tool_policy); }
+    .event.plan_review { border-left-color: var(--plan_review); }
     .event-header {
       display: flex;
       align-items: center;
@@ -651,6 +653,7 @@ function renderViewerPage(): string {
     .timeline-seg.plan_step { background: var(--plan_step); }
     .timeline-seg.strategy_switch { background: var(--strategy_switch); }
     .timeline-seg.tool_policy, .timeline-seg.input_required, .timeline-seg.input_received { background: var(--tool_policy); }
+    .timeline-seg.plan_review { background: var(--plan_review); }
     /* Filter buttons */
     .filters {
       display: flex;
@@ -684,6 +687,7 @@ function renderViewerPage(): string {
     .filter-btn.plan_step { border-color: var(--plan_step); }
     .filter-btn.strategy_switch { border-color: var(--strategy_switch); }
     .filter-btn.tool_policy, .filter-btn.input_required, .filter-btn.input_received { border-color: var(--tool_policy); }
+    .filter-btn.plan_review { border-color: var(--plan_review); }
     /* Collapsible events */
     .event { cursor: pointer; }
     .event .event-full { display: none; margin-top: 8px; }
@@ -976,6 +980,11 @@ function renderViewerPage(): string {
           return {
             label: (d.from ?? '?') + ' → ' + (d.to ?? '?'),
             preview: d.reason ?? '',
+          };
+        case 'plan_review':
+          return {
+            label: d.phase ?? '?',
+            preview: 'revision ' + (d.revision ?? 0) + (d.feedback ? ' · ' + d.feedback : ''),
           };
         case 'thought':
           return { label: '', preview: (d.content ?? '').slice(0, 200) };

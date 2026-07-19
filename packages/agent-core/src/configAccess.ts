@@ -20,6 +20,7 @@ export function runtimeSettings() {
     maxToolIterations?: number;
     maxReplanAttempts?: number;
     maxRetryAttempts?: number;
+    planApproval?: boolean;
   };
   return config.runtime ?? {
     systemPrompt: legacy.systemPrompt ?? 'You are a helpful assistant.',
@@ -28,6 +29,7 @@ export function runtimeSettings() {
     maxToolIterations: legacy.maxToolIterations ?? 5,
     maxReplanAttempts: legacy.maxReplanAttempts ?? 3,
     maxRetryAttempts: legacy.maxRetryAttempts ?? 2,
+    planApproval: legacy.planApproval ?? true,
   };
 }
 

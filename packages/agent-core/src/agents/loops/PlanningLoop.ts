@@ -19,6 +19,10 @@ import {
 } from '../requestUserInputTool.js';
 import { ToolApprovalRequiredError } from '../../tools/policy.js';
 import {
+  createPlanReviewRequest,
+  parsePlanReviewAnswer,
+} from '../../planning/planReview.js';
+import {
   allPlanStepsCompleted,
   buildExecutionUnits,
   findPlanStep,
@@ -50,6 +54,7 @@ export class PlanningLoop implements LoopStrategy {
   private readonly subAgentRunner: LoopInfrastructure['subAgentRunner'];
   private readonly maxReplanAttempts: number;
   private readonly maxRetryAttempts: number;
+  private readonly requirePlanApproval: boolean;
   private readonly checkSignal: () => void;
   private readonly persistRecoveryPoint: LoopInfrastructure['recordRecoveryPoint'];
   constructor(infra: LoopInfrastructure) {
@@ -63,6 +68,7 @@ export class PlanningLoop implements LoopStrategy {
     this.subAgentRunner = infra.subAgentRunner;
     this.maxReplanAttempts = infra.maxReplanAttempts;
     this.maxRetryAttempts = infra.maxRetryAttempts;
+    this.requirePlanApproval = infra.requirePlanApproval;
     this.checkSignal = infra.checkSignal;
     this.persistRecoveryPoint = infra.recordRecoveryPoint;
   }
@@ -79,9 +85,51 @@ export class PlanningLoop implements LoopStrategy {
     let currentUnitIndex = recoveryCheckpoint?.currentUnitIndex ?? 0;
     let replanAttempts = recoveryCheckpoint?.replanAttempts ?? 0;
     let retryAttempts = recoveryCheckpoint?.retryAttempts ?? 0;
+    let planApproved = recoveryCheckpoint ? recoveryCheckpoint.planApproved ?? true : !this.requirePlanApproval;
+    let planRevisionCount = recoveryCheckpoint?.planRevisionCount
+      ?? context.recovery?.pendingInput?.planReview?.revision
+      ?? 0;
+    // User answers create continuation Runs but are not crash recoveries and
+    // must not consume the three-attempt abnormal-recovery budget.
     const recoveryCount = recoveryCheckpoint
-      ? recoveryCheckpoint.recoveryCount + 1
+      ? recoveryCheckpoint.recoveryCount + (context.recovery?.pendingInput ? 0 : 1)
       : 0;
+
+    this.recordPlan(plan);
+
+    const pendingPlanReview = context.recovery?.pendingInput?.kind === 'plan_approval'
+      ? context.recovery.pendingInput
+      : undefined;
+    if (pendingPlanReview) {
+      const review = parsePlanReviewAnswer(context.recovery?.inputAnswer ?? '');
+      this.recorder.record({
+        type: 'plan_review',
+        phase: review.decision === 'revise' ? 'revision_requested' : review.decision === 'approve' ? 'approved' : 'rejected',
+        requestId: pendingPlanReview.id,
+        revision: planRevisionCount,
+        feedback: review.decision === 'revise' ? review.feedback : undefined,
+      });
+      if (review.decision === 'reject') {
+        return this.completeWithoutExecution('Plan rejected; no steps were executed.');
+      }
+      if (review.decision === 'revise') {
+        plan = await this.planner.revisePlan(
+          userMessage,
+          this.planningTools(),
+          review.feedback,
+          plan,
+          memoryText,
+        );
+        currentUnitIndex = 0;
+        replanAttempts = 0;
+        retryAttempts = 0;
+        planRevisionCount++;
+        planApproved = false;
+        this.recordPlan(plan);
+      } else {
+        planApproved = true;
+      }
+    }
 
     const approvedTool = context.recovery?.approvedToolResult;
     if (approvedTool?.stepId) {
@@ -117,12 +165,17 @@ export class PlanningLoop implements LoopStrategy {
         replanAttempts,
         retryAttempts,
         recoveryCount,
+        planApproved,
+        planRevisionCount,
         resumedFromRunId: context.recovery?.resumedFromRunId,
         runId,
       },
     };
-    this.recordPlan(plan);
     this.recordRecoveryPoint(state);
+
+    if (this.requirePlanApproval && !planApproved) {
+      return this.waitForPlanReview(state, planRevisionCount);
+    }
 
     // Execution units: single steps run in the main agent; consecutive
     // delegate+parallel steps are grouped into waves that run concurrently
@@ -721,6 +774,31 @@ export class PlanningLoop implements LoopStrategy {
         status: step.status,
       });
     }
+  }
+
+  private waitForPlanReview(state: PlanningRunState, revision: number): LoopResult {
+    const request = createPlanReviewRequest(state.checkpoint.plan, revision);
+    state.checkpoint.pendingInput = request;
+    this.recorder.record({
+      type: 'plan_review',
+      phase: 'requested',
+      requestId: request.id,
+      revision,
+    });
+    this.recordRecoveryPoint(state);
+    const { runId: _runId, ...checkpoint } = state.checkpoint;
+    return {
+      status: 'waiting_for_input',
+      reply: request.question,
+      inputRequest: request,
+      checkpoint: JSON.parse(JSON.stringify(checkpoint)) as PlanningRunCheckpoint,
+    };
+  }
+
+  private completeWithoutExecution(reply: string): LoopResult {
+    this.contextManager.addMessage({ role: 'assistant', content: reply });
+    this.recorder.record({ type: 'message', content: reply });
+    return { status: 'completed', reply };
   }
 
   private setStepStatus(

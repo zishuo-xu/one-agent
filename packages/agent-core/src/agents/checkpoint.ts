@@ -24,6 +24,9 @@ export interface PlanningRunCheckpoint {
   replanAttempts: number;
   retryAttempts: number;
   recoveryCount: number;
+  /** Missing on legacy checkpoints; a recovered legacy plan is treated as already approved. */
+  planApproved?: boolean;
+  planRevisionCount?: number;
   resumedFromRunId?: string;
   activeToolCall?: ActiveToolCheckpoint;
   pendingInput?: UserInputRequest;

@@ -19,6 +19,7 @@ describe('JSON system configuration', () => {
     expect(defaults.context.maxTokens).toBe(4096);
     expect(defaults.model.model).toBe('gpt-3.5-turbo');
     expect(defaults.tools.requireApproval).toEqual(['delete_file', 'run_command']);
+    expect(defaults.runtime.planApproval).toBe(true);
   });
 
   it('loads partial JSON and resolves the database path against the workspace', () => {
