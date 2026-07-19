@@ -73,7 +73,9 @@ export class AgentRuntime {
   constructor(options: AgentRuntimeOptions) {
     this.db = options.db ?? getSharedConnection();
     this.tools = options.tools ?? this.createTools(options.workspaceRoot);
-    this.toolPolicy = options.toolPolicy ?? new DefaultToolPolicy();
+    this.toolPolicy = options.toolPolicy ?? new DefaultToolPolicy({
+      confirmTools: config.tools.requireApproval,
+    });
     this.modelProvider = options.modelProvider;
     this.stores = {
       threads: new ThreadStore(this.db),

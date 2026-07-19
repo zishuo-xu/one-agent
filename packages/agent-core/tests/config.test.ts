@@ -18,6 +18,7 @@ describe('JSON system configuration', () => {
     expect(defaults.api.host).toBe('127.0.0.1');
     expect(defaults.context.maxTokens).toBe(4096);
     expect(defaults.model.model).toBe('gpt-3.5-turbo');
+    expect(defaults.tools.requireApproval).toEqual(['delete_file', 'run_command']);
   });
 
   it('loads partial JSON and resolves the database path against the workspace', () => {

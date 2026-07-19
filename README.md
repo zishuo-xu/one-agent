@@ -232,7 +232,8 @@ one-agent trace                       # 独立启动只读 Trace Viewer
 危险工具由执行层的 `ToolPolicy` 独立控制。默认情况下，`delete_file` 和 `run_command` 会在执行前进入
 同一套持久化等待流程；批准内容包含冻结的工具名、参数和参数指纹，批准后只能执行这一份调用。
 输入 `approve`（也支持“确认”“同意”）继续，输入 `reject`（也支持“拒绝”“取消”）则不执行工具。
-危险性规则不放在 Prompt、Loop、CLI 或 API 中。
+需要审批的工具名单由 `one-agent.config.json` 的 `tools.requireApproval` 配置，默认值为
+`["delete_file", "run_command"]`；危险性规则不放在 Prompt、Loop、CLI 或 API 中。
 
 ## 断点恢复 v1
 

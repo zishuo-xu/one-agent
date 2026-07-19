@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { configureSystem } from '../../src/config.js';
 import { AnthropicProvider } from '../../src/model/AnthropicProvider.js';
 import { AgentRuntime } from '../../src/runtime/AgentRuntime.js';
 import { createConnection } from '../../src/db/connection.js';
@@ -24,6 +25,8 @@ const FULL_CAPABILITIES: ModelCapabilities = {
 };
 
 describe('AgentRuntime', () => {
+  afterEach(() => configureSystem({}));
+
   it('provides one composition root for stores, memory and agent creation', () => {
     const db = createConnection({ path: ':memory:' });
     const runtime = new AgentRuntime({
@@ -42,6 +45,22 @@ describe('AgentRuntime', () => {
       .toBe(true);
     expect(runtime.tools.has('manage_memory')).toBe(false);
     expect(runtime.memory).toBeDefined();
+    db.close();
+  });
+
+  it('assembles the default ToolPolicy from the unified configuration', () => {
+    configureSystem({ tools: { requireApproval: ['write_file'] } });
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-policy-test',
+      db,
+      tools: new ToolRegistry(),
+    });
+
+    expect(runtime.toolPolicy.evaluate({ id: 'write', name: 'write_file', arguments: {} }))
+      .toMatchObject({ action: 'require_confirmation' });
+    expect(runtime.toolPolicy.evaluate({ id: 'delete', name: 'delete_file', arguments: {} }))
+      .toEqual({ action: 'allow' });
     db.close();
   });
 

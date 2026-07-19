@@ -35,6 +35,10 @@
   },
   "tools": {
     "disabled": [],
+    "requireApproval": [
+      "delete_file",
+      "run_command"
+    ],
     "search": {}
   },
   "trace": {

@@ -79,10 +79,13 @@ CLI 的 `--loop`、`--thread`、`--new`、`--verbose` 以及 Trace Viewer 的 `-
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | `disabled` | `[]` | 禁用工具名数组，例如 `["run_command", "delete_file"]` |
+| `requireApproval` | `["delete_file", "run_command"]` | 每次执行前必须由用户明确批准的工具名数组；设为 `[]` 可关闭交互审批 |
 | `search.apiUrl` | 无 | Tavily、Brave 或通用搜索服务地址；未配置时使用 DuckDuckGo |
 | `search.apiKey` | 无 | 搜索服务密钥 |
 
 文件 API 和常见直接 shell 命令不能读取或改写 `one-agent.config.json` 与旧 `.env`。但 `run_command` 的静态护栏不是操作系统级安全沙箱；当配置与工具 workspace 位于同一目录时，应只在可信的本地环境启用它，API/共享部署应把 `run_command` 加入 `tools.disabled`。
+
+`disabled` 与 `requireApproval` 的语义不同：前者不注册工具，模型无法调用；后者保留工具能力，但交互式 Runtime 会在副作用发生前持久化冻结参数并等待用户批准。风险判断仍由执行层的 `ToolPolicy` 完成，配置层只提供名单。非交互式 TaskQueue 和子 Agent 不启用交互审批。
 
 ### 2.5 `trace`、`storage` 与服务入口
 

@@ -63,6 +63,7 @@ export const systemConfigSchema = z.object({
   }).strict().default({}),
   tools: z.object({
     disabled: z.array(z.string().min(1)).default([]),
+    requireApproval: z.array(z.string().min(1)).default(['delete_file', 'run_command']),
     search: z.object({
       apiUrl: z.string().url().optional(),
       apiKey: z.string().optional(),
