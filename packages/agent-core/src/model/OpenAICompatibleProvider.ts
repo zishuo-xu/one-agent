@@ -10,6 +10,7 @@ import type {
   ToolCallDelta,
   ModelCapabilities,
 } from './types.js';
+import { isModelCredentialConfigured, sanitizeModelEndpoint } from './credentials.js';
 
 const DEFAULT_CAPABILITIES: ModelCapabilities = {
   streaming: 'emulated',
@@ -27,12 +28,16 @@ const DEFAULT_CAPABILITIES: ModelCapabilities = {
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = 'openai-compatible';
   readonly capabilities: Readonly<ModelCapabilities>;
+  readonly endpoint: string;
+  readonly credentialConfigured: boolean;
 
   constructor(
     private readonly client: OpenAI,
     readonly model: string,
     capabilities: Partial<ModelCapabilities> = {},
   ) {
+    this.endpoint = sanitizeModelEndpoint(client.baseURL) ?? 'not exposed';
+    this.credentialConfigured = isModelCredentialConfigured(client.apiKey);
     this.capabilities = Object.freeze({ ...DEFAULT_CAPABILITIES, ...capabilities });
   }
 

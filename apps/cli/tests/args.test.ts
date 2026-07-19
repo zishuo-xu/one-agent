@@ -40,6 +40,11 @@ describe('CLI arguments', () => {
     expect(parseArgs(['--thread', 'trace']).command).toBe('chat');
   });
 
+  it('parses doctor as a standalone command', () => {
+    expect(parseArgs(['doctor'])).toMatchObject({ command: 'doctor' });
+    expect(parseArgs(['--thread', 'doctor']).command).toBe('chat');
+  });
+
   it('keeps old planning and trace flags as deprecated aliases', () => {
     expect(parseArgs(['--plan'])).toMatchObject({
       loop: 'planning', deprecatedFlags: ['--plan'],

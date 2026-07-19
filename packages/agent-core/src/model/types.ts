@@ -99,6 +99,9 @@ export interface ModelProvider {
   readonly name: string;
   readonly model: string;
   readonly capabilities: Readonly<ModelCapabilities>;
+  /** Safe diagnostic metadata; never contains credentials. */
+  readonly endpoint?: string;
+  readonly credentialConfigured?: boolean;
   complete(request: ModelRequest): Promise<ModelResponse>;
   stream(request: ModelRequest): AsyncIterable<ModelChunk>;
 }

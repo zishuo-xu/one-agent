@@ -17,6 +17,7 @@ import type {
   ModelToolCall,
   TokenUsage,
 } from './types.js';
+import { isModelCredentialConfigured, sanitizeModelEndpoint } from './credentials.js';
 
 const DEFAULT_CAPABILITIES: ModelCapabilities = {
   streaming: 'native',
@@ -40,6 +41,8 @@ export interface AnthropicProviderOptions {
 export class AnthropicProvider implements ModelProvider {
   readonly name = 'anthropic';
   readonly capabilities: Readonly<ModelCapabilities>;
+  readonly endpoint: string;
+  readonly credentialConfigured: boolean;
   private readonly maxTokens: number;
 
   constructor(
@@ -47,6 +50,8 @@ export class AnthropicProvider implements ModelProvider {
     readonly model: string,
     options: AnthropicProviderOptions = {},
   ) {
+    this.endpoint = sanitizeModelEndpoint(client.baseURL) ?? 'not exposed';
+    this.credentialConfigured = isModelCredentialConfigured(client.apiKey);
     this.maxTokens = options.maxTokens ?? 4096;
     if (!Number.isInteger(this.maxTokens) || this.maxTokens <= 0) {
       throw new Error(`Anthropic maxTokens must be a positive integer; received ${this.maxTokens}`);

@@ -69,6 +69,16 @@ pnpm install
 pnpm dev:cli
 ```
 
+### 诊断模型配置
+
+```bash
+one-agent doctor
+```
+
+`doctor` 对主模型及每个备用 Provider 分别发起 3 次小型真实请求，验证普通连接、流式输出和工具调用，
+同时展示能力契约与安全处理后的 Endpoint。它不会创建 Thread、Run、Trace，也不会实际执行诊断工具；
+真实请求仍可能产生少量模型费用。
+
 ### 启动 Trace Viewer
 
 ```bash

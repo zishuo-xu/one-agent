@@ -23,3 +23,12 @@ export { FallbackProvider, defaultShouldFallback } from './FallbackProvider.js';
 export type { FallbackPredicate } from './FallbackProvider.js';
 export { createProviderFromEnv } from './factory.js';
 export type { ModelProviderKind, ProviderFactoryOptions } from './factory.js';
+export { diagnoseModelProviders } from './diagnostics.js';
+export type {
+  ModelDiagnosticCheck,
+  ModelDiagnosticCheckName,
+  ModelDiagnosticOptions,
+  ModelDiagnosticReport,
+  ModelDiagnosticStatus,
+  ModelProviderDiagnostic,
+} from './diagnostics.js';

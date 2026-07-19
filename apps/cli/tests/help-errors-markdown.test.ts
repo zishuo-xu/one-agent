@@ -46,6 +46,7 @@ describe('help text', () => {
 
   it('presents one default command and one unified loop option', () => {
     expect(HELP_TEXT).toContain('one-agent trace');
+    expect(HELP_TEXT).toContain('one-agent doctor');
     expect(HELP_TEXT).toContain('--loop <mode>');
     expect(HELP_TEXT).toContain('auto (default), simple, or planning');
     expect(HELP_TEXT).toContain('Deprecated alias for --loop planning');

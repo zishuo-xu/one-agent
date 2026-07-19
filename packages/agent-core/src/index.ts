@@ -41,6 +41,7 @@ export {
   FallbackProvider,
   defaultShouldFallback,
   createProviderFromEnv,
+  diagnoseModelProviders,
 } from './model/index.js';
 export type {
   AnthropicProviderOptions,
@@ -52,6 +53,12 @@ export type {
   ModelToolDefinition,
   ModelProviderKind,
   ProviderFactoryOptions,
+  ModelDiagnosticCheck,
+  ModelDiagnosticCheckName,
+  ModelDiagnosticOptions,
+  ModelDiagnosticReport,
+  ModelDiagnosticStatus,
+  ModelProviderDiagnostic,
   ToolCallDelta,
   TokenUsage,
   FallbackPredicate,

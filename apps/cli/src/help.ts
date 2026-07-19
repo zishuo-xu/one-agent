@@ -7,6 +7,7 @@ export const HELP_TEXT = `
 ${bold('Usage')}:
   one-agent [options]
   one-agent trace [--workspace <dir>]
+  one-agent doctor [--workspace <dir>]
 
 ${bold('Options')}:
   --help, -h          Show this help message
@@ -21,6 +22,7 @@ ${bold('Options')}:
 
 ${bold('Commands')}:
   trace               Start the read-only Trace Viewer without starting chat
+  doctor              Run 3 live protocol probes per Provider (may incur model cost)
 
 ${bold('Compatibility aliases')}:
   --plan              Deprecated alias for --loop planning

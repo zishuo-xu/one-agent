@@ -28,15 +28,18 @@ export class FallbackProvider implements ModelProvider {
   readonly model: string;
   readonly capabilities;
 
+  readonly providers: readonly ModelProvider[];
+
   constructor(
-    private readonly providers: ModelProvider[],
+    providers: ModelProvider[],
     private readonly shouldFallback: FallbackPredicate = defaultShouldFallback,
   ) {
     if (providers.length === 0) {
       throw new Error('FallbackProvider requires at least one provider');
     }
-    this.model = providers[0].model;
-    this.capabilities = Object.freeze(intersectModelCapabilities(providers));
+    this.providers = Object.freeze([...providers]);
+    this.model = this.providers[0].model;
+    this.capabilities = Object.freeze(intersectModelCapabilities([...this.providers]));
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {

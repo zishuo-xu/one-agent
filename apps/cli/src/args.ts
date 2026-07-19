@@ -1,4 +1,4 @@
-export type CliCommand = 'chat' | 'trace';
+export type CliCommand = 'chat' | 'trace' | 'doctor';
 export type LoopMode = 'auto' | 'simple' | 'planning';
 
 export interface CliArgs {
@@ -29,7 +29,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   const positional = argv.find((arg, index) =>
     !arg.startsWith('-') && !valueFlags.has(argv[index - 1] ?? ''),
   );
-  if (positional && positional !== 'trace') {
+  if (positional && positional !== 'trace' && positional !== 'doctor') {
     throw new Error(`Unknown command: ${positional}`);
   }
 
@@ -59,7 +59,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     (legacyPlan ? 'planning' : 'auto');
 
   return {
-    command: positional === 'trace' ? 'trace' : 'chat',
+    command: positional === 'trace' || positional === 'doctor' ? positional : 'chat',
     threadId,
     newThread,
     verbose: argv.includes('--verbose'),
