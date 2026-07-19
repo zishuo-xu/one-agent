@@ -40,6 +40,7 @@ function walkFiles(root: string): string[] {
 export function createSearchFilesTool(sandbox: Sandbox): ToolDefinition {
   return {
     name: 'search_files',
+    readOnly: true,
     description:
       'Search files in the workspace by filename pattern and/or content substring. ' +
       'The pattern supports * and ? wildcards and matches against workspace-relative paths. ' +

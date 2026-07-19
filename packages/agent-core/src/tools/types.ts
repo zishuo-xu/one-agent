@@ -4,6 +4,8 @@ import type { ModelToolDefinition } from '../model/types.js';
 export interface ToolDefinition {
   name: string;
   description: string;
+  /** Explicit opt-in for tools that cannot mutate workspace or external state. */
+  readOnly?: boolean;
   parameters: z.ZodTypeAny;
   execute: (args: unknown) => Promise<unknown> | unknown;
 }

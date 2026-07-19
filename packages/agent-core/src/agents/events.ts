@@ -76,6 +76,7 @@ export type AgentEvent =
       status: 'started' | 'completed' | 'failed';
       stepId?: string;
       reply?: string;
+      outcomeStatus?: 'unverified' | 'unavailable';
       error?: string;
       toolCallCount?: number;
       durationMs?: number;

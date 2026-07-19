@@ -22,8 +22,11 @@ export interface SubAgentTask {
 }
 
 export interface SubAgentResult {
-  success: boolean;
-  reply: string;
+  /** Whether the isolated execution loop itself ended normally. */
+  executionStatus: 'completed' | 'failed';
+  /** A completed execution reports an outcome; the parent still decides whether it satisfies the goal. */
+  outcomeStatus: 'unverified' | 'unavailable';
+  summary: string;
   error?: string;
   toolCalls: ToolCall[];
   tokenUsage?: TokenUsage;
@@ -77,6 +80,7 @@ export class SubAgentRunner {
     const startedAt = Date.now();
     const registry = new ToolRegistry();
     const inherited = this.tools.list().filter((tool) =>
+      tool.readOnly === true &&
       tool.name !== MANAGE_MEMORY_TOOL_NAME &&
       tool.name !== REQUEST_USER_INPUT_TOOL_NAME &&
       (!task.allowedTools || task.allowedTools.includes(tool.name)),
@@ -91,8 +95,9 @@ export class SubAgentRunner {
       // depth=1 with the default max of 1: this loop cannot spawn further agents.
       subAgentDepth: 1,
       systemPrompt:
-        'You are a sub-task execution agent. Complete the given sub-task with the ' +
-        'available tools, then reply with a concise result summary. Do not ask ' +
+        'You are a read-only sub-task execution agent. Investigate the given sub-task with the ' +
+        'available tools, then report a concise result summary and relevant evidence. Do not claim ' +
+        'that the parent task is complete. Do not ask ' +
         'follow-up questions; make reasonable assumptions and finish the task.',
       signal: this.signal?.(),
     });
@@ -118,8 +123,9 @@ export class SubAgentRunner {
         .filter((e): e is { type: 'tool_call'; toolCall: ToolCall } => e.type === 'tool_call')
         .map((e) => e.toolCall);
       return {
-        success: true,
-        reply: result.reply,
+        executionStatus: 'completed',
+        outcomeStatus: 'unverified',
+        summary: result.reply,
         toolCalls,
         tokenUsage: result.tokenUsage,
         durationMs: Date.now() - startedAt,
@@ -127,8 +133,9 @@ export class SubAgentRunner {
       };
     } catch (error) {
       return {
-        success: false,
-        reply: '',
+        executionStatus: 'failed',
+        outcomeStatus: 'unavailable',
+        summary: '',
         error: error instanceof Error ? error.message : String(error),
         toolCalls: [],
         durationMs: Date.now() - startedAt,

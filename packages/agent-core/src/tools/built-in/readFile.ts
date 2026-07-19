@@ -6,6 +6,7 @@ import { Sandbox } from '../sandbox.js';
 export function createReadFileTool(sandbox: Sandbox): ToolDefinition {
   return {
     name: 'read_file',
+    readOnly: true,
     description:
       'Read the content of a text file within the workspace. ' +
       'The path is relative to the workspace root. ' +

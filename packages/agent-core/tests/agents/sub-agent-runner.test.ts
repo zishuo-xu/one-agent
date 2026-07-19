@@ -26,6 +26,7 @@ const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
 const readTool: ToolDefinition = {
   name: 'read_file',
+  readOnly: true,
   description: 'Read a file',
   parameters: z.object({ path: z.string() }),
   execute: () => ({ content: 'file-data' }),
@@ -59,8 +60,9 @@ describe('SubAgentRunner', () => {
     const runner = new SubAgentRunner({ tools: makeRegistry() });
     const result = await runner.run({ task: 'do the thing' });
 
-    expect(result.success).toBe(true);
-    expect(result.reply).toBe('subtask done');
+    expect(result.executionStatus).toBe('completed');
+    expect(result.outcomeStatus).toBe('unverified');
+    expect(result.summary).toBe('subtask done');
     expect(result.tokenUsage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
@@ -77,15 +79,27 @@ describe('SubAgentRunner', () => {
     expect(names).not.toContain('write_file');
   });
 
-  it('gives all inherited tools when allowedTools is not set', async () => {
-    mockCreate.mockResolvedValueOnce(textResponse('full set') as never);
+  it('only inherits explicitly read-only tools when allowedTools is not set', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('read-only set') as never);
 
     const runner = new SubAgentRunner({ tools: makeRegistry() });
     await runner.run({ task: 'anything' });
 
     const params = mockCreate.mock.calls[0][0] as { tools?: Array<{ function: { name: string } }> };
     const names = params.tools?.map((t) => t.function.name) ?? [];
-    expect(names.sort()).toEqual(['read_file', 'write_file']);
+    expect(names).toEqual(['read_file']);
+    expect(names).not.toContain('write_file');
+  });
+
+  it('cannot opt a side-effecting tool in through allowedTools', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('no write access') as never);
+
+    const runner = new SubAgentRunner({ tools: makeRegistry() });
+    await runner.run({ task: 'try to write', allowedTools: ['write_file'] });
+
+    const params = mockCreate.mock.calls[0][0] as { tools?: Array<{ function: { name: string } }> };
+    const names = params.tools?.map((t) => t.function.name) ?? [];
+    expect(names).not.toContain('write_file');
   });
 
   it('builds an isolated context from task parts (no parent history)', async () => {
@@ -125,7 +139,7 @@ describe('SubAgentRunner', () => {
     const runner = new SubAgentRunner({ tools: makeRegistry() });
     const result = await runner.run({ task: 'find something' });
 
-    expect(result.success).toBe(true);
+    expect(result.executionStatus).toBe('completed');
     expect(result.toolCalls).toEqual([{ id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } }]);
   });
 
@@ -135,9 +149,10 @@ describe('SubAgentRunner', () => {
     const runner = new SubAgentRunner({ tools: makeRegistry() });
     const result = await runner.run({ task: 'doomed' });
 
-    expect(result.success).toBe(false);
+    expect(result.executionStatus).toBe('failed');
+    expect(result.outcomeStatus).toBe('unavailable');
     expect(result.error).toContain('model exploded');
-    expect(result.reply).toBe('');
+    expect(result.summary).toBe('');
   });
 
   it('returns the condensed internal event stream (tool calls, message; no deltas)', async () => {
@@ -179,7 +194,7 @@ describe('SubAgentRunner', () => {
     const runner = new SubAgentRunner({ tools: makeRegistry() });
     const result = await runner.run({ task: 'doomed' });
 
-    expect(result.success).toBe(false);
+    expect(result.executionStatus).toBe('failed');
     const types = result.events.map((e) => e.type);
     expect(types).toContain('tool_call');
     expect(types).toContain('tool_result');
@@ -209,8 +224,9 @@ describe('SubAgentRunner', () => {
     const runner = new SubAgentRunner({ tools: makeRegistry(), maxToolIterations: 1 });
     const result = await runner.run({ task: 'long investigation' });
 
-    expect(result.success).toBe(true);
-    expect(result.reply).toBe('partial findings so far');
+    expect(result.executionStatus).toBe('completed');
+    expect(result.outcomeStatus).toBe('unverified');
+    expect(result.summary).toBe('partial findings so far');
     expect(result.toolCalls).toHaveLength(2);
   });
 });

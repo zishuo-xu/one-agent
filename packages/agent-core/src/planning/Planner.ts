@@ -224,7 +224,8 @@ export class Planner {
       status: 'pending',
       toolName: step.toolName,
       expectedOutcome: step.expectedOutcome,
-      delegate: step.delegate,
+      // Normalize the documented invariant instead of trusting model output.
+      delegate: step.parallel ? true : step.delegate,
       parallel: step.parallel,
       parentId,
     };

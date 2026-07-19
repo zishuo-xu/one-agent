@@ -35,6 +35,7 @@ function makeTools(): ToolRegistry {
   const defs: ToolDefinition[] = [
     ...READ_ONLY_NAMES.map((name) => ({
       name,
+      readOnly: true,
       description: `${name} tool`,
       parameters: z.object({}),
       execute: () => ({ ok: true }),
@@ -87,7 +88,7 @@ describe('delegated plan steps', () => {
     mockCreate.mockReset();
   });
 
-  it('runs consecutive delegate+parallel steps as a read-only wave, serial delegate with full tools', async () => {
+  it('runs every delegated step with the same read-only contract', async () => {
     const plan: Plan = {
       reasoning: 'mixed plan',
       steps: [
@@ -120,7 +121,7 @@ describe('delegated plan steps', () => {
     const started = events.filter((e) => e.type === 'sub_agent' && e.status === 'started');
     expect(started).toHaveLength(3);
 
-    // Parallel sub-agents received read-only schemas; serial received full set.
+    // Both parallel and serial delegation use the same read-only boundary.
     const subCalls = mockCreate.mock.calls.filter((call) => {
       const prompt = promptOf(call);
       return (
@@ -132,11 +133,17 @@ describe('delegated plan steps', () => {
     for (const call of subCalls) {
       const prompt = promptOf(call);
       const names = toolNamesOf(call);
-      if (prompt.includes('Your sub-task: parallel research')) {
-        expect(names.length).toBeGreaterThan(0);
-        expect(names.every((n) => READ_ONLY_NAMES.includes(n))).toBe(true);
-      } else {
-        expect(names).toContain('write_file');
+      expect(names.length).toBeGreaterThan(0);
+      expect(names.every((n) => READ_ONLY_NAMES.includes(n))).toBe(true);
+      expect(names).not.toContain('write_file');
+    }
+
+    // PlanningLoop owns delegation through plan flags; ordinary planning
+    // model calls never receive the spawn_agent tool.
+    for (const call of mockCreate.mock.calls) {
+      const prompt = promptOf(call);
+      if (!prompt.includes('Your sub-task:')) {
+        expect(toolNamesOf(call)).not.toContain('spawn_agent');
       }
     }
   });

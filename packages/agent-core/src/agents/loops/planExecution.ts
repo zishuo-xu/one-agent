@@ -1,14 +1,5 @@
 import type { Plan, PlanStep } from '../../planning/types.js';
 
-/** Parallel waves are deliberately limited to side-effect-free tools. */
-export const READ_ONLY_DELEGATION_TOOLS = [
-  'read_file',
-  'list_files',
-  'search_files',
-  'web_search',
-  'get_time',
-];
-
 export type ExecutionUnit =
   | { type: 'single'; step: PlanStep }
   | { type: 'wave'; steps: PlanStep[] };

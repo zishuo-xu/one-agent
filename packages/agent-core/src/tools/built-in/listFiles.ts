@@ -6,6 +6,7 @@ import { Sandbox } from '../sandbox.js';
 export function createListFilesTool(sandbox: Sandbox): ToolDefinition {
   return {
     name: 'list_files',
+    readOnly: true,
     description:
       'List files and directories within a workspace directory. ' +
       'The path is relative to the workspace root. ' +

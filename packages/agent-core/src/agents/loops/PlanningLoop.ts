@@ -2,6 +2,7 @@ import { ToolCall, ToolResult } from '../../tools/types.js';
 import type { ModelToolCall } from '../../model/types.js';
 import { Plan, PlanStep, FailureAnalysis } from '../../planning/types.js';
 import type { SubAgentTask, SubAgentResult } from '../SubAgentRunner.js';
+import { SPAWN_AGENT_TOOL_NAME } from '../spawnAgentTool.js';
 import type { LoopInfrastructure, LoopStrategy } from './types.js';
 import type { LoopResult, RunContext } from '../RunContext.js';
 import { safeParseArgs } from './utils.js';
@@ -22,7 +23,6 @@ import {
   buildExecutionUnits,
   findPlanStep,
   flattenPlanPostOrder,
-  READ_ONLY_DELEGATION_TOOLS,
 } from './planExecution.js';
 
 interface PlanningRunState {
@@ -75,7 +75,7 @@ export class PlanningLoop implements LoopStrategy {
     const recoveryCheckpoint = context.recovery?.checkpoint as PlanningRunCheckpoint | undefined;
     let plan = recoveryCheckpoint
       ? JSON.parse(JSON.stringify(recoveryCheckpoint.plan)) as Plan
-      : await this.planner.createPlan(userMessage, this.toolRegistry!.list(), memoryText);
+      : await this.planner.createPlan(userMessage, this.planningTools(), memoryText);
     let currentUnitIndex = recoveryCheckpoint?.currentUnitIndex ?? 0;
     let replanAttempts = recoveryCheckpoint?.replanAttempts ?? 0;
     let retryAttempts = recoveryCheckpoint?.retryAttempts ?? 0;
@@ -297,7 +297,7 @@ export class PlanningLoop implements LoopStrategy {
     plan: Plan,
   ): Promise<StepExecutionResult> {
     const result = await this.executeDelegatedStep(state, step, plan);
-    if (result.success) {
+    if (result.executionStatus === 'completed') {
       return { next: 'continue' };
     }
 
@@ -341,7 +341,7 @@ export class PlanningLoop implements LoopStrategy {
     const failed: Array<{ step: PlanStep; reason: string }> = [];
     for (let i = 0; i < toRun.length; i++) {
       const outcome = results[i];
-      if (outcome.status === 'fulfilled' && outcome.value.success) {
+      if (outcome.status === 'fulfilled' && outcome.value.executionStatus === 'completed') {
         this.setStepStatus(state, toRun[i], 'completed');
       } else {
         this.setStepStatus(state, toRun[i], 'failed');
@@ -392,21 +392,19 @@ export class PlanningLoop implements LoopStrategy {
     plan: Plan,
   ): Promise<SubAgentResult> {
 
-    const allowedTools = step.parallel ? READ_ONLY_DELEGATION_TOOLS : undefined;
-
     const planSummary = plan.steps.map((s) => `${s.id}. ${s.description}`).join('; ');
     const result = await this.runSubAgent({
       task: step.description,
       context: `Executing one step of a larger plan: ${planSummary}`,
       expectedOutcome: step.expectedOutcome,
-      allowedTools,
+      allowedTools: step.allowedTools ?? (step.toolName ? [step.toolName] : undefined),
       stepId: step.id,
       memoryText: state.context.memoryText,
     });
 
     state.context.reasoning.addThought(
-      result.success
-        ? `Delegated step completed: ${result.reply.slice(0, 200)}`
+      result.executionStatus === 'completed'
+        ? `Delegated execution completed; outcome remains unverified: ${result.summary.slice(0, 200)}`
         : `Delegated step failed: ${result.error ?? 'unknown'}`,
       step.id,
     );
@@ -416,7 +414,9 @@ export class PlanningLoop implements LoopStrategy {
       role: 'user',
       content:
         `[Sub-agent result for step ${step.id}: ${step.description}]\n` +
-        (result.success ? result.reply : `FAILED: ${result.error ?? 'unknown error'}`),
+        (result.executionStatus === 'completed'
+          ? `EXECUTION COMPLETED; OUTCOME UNVERIFIED:\n${result.summary}`
+          : `FAILED: ${result.error ?? 'unknown error'}`),
       internal: true,
     });
 
@@ -432,16 +432,17 @@ export class PlanningLoop implements LoopStrategy {
 
 
     const constraint = this.resolveStepToolConstraint(step);
+    const availablePlanningToolNames = this.planningTools().map((tool) => tool.name);
     const constrainedToolNames = constraint.requiredTool
       ? [constraint.requiredTool]
       : constraint.allowedTools;
     const inputToolAvailable = this.toolRegistry?.has(REQUEST_USER_INPUT_TOOL_NAME) ?? false;
     const allowedToolNames = constrainedToolNames
       ? Array.from(new Set([
-          ...constrainedToolNames,
+          ...constrainedToolNames.filter((name) => name !== SPAWN_AGENT_TOOL_NAME),
           ...(inputToolAvailable ? [REQUEST_USER_INPUT_TOOL_NAME] : []),
         ]))
-      : undefined;
+      : availablePlanningToolNames;
 
     this.contextManager.addMessage({
       role: 'user',
@@ -701,7 +702,7 @@ export class PlanningLoop implements LoopStrategy {
 
     const newPlan = await this.planner.createPlan(
       userMessage,
-      this.toolRegistry!.list(),
+      this.planningTools(),
       state.context.memoryText,
       currentPlan,
       failureAnalysis
@@ -784,7 +785,9 @@ export class PlanningLoop implements LoopStrategy {
       .join('\n');
 
     const toolConstraint = allowedToolNames
-      ? `You must use one of these tools for this step: ${allowedToolNames.join(', ')}`
+      ? strict
+        ? `You must use one of these tools for this step: ${allowedToolNames.join(', ')}`
+        : `Available tools for this step: ${allowedToolNames.join(', ')}. Use one only if needed.`
       : 'You may use any available tool if needed.';
     const strictHint = strict ? 'Do not deviate from the specified tool.' : '';
 
@@ -824,8 +827,9 @@ export class PlanningLoop implements LoopStrategy {
   async runSubAgent(task: SubAgentTask): Promise<SubAgentResult> {
     if (!this.subAgentRunner) {
       return {
-        success: false,
-        reply: '',
+        executionStatus: 'failed',
+        outcomeStatus: 'unavailable',
+        summary: '',
         error: 'Sub-agents are disabled or the delegation depth limit was reached',
         toolCalls: [],
         durationMs: 0,
@@ -844,9 +848,10 @@ export class PlanningLoop implements LoopStrategy {
     this.recorder.record({
       type: 'sub_agent',
       task: task.task,
-      status: result.success ? 'completed' : 'failed',
+      status: result.executionStatus === 'completed' ? 'completed' : 'failed',
       stepId: task.stepId,
-      reply: result.reply || undefined,
+      reply: result.summary || undefined,
+      outcomeStatus: result.outcomeStatus,
       error: result.error,
       toolCallCount: result.toolCalls.length,
       durationMs: result.durationMs,
@@ -854,6 +859,11 @@ export class PlanningLoop implements LoopStrategy {
       events: result.events,
     });
     return result;
+  }
+
+  /** Planning owns delegation through plan flags, so spawn_agent is never a step tool. */
+  private planningTools() {
+    return (this.toolRegistry?.list() ?? []).filter((tool) => tool.name !== SPAWN_AGENT_TOOL_NAME);
   }
 
 }

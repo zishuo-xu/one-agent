@@ -139,7 +139,7 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 - `web_search`：网络搜索（DuckDuckGo 或 Tavily）
 - `get_time`：当前时间
 - `manage_memory`：仅在用户明确要求时立即记住、修正、忘记或查询长期记忆
-- `spawn_agent`：拉起隔离上下文的子 Agent 执行自包含子任务（深度受限，不可再嵌套）
+- `spawn_agent`：拉起隔离上下文的只读子 Agent，执行自包含的调查或分析任务（不可写入、不可递归）
 
 API 部署时可用 `DISABLED_TOOLS=run_command,delete_file` 禁用高风险工具。
 

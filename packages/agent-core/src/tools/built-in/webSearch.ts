@@ -11,6 +11,7 @@ interface SearchResult {
 export function createWebSearchTool(_sandbox: Sandbox): ToolDefinition {
   return {
     name: 'web_search',
+    readOnly: true,
     description:
       'Search the web for a query and return a short summary with related links. ' +
       'Useful for finding current information that is not in the workspace. ' +

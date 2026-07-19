@@ -177,4 +177,23 @@ describe('Planner', () => {
     expect(plan.steps[0].children?.[0].status).toBe('pending');
     expect(plan.steps[1].parentId).toBeUndefined();
   });
+
+  it('normalizes parallel steps into delegated steps', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            reasoning: 'independent research',
+            steps: [{ id: '1', description: 'research', parallel: true }],
+          }),
+        },
+      }],
+    } as never);
+
+    const planner = new Planner();
+    const plan = await planner.createPlan('research', [dummyTool]);
+
+    expect(plan.steps[0].parallel).toBe(true);
+    expect(plan.steps[0].delegate).toBe(true);
+  });
 });

@@ -26,6 +26,7 @@ const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
 const echoTool: ToolDefinition = {
   name: 'echo',
+  readOnly: true,
   description: 'Echo',
   parameters: z.object({ message: z.string() }),
   execute: (args: unknown) => args,
@@ -101,6 +102,7 @@ describe('AgentLoop spawn_agent', () => {
     expect(subEvents.map((e) => e.type === 'sub_agent' && e.status)).toEqual(['started', 'completed']);
     const completed = subEvents[1];
     expect(completed.type === 'sub_agent' && completed.reply).toBe('cats are great');
+    expect(completed.type === 'sub_agent' && completed.outcomeStatus).toBe('unverified');
 
     // Sub-agent usage rolled up into the parent's accounting.
     expect(tokenUsage?.totalTokens).toBe(30);
