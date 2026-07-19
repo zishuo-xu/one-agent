@@ -44,6 +44,21 @@ describe('provider factory', () => {
     expect(provider).toMatchObject({ name: 'anthropic', model: 'claude-model' });
   });
 
+  it('reuses the OpenAI key for same-credential Anthropic compatibility gateways', () => {
+    vi.stubEnv('MODEL_PROVIDER', 'anthropic');
+    vi.stubEnv('OPENAI_API_KEY', 'shared-gateway-key');
+    unsetEnv('ANTHROPIC_API_KEY');
+    unsetEnv('FALLBACK_MODEL_PROVIDER');
+    unsetEnv('OPENAI_FALLBACK_BASE_URL');
+
+    const provider = createProviderFromEnv(openai, 'deepseek-v4-flash');
+    const client = (provider as unknown as {
+      client: { apiKey: string };
+    }).client;
+
+    expect(client.apiKey).toBe('shared-gateway-key');
+  });
+
   it('builds a cross-protocol fallback chain from generic fallback configuration', () => {
     vi.stubEnv('MODEL_PROVIDER', 'anthropic');
     vi.stubEnv('FALLBACK_MODEL_PROVIDER', 'openai-compatible');

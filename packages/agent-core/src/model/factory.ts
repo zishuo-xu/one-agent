@@ -39,7 +39,7 @@ function createPrimaryProvider(
 ): ModelProvider {
   if (kind === 'anthropic') {
     const client = options.anthropicClient ?? new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      apiKey: process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? '',
       baseURL: process.env.ANTHROPIC_BASE_URL,
     });
     return new AnthropicProvider(client, model, {
@@ -57,7 +57,11 @@ function createFallbackProvider(kind: ModelProviderKind, primaryModel: string): 
   if (kind === 'anthropic') {
     return new AnthropicProvider(
       new Anthropic({
-        apiKey: process.env.FALLBACK_API_KEY ?? process.env.ANTHROPIC_FALLBACK_API_KEY ?? '',
+        apiKey: process.env.FALLBACK_API_KEY ??
+          process.env.ANTHROPIC_FALLBACK_API_KEY ??
+          process.env.ANTHROPIC_API_KEY ??
+          process.env.OPENAI_API_KEY ??
+          '',
         baseURL: process.env.FALLBACK_BASE_URL ?? process.env.ANTHROPIC_FALLBACK_BASE_URL,
       }),
       model,

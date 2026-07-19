@@ -42,7 +42,9 @@ const model = usesAnthropic
   : process.env.OPENAI_MODEL ?? 'gpt-3.5-turbo';
 const anthropic = usesAnthropic
   ? new Anthropic({
-      apiKey: getEnv('ANTHROPIC_API_KEY', ''),
+      // Compatibility gateways such as DeepSeek often use one key for both
+      // OpenAI and Anthropic wire protocols. Avoid duplicating that secret.
+      apiKey: process.env.ANTHROPIC_API_KEY ?? getEnv('OPENAI_API_KEY', ''),
       baseURL: process.env.ANTHROPIC_BASE_URL,
     })
   : undefined;

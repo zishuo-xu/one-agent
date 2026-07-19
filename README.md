@@ -40,10 +40,15 @@ cp .env.example .env
 
 ```bash
 MODEL_PROVIDER=anthropic
+# DeepSeek 示例；直接使用 Anthropic 官方 API 时可省略 ANTHROPIC_BASE_URL
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=your-claude-model
 ANTHROPIC_MAX_TOKENS=4096
 ```
+
+如果同一个兼容服务用一份 Key 同时提供 OpenAI 与 Anthropic 协议，可以省略
+`ANTHROPIC_API_KEY`，此时会复用 `OPENAI_API_KEY`。
 
 可通过 `FALLBACK_MODEL_PROVIDER`、`FALLBACK_API_KEY`、`FALLBACK_MODEL` 和可选的
 `FALLBACK_BASE_URL` 配置备用协议，支持 Anthropic 与 OpenAI Compatible 双向组合。

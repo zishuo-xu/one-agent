@@ -34,6 +34,9 @@ Anthropic Messages Adapter 都收敛到同一份内部消息、`name/description
 
 能力支持分为 `native`、`emulated`、`best_effort` 和 `unsupported`。硬要求只接受 Provider 能够保证的
 native/emulated；Fallback Provider 取整条主备链的最弱共同能力，防止故障转移后静默失去工具调用等能力。
+兼容网关未单独提供 `ANTHROPIC_API_KEY` 时可复用 `OPENAI_API_KEY`，避免同一凭据在配置中重复维护。
+2026-07-19 已使用 `deepseek-v4-flash` 和 `https://api.deepseek.com/anthropic` 完成真实流式回答、
+`get_time` 工具调用与 Trace 落库验证；Trace 中的 Provider 明确记录为 `anthropic`。
 
 ### 2.2 执行事实与评价结果分离
 
