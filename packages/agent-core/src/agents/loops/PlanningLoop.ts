@@ -849,6 +849,7 @@ export class PlanningLoop implements LoopStrategy {
       type: 'sub_agent',
       task: task.task,
       status: result.executionStatus === 'completed' ? 'completed' : 'failed',
+      executionStatus: result.executionStatus,
       stepId: task.stepId,
       reply: result.summary || undefined,
       outcomeStatus: result.outcomeStatus,

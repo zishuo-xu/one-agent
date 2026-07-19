@@ -141,6 +141,9 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 - `manage_memory`：仅在用户明确要求时立即记住、修正、忘记或查询长期记忆
 - `spawn_agent`：拉起隔离上下文的只读子 Agent，执行自包含的调查或分析任务（不可写入、不可递归）
 
+每个父 Run 共用一份 Sub-Agent 预算：默认最多接受 8 个子任务、最多 4 个并发、单个子任务 60 秒、
+累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
+
 API 部署时可用 `DISABLED_TOOLS=run_command,delete_file` 禁用高风险工具。
 
 ## Trace 与离线 Eval

@@ -74,6 +74,7 @@ export type AgentEvent =
       type: 'sub_agent';
       task: string;
       status: 'started' | 'completed' | 'failed';
+      executionStatus?: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'budget_exhausted';
       stepId?: string;
       reply?: string;
       outcomeStatus?: 'unverified' | 'unavailable';

@@ -25,7 +25,7 @@ import {
 import { CreateToolCallInput, Memory, type AgentRun } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
-import { SubAgentRunner } from './SubAgentRunner.js';
+import { SubAgentRunner, type DelegationBudget } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
 import { ModelCaller } from './ModelCaller.js';
 import { RunRecorder } from './RunRecorder.js';
@@ -83,6 +83,8 @@ export interface AgentLoopOptions {
   subAgentDepth?: number;
   /** Maximum delegation depth before spawn_agent is withheld (default 1). */
   maxSubAgentDepth?: number;
+  /** Resource limits shared by all sub-agents created during one parent Run. */
+  subAgentBudget?: Partial<DelegationBudget>;
   /** Runtime tool authorization policy. Omit to execute registered tools directly. */
   toolPolicy?: ToolPolicy;
   /** In-run direct-to-planning transition policy. */
@@ -188,7 +190,10 @@ export class AgentLoop extends EventEmitter {
         tools: this.toolRegistry,
         modelProvider: subAgentProvider,
         signal: () => this.signal,
-        maxToolIterations: this.maxToolIterations,
+        budget: {
+          maxToolIterations: this.maxToolIterations,
+          ...options.subAgentBudget,
+        },
       });
       const augmented = new ToolRegistry();
       augmented.registerMany(this.toolRegistry.list());
@@ -448,6 +453,7 @@ export class AgentLoop extends EventEmitter {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
     this.checkSignal();
+    this.subAgentRunner?.resetBudget();
     if (recovery?.addUserMessage !== false) {
       this.contextManager.addMessage({ role: 'user', content: message });
     }

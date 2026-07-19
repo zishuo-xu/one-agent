@@ -184,4 +184,64 @@ describe('AgentLoop spawn_agent', () => {
     const subEvents = events.filter((e) => e.type === 'sub_agent');
     expect(subEvents.map((e) => e.type === 'sub_agent' && e.status)).toEqual(['started', 'failed']);
   });
+
+  it('records budget exhaustion distinctly when one Run delegates too many tasks', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"first"}' } },
+              { id: 'call_2', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"second"}' } },
+            ],
+          },
+        }],
+      } as never)
+      .mockResolvedValueOnce(textResponse('first result') as never)
+      .mockResolvedValueOnce(textResponse('finished with available evidence') as never);
+
+    const agent = new AgentLoop({
+      tools: makeTools(),
+      subAgentBudget: { maxTasksPerRun: 1 },
+    });
+    const events: AgentLoopEvent[] = [];
+    agent.on('event', (event) => events.push(event));
+
+    await agent.chat('delegate twice');
+
+    const terminal = events.filter((event) =>
+      event.type === 'sub_agent' && event.status !== 'started'
+    );
+    expect(terminal.map((event) => event.type === 'sub_agent' && event.executionStatus)).toEqual([
+      'completed',
+      'budget_exhausted',
+    ]);
+  });
+
+  it('resets the delegation budget for each new parent Run', async () => {
+    mockCreate
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'first run' }) as never)
+      .mockResolvedValueOnce(textResponse('first evidence') as never)
+      .mockResolvedValueOnce(textResponse('first done') as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'second run' }) as never)
+      .mockResolvedValueOnce(textResponse('second evidence') as never)
+      .mockResolvedValueOnce(textResponse('second done') as never);
+
+    const agent = new AgentLoop({
+      tools: makeTools(),
+      subAgentBudget: { maxTasksPerRun: 1 },
+    });
+    const events: AgentLoopEvent[] = [];
+    agent.on('event', (event) => events.push(event));
+
+    await agent.chat('first request');
+    await agent.chat('second request');
+
+    const completed = events.filter((event) =>
+      event.type === 'sub_agent' && event.executionStatus === 'completed'
+    );
+    expect(mockCreate).toHaveBeenCalledTimes(6);
+    expect(completed).toHaveLength(2);
+  });
 });

@@ -229,4 +229,113 @@ describe('SubAgentRunner', () => {
     expect(result.summary).toBe('partial findings so far');
     expect(result.toolCalls).toHaveLength(2);
   });
+
+  it('rejects further delegation after the per-Run task budget is exhausted', async () => {
+    mockCreate.mockResolvedValue(textResponse('done') as never);
+    const runner = new SubAgentRunner({
+      tools: makeRegistry(),
+      budget: { maxTasksPerRun: 1 },
+    });
+
+    const first = await runner.run({ task: 'first' });
+    const second = await runner.run({ task: 'second' });
+
+    expect(first.executionStatus).toBe('completed');
+    expect(second.executionStatus).toBe('budget_exhausted');
+    expect(second.error).toContain('maximum 1 tasks per Run');
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+
+    runner.resetBudget();
+    const nextRun = await runner.run({ task: 'new parent run' });
+    expect(nextRun.executionStatus).toBe('completed');
+  });
+
+  it('stops accepting new work after observed token usage reaches the Run budget', async () => {
+    mockCreate.mockResolvedValue(textResponse('done', {
+      prompt_tokens: 6,
+      completion_tokens: 4,
+      total_tokens: 10,
+    }) as never);
+    const runner = new SubAgentRunner({
+      tools: makeRegistry(),
+      budget: { maxTotalTokens: 10 },
+    });
+
+    const first = await runner.run({ task: 'consume budget' });
+    const second = await runner.run({ task: 'over budget' });
+
+    expect(first.tokenUsage?.totalTokens).toBe(10);
+    expect(second.executionStatus).toBe('budget_exhausted');
+    expect(second.error).toContain('observed 10 tokens');
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues excess work at the configured concurrency limit', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    mockCreate.mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active--;
+      return textResponse('done') as never;
+    });
+    const runner = new SubAgentRunner({
+      tools: makeRegistry(),
+      budget: { maxConcurrency: 2 },
+    });
+
+    const pending = [
+      runner.run({ task: 'one' }),
+      runner.run({ task: 'two' }),
+      runner.run({ task: 'three' }),
+    ];
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    releases[0]();
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(3));
+    releases[1]();
+    releases[2]();
+
+    const results = await Promise.all(pending);
+    expect(results.every((result) => result.executionStatus === 'completed')).toBe(true);
+    expect(maxActive).toBe(2);
+  });
+
+  it('aborts a sub-agent that exceeds its wall-clock execution timeout', async () => {
+    mockCreate.mockImplementation((_params, options) => new Promise((_resolve, reject) => {
+      const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }) as never);
+    const runner = new SubAgentRunner({
+      tools: makeRegistry(),
+      budget: { taskTimeoutMs: 20 },
+    });
+
+    const result = await runner.run({ task: 'never finishes' });
+
+    expect(result.executionStatus).toBe('timed_out');
+    expect(result.outcomeStatus).toBe('unavailable');
+    expect(result.error).toContain('20ms execution timeout');
+  });
+
+  it('propagates parent Run cancellation into an active sub-agent', async () => {
+    const controller = new AbortController();
+    mockCreate.mockImplementation((_params, options) => new Promise((_resolve, reject) => {
+      const signal = (options as { signal?: AbortSignal } | undefined)?.signal;
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }) as never);
+    const runner = new SubAgentRunner({
+      tools: makeRegistry(),
+      signal: () => controller.signal,
+    });
+
+    const pending = runner.run({ task: 'cancel me' });
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    controller.abort(new Error('parent cancelled'));
+    const result = await pending;
+
+    expect(result.executionStatus).toBe('cancelled');
+    expect(result.outcomeStatus).toBe('unavailable');
+  });
 });

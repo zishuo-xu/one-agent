@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { AgentLoop } from '../agents/AgentLoop.js';
+import type { DelegationBudget } from '../agents/SubAgentRunner.js';
 import {
   createRequestUserInputTool,
   REQUEST_USER_INPUT_TOOL_NAME,
@@ -41,6 +42,7 @@ export interface CreateRuntimeAgentOptions {
   signal?: AbortSignal;
   planning?: boolean | 'auto';
   subAgents?: boolean;
+  subAgentBudget?: Partial<DelegationBudget>;
   /** Offer durable clarification. Disable for non-interactive workers. */
   userInput?: boolean;
 }
@@ -128,6 +130,7 @@ export class AgentRuntime {
       signal: options.signal,
       enablePlanning: options.planning,
       subAgents: options.subAgents,
+      subAgentBudget: options.subAgentBudget,
       runStore: this.stores.runs,
       toolCallStore: this.stores.toolCalls,
       traceEventStore: this.stores.traces,

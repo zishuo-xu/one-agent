@@ -15,8 +15,13 @@ export type {
   AgentRuntimeOptions,
   CreateRuntimeAgentOptions,
 } from './runtime/AgentRuntime.js';
-export { SubAgentRunner } from './agents/SubAgentRunner.js';
-export type { SubAgentTask, SubAgentResult, SubAgentRunnerOptions } from './agents/SubAgentRunner.js';
+export { SubAgentRunner, DEFAULT_DELEGATION_BUDGET } from './agents/SubAgentRunner.js';
+export type {
+  DelegationBudget,
+  SubAgentTask,
+  SubAgentResult,
+  SubAgentRunnerOptions,
+} from './agents/SubAgentRunner.js';
 export { createSpawnAgentTool } from './agents/spawnAgentTool.js';
 export {
   createRequestUserInputTool,
