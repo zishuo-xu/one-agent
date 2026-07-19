@@ -27,7 +27,7 @@ export function categorizeError(error: unknown, runId?: string, verbose = false)
   ) {
     return {
       summary: red('请求超时或网络失败'),
-      detail: '请检查网络连接，或在 .env 中增大 OPENAI_TIMEOUT_MS（当前默认 30000ms）。',
+      detail: '请检查网络连接，或在 .env 中增大 MODEL_TIMEOUT_MS（当前默认 30000ms）。',
       traceHint: traceHintFor(runId),
     };
   }

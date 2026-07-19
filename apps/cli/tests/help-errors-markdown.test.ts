@@ -64,9 +64,9 @@ describe('help text', () => {
 });
 
 describe('error categorization', () => {
-  it('suggests OPENAI_TIMEOUT_MS on timeout errors', () => {
+  it('suggests protocol-neutral MODEL_TIMEOUT_MS on timeout errors', () => {
     const err = categorizeError(new Error('Request timed out after 30000ms'));
-    expect(err.detail).toContain('OPENAI_TIMEOUT_MS');
+    expect(err.detail).toContain('MODEL_TIMEOUT_MS');
     expect(err.detail).toContain('30000');
   });
 

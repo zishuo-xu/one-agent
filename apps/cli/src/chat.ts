@@ -68,7 +68,8 @@ function createEnvTemplate(): void {
   }
   const template = [
     '# one-agent configuration',
-    'MODEL_PROVIDER=openai',
+    '# Full reference: docs/configuration-reference.md in the One Agent repository',
+    'MODEL_PROVIDER=openai-compatible',
     'OPENAI_API_KEY=your-api-key',
     'OPENAI_BASE_URL=https://api.openai.com/v1',
     'OPENAI_MODEL=gpt-3.5-turbo',
@@ -76,8 +77,8 @@ function createEnvTemplate(): void {
     '# ANTHROPIC_API_KEY=',
     '# ANTHROPIC_BASE_URL=https://api.anthropic.com',
     '# ANTHROPIC_MODEL=claude-sonnet-4-5',
-    '# Optional: per-request timeout in ms (default 30000)',
-    '# OPENAI_TIMEOUT_MS=60000',
+    '# Optional: protocol-neutral per-request timeout in ms (default 30000)',
+    '# MODEL_TIMEOUT_MS=60000',
     '# Optional: context window token budget (default 4096)',
     '# MAX_CONTEXT_TOKENS=8192',
     '# Optional: recent message token budget (default 2048)',
