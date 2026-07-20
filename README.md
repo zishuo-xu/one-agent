@@ -147,6 +147,7 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 
 每个父 Run 共用一份 Sub-Agent 预算：默认最多接受 8 个子任务、最多 4 个并发、单个子任务 60 秒、
 累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
+PlanningLoop 只委派叶子步骤；分层计划中的父步骤仅作结构容器，并行意图会归一到独立的只读叶子，避免父子重复执行。
 
 API 部署时可在配置表中设置 `tools.disabled: ["run_command", "delete_file"]` 禁用高风险工具。
 
@@ -230,7 +231,8 @@ one-agent trace                       # 独立启动只读 Trace Viewer
 `--plan`、`--plan-auto` 和 `--trace` 仅保留为兼容别名并输出废弃提示；新的公开入口统一为
 `--loop auto|simple|planning` 和 `one-agent trace`。`--new` 与 `--thread` 互斥，指定的 Thread 不存在时明确报错。
 
-默认 CLI 只流式展示最终答案；模型 `reasoning_delta` 始终进入 Trace，但不会混入用户回复。
+默认 CLI 只流式展示最终答案，并保留独立到达的换行块，使 Markdown 代码块、标题和列表在实时输出中保持结构；
+模型 `reasoning_delta` 始终进入 Trace，但不会混入用户回复。
 启用 `--verbose` 后，reasoning 会在独立的 `[reasoning]` 区域展示，最终答案仍保持独立。
 
 当任务缺少一个无法安全假设的关键信息时，Agent 会结束当前执行并显示问题。问题和恢复点保存在

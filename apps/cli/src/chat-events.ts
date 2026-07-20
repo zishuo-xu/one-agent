@@ -66,6 +66,7 @@ export function createChatEventHandler(timeline: ChatTimeline): {
     answerEndTime: 0,
   };
   let reasoningVisible = false;
+  let pendingAnswerWhitespace = '';
 
   const handler = (event: AgentEvent) => {
     if (event.type === 'plan') {
@@ -121,8 +122,19 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       }
     } else if (event.type === 'message_delta') {
       const cleanContent = sanitizeTerminalText(event.content);
+      if (!cleanContent) {
+        return;
+      }
       if (!cleanContent.trim()) {
-        // Whitespace-only or empty delta: ignore for live output and timing.
+        // Providers may emit Markdown newlines as standalone chunks. Buffer
+        // leading whitespace so it does not count as TTFA, but once visible
+        // answer text has started every byte must reach the terminal.
+        if (result.hasStreamedLive) {
+          timeline.onDelta(cleanContent);
+          result.streamedContent += cleanContent;
+        } else {
+          pendingAnswerWhitespace += cleanContent;
+        }
         return;
       }
       if (reasoningVisible) {
@@ -135,8 +147,10 @@ export function createChatEventHandler(timeline: ChatTimeline): {
       timeline.progress.setLabel('Answering');
       timeline.progress.stop();
       result.hasStreamedLive = true;
-      timeline.onDelta(cleanContent);
-      result.streamedContent += cleanContent;
+      const output = pendingAnswerWhitespace + cleanContent;
+      pendingAnswerWhitespace = '';
+      timeline.onDelta(output);
+      result.streamedContent += output;
     } else if (event.type === 'message') {
       if (reasoningVisible) {
         timeline.onInfo('\n[answer]\n');

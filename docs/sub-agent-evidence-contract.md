@@ -1,7 +1,7 @@
 # Sub-Agent Evidence Contract
 
 > 文档状态：当前设计
-> 最后更新：2026-07-20
+> 最后更新：2026-07-21
 
 ## 目标
 
@@ -44,9 +44,12 @@ Runtime 不额外调用模型整理 Packet。最终回答直接成为 `conclusio
 
 ## 上下文与权限
 
-主 Agent 只把本轮 Memory Recall 已选中的记忆快照交给 Sub-Agent；Sub-Agent 不能直接访问或修改 Memory Store。
+主 Agent 只把本轮已经加载的全局/工作空间 Memory Document 快照交给 Sub-Agent；Sub-Agent 不能直接访问或修改记忆文档。
 每个新父 Run 会重置委派预算和记忆快照。SimpleLoop 的临时 `spawn_agent` 与 PlanningLoop 的计划委派复用同一
 `SubAgentRunner`、只读工具规则和 Evidence Contract。
+
+PlanningLoop 中只有叶子步骤可以委派。带 `children` 的步骤只是分组容器；容器上的 `parallel` 意图会在计划解析时
+下沉到独立叶子，连续的只读叶子才组成并行波次。执行器对旧 Checkpoint 也忽略容器上的委派标记，防止重复执行。
 
 ## Trace
 

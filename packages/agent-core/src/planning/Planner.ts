@@ -109,6 +109,7 @@ export class Planner {
       'Delegation:\n' +
       '- Set "delegate": true on steps that are self-contained subtasks better executed by an isolated sub-agent with its own tool loop.\n' +
       '- Set "parallel": true on delegated steps that are independent of each other, so they run in parallel.\n' +
+      '- A step with "children" is only a grouping container: never set "delegate" or "parallel" on the container; put those flags on each independent leaf child.\n' +
       '- Parallel steps MUST be read-only (no file writes or side effects) and MUST NOT depend on each other\'s output.\n' +
       '- Use delegation sparingly; simple sequential steps need neither flag.\n\n' +
       'Requirements fidelity:\n' +
@@ -235,20 +236,26 @@ export class Planner {
     }
   }
 
-  private prepareStep(step: RawPlanStep, parentId?: string): PlanStep {
+  private prepareStep(step: RawPlanStep, parentId?: string, inheritedParallel = false): PlanStep {
+    const hasChildren = Boolean(step.children?.length);
+    const parallel = !hasChildren && (inheritedParallel || Boolean(step.parallel));
     const prepared: PlanStep = {
       id: step.id,
       description: step.description,
       status: 'pending',
       toolName: step.toolName,
       expectedOutcome: step.expectedOutcome,
-      // Normalize the documented invariant instead of trusting model output.
-      delegate: step.parallel ? true : step.delegate,
-      parallel: step.parallel,
+      // Containers organize leaves; executing them would duplicate their
+      // completed child work. A model that marks a container parallel means
+      // its independent leaves form the wave instead.
+      delegate: hasChildren ? false : parallel ? true : step.delegate,
+      parallel: hasChildren ? false : parallel || undefined,
       parentId,
     };
-    if (step.children && step.children.length > 0) {
-      prepared.children = step.children.map((child) => this.prepareStep(child, step.id));
+    if (hasChildren) {
+      prepared.children = step.children!.map((child) =>
+        this.prepareStep(child, step.id, inheritedParallel || Boolean(step.parallel))
+      );
     }
     return prepared;
   }

@@ -118,13 +118,30 @@ describe('createChatEventHandler streaming', () => {
     expect(tl.infos.join('')).not.toContain('multi-tool batch');
   });
 
-  it('empty deltas are not printed or counted', () => {
+  it('buffers leading whitespace without counting it as an answer', () => {
     const tl = makeTimeline();
     const { handler, result } = createChatEventHandler(tl);
     handler({ type: 'message_delta', content: '' } as AgentLoopEvent);
     handler({ type: 'message_delta', content: '   ' } as AgentLoopEvent);
     expect(result.hasStreamedLive).toBe(false);
     expect(tl.deltas).toEqual([]);
+
+    handler({ type: 'message_delta', content: 'answer' } as AgentLoopEvent);
+    expect(tl.deltas).toEqual(['   answer']);
+    expect(result.streamedContent).toBe('   answer');
+  });
+
+  it('preserves standalone newline chunks after streaming starts', () => {
+    const tl = makeTimeline();
+    const { handler, result } = createChatEventHandler(tl);
+
+    handler({ type: 'message_delta', content: '```\nfirst' } as AgentLoopEvent);
+    handler({ type: 'message_delta', content: '\n' } as AgentLoopEvent);
+    handler({ type: 'message_delta', content: 'second' } as AgentLoopEvent);
+    handler({ type: 'message_delta', content: '\n```' } as AgentLoopEvent);
+
+    expect(tl.deltas).toEqual(['```\nfirst', '\n', 'second', '\n```']);
+    expect(result.streamedContent).toBe('```\nfirst\nsecond\n```');
   });
 
   it('keeps reasoning_delta out of normal user output', () => {

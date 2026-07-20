@@ -21,9 +21,16 @@ export function buildExecutionUnits(order: PlanStep[]): ExecutionUnit[] {
   let index = 0;
   while (index < order.length) {
     const step = order[index];
-    if (step.delegate && step.parallel) {
+    // A container is structural even if an older persisted plan incorrectly
+    // carries delegation flags. Only leaf steps may enter an execution wave.
+    if (!step.children?.length && step.delegate && step.parallel) {
       const steps: PlanStep[] = [];
-      while (index < order.length && order[index].delegate && order[index].parallel) {
+      while (
+        index < order.length &&
+        !order[index].children?.length &&
+        order[index].delegate &&
+        order[index].parallel
+      ) {
         steps.push(order[index]);
         index++;
       }

@@ -35,4 +35,25 @@ describe('plan execution helpers', () => {
     plan.steps[0].status = 'completed';
     expect(allPlanStepsCompleted(plan.steps)).toBe(true);
   });
+
+  it('never executes a flagged container as a delegated wave step', () => {
+    const legacyPlan: Plan = {
+      reasoning: 'legacy malformed plan',
+      steps: [{
+        id: 'container',
+        description: 'container',
+        status: 'pending',
+        delegate: true,
+        parallel: true,
+        children: [
+          { id: 'a', description: 'a', status: 'pending', delegate: true, parallel: true },
+          { id: 'b', description: 'b', status: 'pending', delegate: true, parallel: true },
+        ],
+      }],
+    };
+
+    const units = buildExecutionUnits(flattenPlanPostOrder(legacyPlan));
+    expect(units.map((unit) => unit.type)).toEqual(['wave', 'single']);
+    expect(units[1]).toMatchObject({ type: 'single', step: { id: 'container' } });
+  });
 });

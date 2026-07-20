@@ -208,4 +208,35 @@ describe('Planner', () => {
     expect(plan.steps[0].parallel).toBe(true);
     expect(plan.steps[0].delegate).toBe(true);
   });
+
+  it('normalizes a parallel container into parallel delegated leaf steps', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            reasoning: 'parallel grouped research',
+            steps: [{
+              id: '1',
+              description: 'research group',
+              parallel: true,
+              children: [
+                { id: '1.1', description: 'research alpha' },
+                { id: '1.2', description: 'research beta' },
+              ],
+            }],
+          }),
+        },
+      }],
+    } as never);
+
+    const plan = await new Planner().createPlan('research in parallel', [dummyTool]);
+    const container = plan.steps[0];
+
+    expect(container.delegate).toBe(false);
+    expect(container.parallel).toBe(false);
+    expect(container.children).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: '1.1', delegate: true, parallel: true }),
+      expect.objectContaining({ id: '1.2', delegate: true, parallel: true }),
+    ]));
+  });
 });
