@@ -82,6 +82,18 @@ describe('Planner', () => {
     expect(plan.steps).toHaveLength(1);
   });
 
+  it('uses the already-built memory contract without adding another wrapper', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify({ reasoning: 'direct', steps: [] }) } }],
+    } as never);
+
+    await new Planner().createPlan('Use English now', [dummyTool], 'UNIFIED_MEMORY_CONTEXT');
+
+    const request = mockCreate.mock.calls[0][0] as { messages: Array<{ content: string }> };
+    expect(request.messages[1].content).toContain('UNIFIED_MEMORY_CONTEXT');
+    expect(request.messages[1].content).not.toContain('Relevant context from past conversations');
+  });
+
   it('parses JSON wrapped in markdown fences', async () => {
     mockCreate.mockResolvedValue({
       choices: [

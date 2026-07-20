@@ -204,7 +204,7 @@ export class ContextManager {
     if (this.memoryContext) {
       context.push({
         role: 'system',
-        content: `Relevant context from past conversations: ${this.memoryContext}`,
+        content: this.memoryContext,
       });
     }
     if (this.summaryMessage) {

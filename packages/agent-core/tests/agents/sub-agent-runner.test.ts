@@ -131,6 +131,7 @@ describe('SubAgentRunner', () => {
     expect(params.messages[1].content).toContain('Constraints:\n- do not add sugar');
     expect(params.messages[1].content).toContain('Requested evidence:\n- tea temperature');
     expect(params.messages[1].content).toContain('likes tea');
+    expect(params.messages[1].content).not.toContain('Relevant context from past conversations');
   });
 
   it('uses the parent-selected memory snapshot for the current Run', async () => {

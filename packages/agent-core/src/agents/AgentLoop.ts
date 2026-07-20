@@ -30,7 +30,8 @@ import {
   MANAGE_MEMORY_SYSTEM_INSTRUCTION,
   MANAGE_MEMORY_TOOL_NAME,
 } from '../memory/manageMemoryTool.js';
-import { CreateToolCallInput, Memory, type AgentRun } from '../db/types.js';
+import { buildMemoryContext } from '../memory/MemoryContext.js';
+import { CreateToolCallInput, type AgentRun } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
 import { SubAgentRunner, type DelegationBudget } from './SubAgentRunner.js';
@@ -720,8 +721,8 @@ export class AgentLoop extends EventEmitter {
     try {
       const recall = this.memoryStore.recallRelevantMemories(query, { threadId: this.threadId });
       if (recall.memories.length > 0) {
-        memoryText = this.formatMemories(recall.memories);
-        this.contextManager.setMemoryContext(memoryText);
+        memoryText = buildMemoryContext(recall.memories);
+        if (memoryText) this.contextManager.setMemoryContext(memoryText);
       }
       this.recorder.record({
         type: 'memory_recall',
@@ -920,10 +921,6 @@ export class AgentLoop extends EventEmitter {
     // The ordered Trace is the single recovery source for new runs. This
     // mandatory write replaces the old agent_runs.checkpoint mirror.
     this.recorder.recordRecoveryPoint(checkpoint);
-  }
-
-  private formatMemories(memories: Memory[]): string {
-    return memories.map((m) => `${m.key}: ${m.value}`).join('\n');
   }
 
   private createApprovalCheckpoint(

@@ -75,7 +75,7 @@ export class Planner {
       .join('\n');
 
     const memorySection = memories
-      ? `\nRelevant context from past conversations:\n${memories}\n`
+      ? `\n${memories}\n`
       : '';
 
     const previousPlanSection = previousPlan

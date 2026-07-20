@@ -186,7 +186,7 @@ export class SubAgentRunner {
       task.expectedEvidence?.length
         ? `Requested evidence:\n- ${task.expectedEvidence.join('\n- ')}`
         : '',
-      memoryText ? `Relevant context from past conversations:\n${memoryText}` : '',
+      memoryText ?? '',
     ]
       .filter(Boolean)
       .join('\n');

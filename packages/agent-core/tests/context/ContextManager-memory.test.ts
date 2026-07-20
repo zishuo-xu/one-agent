@@ -5,13 +5,13 @@ describe('ContextManager with memory context', () => {
   it('injects memory context after system prompt when buildContext is short', async () => {
     const manager = new ContextManager({ systemPrompt: 'You are a helpful assistant', summaryTrigger: 100 });
     manager.addMessage({ role: 'user', content: 'Hello' });
-    manager.setMemoryContext('User prefers Chinese.');
+    manager.setMemoryContext('UNIFIED_MEMORY_CONTEXT');
 
     const context = await manager.buildContext();
     expect(context[0]).toEqual({ role: 'system', content: 'You are a helpful assistant' });
     expect(context[1]).toEqual({
       role: 'system',
-      content: 'Relevant context from past conversations: User prefers Chinese.',
+      content: 'UNIFIED_MEMORY_CONTEXT',
     });
     expect(context[2]).toEqual({ role: 'user', content: 'Hello' });
   });
@@ -19,13 +19,13 @@ describe('ContextManager with memory context', () => {
   it('includes memory context in getContextForDisplay', () => {
     const manager = new ContextManager({ systemPrompt: 'You are a helpful assistant', maxRecentMessages: 5 });
     manager.addMessage({ role: 'user', content: 'Hello' });
-    manager.setMemoryContext('User prefers Chinese.');
+    manager.setMemoryContext('UNIFIED_MEMORY_CONTEXT');
 
     const context = manager.getContextForDisplay();
     expect(context[0]).toEqual({ role: 'system', content: 'You are a helpful assistant' });
     expect(context[1]).toEqual({
       role: 'system',
-      content: 'Relevant context from past conversations: User prefers Chinese.',
+      content: 'UNIFIED_MEMORY_CONTEXT',
     });
   });
 

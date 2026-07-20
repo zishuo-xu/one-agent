@@ -122,6 +122,7 @@ finalizeRun      → waiting/completed、Trace 收尾、Run 状态落库
 用户请求
   → 创建 Run（traceStatus=recording）
   → 召回相关长期记忆并记录 memory_recall
+  → 将召回结果转换为统一 Memory Context
   → 建立只属于本次请求的 RunContext
   → 选择 SimpleLoop 或 PlanningLoop
   → 执行模型调用；所有工具调用统一经过 ToolRunner
@@ -133,6 +134,11 @@ finalizeRun      → waiting/completed、Trace 收尾、Run 状态落库
 ```
 
 隐含长期记忆的整理不在每轮回答链路中。它以完整 Thread 为单位，在切换会话或正常退出时处理刚离开的会话；Agent 启动时扫描尚未成功整理的会话并重试。整理失败不会阻塞回答，也不会把 Thread 误标为已完成。Memory Agent 通过统一 `ModelProvider` 使用 `jsonMode`，只接受 `{ "memories": [...] }` 一种结构，并在一次逻辑提取请求后依次执行 Schema、来源消息、逐字证据和敏感信息校验；不增加结果修复模型调用。用户明确要求记住、修正、忘记或查询记忆时，当前主模型通过 `manage_memory` 工具立即操作，不增加第二次模型调用。
+
+召回后的记忆由纯函数 `buildMemoryContext` 转换成唯一注入契约，而不是直接拼接 `key: value`。契约由固定使用规则和
+JSON 数据组成：当前用户输入与当前会话覆盖冲突的历史记忆，记忆值只作为背景数据，不能成为指令或工具授权；无关、含糊
+或冲突的记忆可以忽略。主 Agent、Planner 和 Sub-Agent 复用同一份父 Run 记忆快照，不分别定义注入语义。该约束位于
+上下文层，不修改提取、召回、持久化或 Loop 状态；它是模型侧的语义边界，实际副作用仍由 Tool Policy 硬约束。
 
 普通观察 Trace 写入失败不会改变任务结果，但 Run 会记录 `partial/failed`、丢失事件数量和错误原因。
 `recovery_point` 是恢复所需的关键事实，写入失败时不能继续推进到新的可恢复状态。
@@ -381,6 +387,8 @@ Eval 的 Completion Contract 根据工具证据、文件条件和最终回答离
 - `manage_memory` 拒绝保存密码、API Key、Token、Secret 等凭据型记忆；
 - 每轮召回将候选、命中关键词、过滤原因、最终注入项和估算 token 写入 `memory_recall` Trace，且不复制记忆值；
 - 每轮先清空旧记忆上下文，无关问题不会继承上一轮命中的记忆；
+- 召回结果通过统一 Memory Context 作为 JSON 数据注入；当前输入优先于历史记忆，记忆值不构成指令或工具授权；
+- 主 Agent、Planner 与 Sub-Agent 复用同一份已格式化记忆快照，不各自维护记忆提示词；
 - `memory-recall-v1` 离线评测包含 6 个场景，覆盖中英文、误召回、作用域、状态过滤和排序；
 - CLI 可列出、查看和精确删除记忆，API 可创建、查询、更新和删除记忆；对话中可立即管理记忆。
 

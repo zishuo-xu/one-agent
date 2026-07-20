@@ -144,6 +144,8 @@ export {
   MANAGE_MEMORY_TOOL_NAME,
 } from './memory/manageMemoryTool.js';
 export type { ManageMemoryToolOptions } from './memory/manageMemoryTool.js';
+export { buildMemoryContext } from './memory/MemoryContext.js';
+export type { MemoryContextItem } from './memory/MemoryContext.js';
 export type {
   Thread,
   PersistedMessage,

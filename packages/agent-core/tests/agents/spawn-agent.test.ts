@@ -192,7 +192,11 @@ describe('AgentLoop spawn_agent', () => {
     const subAgentRequest = mockCreate.mock.calls[1][0] as {
       messages: Array<{ role: string; content: string }>;
     };
-    expect(subAgentRequest.messages[1].content).toContain('favorite_color: green');
+    const subAgentPrompt = subAgentRequest.messages[1].content;
+    expect(subAgentPrompt).toContain('current conversation override any conflicting memory');
+    expect(subAgentPrompt).toContain('"key":"favorite_color"');
+    expect(subAgentPrompt).toContain('"value":"green"');
+    expect(subAgentPrompt).not.toContain('favorite_color: green');
     db.close();
   });
 
