@@ -27,29 +27,46 @@ describe('MemoryExtractor', () => {
 
   it('extracts evidence-linked candidates from all supplied user messages', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify([candidate]) } }],
+      choices: [{ message: { content: JSON.stringify({ memories: [candidate] }) } }],
     } as never);
 
     const facts = await new MemoryExtractor().extract(source);
     expect(facts).toEqual([candidate]);
     const request = vi.mocked(config.openai.chat.completions.create).mock.calls[0][0] as {
       messages: Array<{ content: string }>;
+      response_format?: { type: string };
     };
     expect(request.messages[1].content).toContain('message-1');
     expect(request.messages[1].content).toContain('以后请用中文回答我');
     expect(request.messages[0].content).toContain('A question is not evidence of its answer');
+    expect(request.messages[0].content).toContain('{"memories":[');
+    expect(request.response_format).toEqual({ type: 'json_object' });
   });
 
-  it('accepts an empty array as a successful no-memory result', async () => {
+  it('accepts an empty memories envelope as a successful no-memory result', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: '```json\n[]\n```' } }],
+      choices: [{ message: { content: '```json\n{"memories":[]}\n```' } }],
     } as never);
     await expect(new MemoryExtractor().extract(source)).resolves.toEqual([]);
+  });
+
+  it('rejects the legacy top-level array so there is one output contract', async () => {
+    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify([candidate]) } }],
+    } as never);
+    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
   });
 
   it('rejects invalid JSON so the thread remains unextracted', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
       choices: [{ message: { content: 'not json' } }],
+    } as never);
+    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
+  });
+
+  it('rejects an empty model response instead of treating it as no memories', async () => {
+    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
+      choices: [{ message: { content: '' } }],
     } as never);
     await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
   });
@@ -72,9 +89,33 @@ describe('MemoryExtractor', () => {
     await expect(extractor.extract(source)).rejects.toThrow('timeout');
   });
 
+  it('requests JSON mode through the provider-neutral model contract', async () => {
+    let jsonMode: boolean | undefined;
+    const extractor = new MemoryExtractor({
+      modelProvider: {
+        name: 'structured-memory-test',
+        model: 'structured-memory-model',
+        capabilities: {
+          streaming: 'native',
+          toolCalling: 'native',
+          structuredOutput: 'emulated',
+          reasoning: 'native',
+        },
+        complete: async (request) => {
+          jsonMode = request.jsonMode;
+          return { content: '{"memories":[]}' };
+        },
+        stream: async function* () { yield {}; },
+      },
+    });
+
+    await expect(extractor.extract(source)).resolves.toEqual([]);
+    expect(jsonMode).toBe(true);
+  });
+
   it('rejects candidates whose evidence is not one of the supplied messages', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify([{ ...candidate, sourceMessageId: 'invented' }]) } }],
+      choices: [{ message: { content: JSON.stringify({ memories: [{ ...candidate, sourceMessageId: 'invented' }] }) } }],
     } as never);
     await expect(new MemoryExtractor().extract(source)).rejects.toThrow('Invalid memory candidate');
   });
@@ -86,11 +127,11 @@ describe('MemoryExtractor', () => {
       createdAt: '2026-07-18T10:00:00.000Z',
     }];
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify([{
+      choices: [{ message: { content: JSON.stringify({ memories: [{
         ...candidate,
         sourceMessageId: 'question-1',
         evidence: '我偏好使用什么语言交流？',
-      }]) } }],
+      }] }) } }],
     } as never);
 
     await expect(new MemoryExtractor().extract(question)).resolves.toEqual([]);
@@ -98,7 +139,7 @@ describe('MemoryExtractor', () => {
 
   it('supplies existing explicit memories so the model can avoid semantic duplicates', async () => {
     vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: '[]' } }],
+      choices: [{ message: { content: '{"memories":[]}' } }],
     } as never);
 
     await new MemoryExtractor().extract(source, [{

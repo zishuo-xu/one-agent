@@ -181,6 +181,8 @@ Completion Contract 只在 `EvalRunner` 中离线执行，用数据集 checkpoin
 长期记忆继续使用单张 `memories` 表，不引入向量数据库或自动优化器。主 Agent 每轮回答不再调用记忆模型；
 切换 Thread 或退出时，独立 Memory Agent 一次读取当前 Thread 的全部用户消息，启动时则恢复所有尚未成功整理的 Thread。
 成功（包括合法空结果）后 Thread 标记为已提取，失败保持未提取并在下次启动重试。
+Memory Agent 通过统一 `ModelProvider` 请求 JSON 模式，并只接受 `{ "memories": [...] }` 一种 Schema；
+结构校验、原文证据校验和敏感信息过滤均通过后才写入，不增加结果修复模型调用。
 
 用户明确说“记住”“修正”“忘记”或“你记得什么”时，主模型可在当前工具循环中调用 `manage_memory` 立即操作，
 不会额外调用一次提取模型；普通对话中的隐含事实仍等到会话边界统一整理。主动遗忘会清除原值并保留带时间的墓碑，

@@ -87,7 +87,7 @@ describe('per-purpose model selection', () => {
 
   it('MemoryExtractor uses the utility model', async () => {
     mockCreate.mockResolvedValue({
-      choices: [{ message: { content: '[]' } }],
+      choices: [{ message: { content: '{"memories":[]}' } }],
     } as never);
 
     await new MemoryExtractor().extract([{ id: 'm1', content: 'hi', createdAt: new Date().toISOString() }]);
@@ -114,7 +114,7 @@ describe('per-purpose model selection', () => {
 
   it('an explicit modelProvider option always wins over purpose providers', async () => {
     mockCreate.mockResolvedValue({
-      choices: [{ message: { content: '[]' } }],
+      choices: [{ message: { content: '{"memories":[]}' } }],
     } as never);
 
     const { OpenAICompatibleProvider } = await import('../../src/model/OpenAICompatibleProvider.js');
