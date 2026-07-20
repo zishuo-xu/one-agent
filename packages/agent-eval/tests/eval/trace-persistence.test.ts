@@ -3,23 +3,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-vi.mock('../../src/config.js', () => ({
-  config: {
-    port: 3000,
-    host: '127.0.0.1',
-    model: 'gpt-test',
-    systemPrompt: 'You are a test assistant.',
-    openai: {
-      chat: { completions: { create: vi.fn() } },
+vi.mock('@one-agent/agent-core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@one-agent/agent-core')>();
+  return {
+    ...original,
+    config: {
+      ...original.config,
+      model: 'gpt-test',
+      openai: { chat: { completions: { create: vi.fn() } } },
     },
-  },
-}));
+  };
+});
 
 import { EvalRunner } from '../../src/eval/runner.js';
-import { createConnection } from '../../src/db/connection.js';
-import { ThreadStore } from '../../src/db/threadStore.js';
-import { RunStore } from '../../src/db/runStore.js';
-import { TraceEventStore } from '../../src/db/traceEventStore.js';
+import { createConnection } from '@one-agent/agent-core';
+import { ThreadStore } from '@one-agent/agent-core';
+import { RunStore } from '@one-agent/agent-core';
+import { TraceEventStore } from '@one-agent/agent-core';
 import { createTextResponse, createToolCallResponse } from '../../src/eval/fixtures.js';
 import type { EvalTask } from '../../src/eval/types.js';
 

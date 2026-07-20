@@ -131,7 +131,7 @@ export function loadEvalDataset(dir: string): EvalTask[] {
 }
 
 /**
- * Locate the bundled `eval-datasets/` directory shipped with the agent-core
+ * Locate the bundled `eval-datasets/` directory shipped with the agent-eval
  * package. Walks up from this module so both src (tsx/vitest) and dist
  * (compiled) layouts resolve correctly.
  */

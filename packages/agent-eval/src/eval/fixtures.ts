@@ -1,4 +1,4 @@
-import { ToolCall } from '../tools/types.js';
+import { ToolCall } from '@one-agent/agent-core';
 
 export interface MockToolCall {
   id: string;

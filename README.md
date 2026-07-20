@@ -22,12 +22,12 @@ one-agent/
 │   ├── cli/        # 交互式 REPL CLI
 │   └── trace-web/  # 运行追踪可视化 Web 界面
 └── packages/
-    └── agent-core/  # Agent 核心：AgentRuntime + AgentLoop + RunContext +
-                     #   ToolRunner、ModelCaller/RunRecorder、双 Loop、规划、上下文、
-                     #   记忆、模型抽象、SQLite 持久化（详见 docs/project-vision-and-status.md）
+    ├── agent-core/  # 在线 Runtime：AgentRuntime、AgentLoop、工具、记忆、Trace、恢复
+    └── agent-eval/  # 离线评价：EvalRunner、Completion Contract、评测数据集
 ```
 
 正常入口通过 `AgentRuntime` 一次性装配 workspace、工具、数据库、Store 与记忆生命周期，再按 Thread 创建 Agent。
+`runtime.loop` 是所有入口的统一默认策略；CLI 参数或嵌入方参数只在显式传入时覆盖它。
 `AgentLoop` 是底层运行门面，主要保留给测试、Eval 和需要显式依赖注入的调用方。
 
 ## 环境准备

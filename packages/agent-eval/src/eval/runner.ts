@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { AgentLoop } from '../agents/AgentLoop.js';
-import type { AgentEvent } from '../agents/events.js';
-import { ToolRegistry } from '../tools/registry.js';
-import { Sandbox } from '../tools/sandbox.js';
-import { createBuiltInTools } from '../tools/built-in/index.js';
-import { ToolCall } from '../tools/types.js';
+import { AgentLoop } from '@one-agent/agent-core';
+import type { AgentEvent } from '@one-agent/agent-core';
+import { ToolRegistry } from '@one-agent/agent-core';
+import { Sandbox } from '@one-agent/agent-core';
+import { createBuiltInTools } from '@one-agent/agent-core';
+import { ToolCall } from '@one-agent/agent-core';
 import {
   EvalRunSummary,
   EvalResult,
@@ -24,17 +24,16 @@ import {
   assertPlanEventContains,
   extractToolCalls,
 } from './assertions.js';
-import { Plan } from '../planning/types.js';
-import { config } from '../config.js';
-import { modelName } from '../configAccess.js';
-import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
-import { MockProvider } from '../model/MockProvider.js';
-import { createConnection } from '../db/connection.js';
-import { ThreadStore } from '../db/threadStore.js';
+import { Plan } from '@one-agent/agent-core';
+import { config } from '@one-agent/agent-core';
+import { OpenAICompatibleProvider } from '@one-agent/agent-core';
+import { createConnection } from '@one-agent/agent-core';
+import { ThreadStore } from '@one-agent/agent-core';
 import type Database from 'better-sqlite3';
 import type { MockChatCompletionResponse } from './types.js';
 import { EvidenceCompletionVerifier } from '../verification/EvidenceCompletionVerifier.js';
 import type { CompletionRequirement } from '../verification/types.js';
+import { ReplayModelProvider } from './ReplayModelProvider.js';
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
@@ -146,8 +145,8 @@ export class EvalRunner {
         // exhausted" must surface as an error, not a silent switch).
         modelProvider:
           options.mode === 'mock'
-            ? new MockProvider(task.mockResponses!)
-            : new OpenAICompatibleProvider(config.openai, modelName()),
+            ? new ReplayModelProvider(task.mockResponses!)
+            : new OpenAICompatibleProvider(config.openai, configuredModelName()),
         ...(threadId && traceDb ? { threadId, db: traceDb } : {}),
       });
       const completionVerifier = new EvidenceCompletionVerifier({
@@ -306,6 +305,10 @@ export class EvalRunner {
         : {}),
     };
   }
+}
+
+function configuredModelName(): string {
+  return typeof config.model === 'string' ? config.model : config.model.model;
 }
 
 function sanitizePathSegment(id: string): string {

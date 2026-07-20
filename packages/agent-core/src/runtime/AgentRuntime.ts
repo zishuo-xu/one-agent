@@ -130,7 +130,7 @@ export class AgentRuntime {
       threadId: options.threadId,
       taskId: options.taskId,
       signal: options.signal,
-      enablePlanning: options.planning,
+      enablePlanning: options.planning ?? configuredLoopMode(),
       subAgents: options.subAgents,
       subAgentBudget: options.subAgentBudget,
       runStore: this.stores.runs,
@@ -151,5 +151,16 @@ export class AgentRuntime {
       search: config.tools?.search,
     }));
     return tools;
+  }
+}
+
+function configuredLoopMode(): boolean | 'auto' {
+  switch (config.runtime.loop) {
+    case 'simple':
+      return false;
+    case 'planning':
+      return true;
+    case 'auto':
+      return 'auto';
   }
 }

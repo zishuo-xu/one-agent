@@ -7,7 +7,7 @@ import {
   builtInEvalTasks,
   realModelBenchmarkTasks,
   loadEvalDataset,
-} from '@one-agent/agent-core';
+} from '@one-agent/agent-eval';
 import { parseEvalConcurrency } from './eval-options.js';
 
 function getFlagValue(flag: string): string | undefined {

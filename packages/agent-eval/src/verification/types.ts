@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../agents/events.js';
+import type { AgentEvent } from '@one-agent/agent-core';
 
 export type CompletionStatus =
   | 'verified'

@@ -27,19 +27,19 @@ import {
 } from '../../src/eval/scenarios/index.js';
 import { createToolCallResponse, createTextResponse } from '../../src/eval/fixtures.js';
 
-vi.mock('../../src/config.js', () => ({
-  config: {
-    port: 3000,
-    host: '127.0.0.1',
-    model: 'gpt-test',
-    systemPrompt: 'You are a test assistant.',
-    openai: {
-      chat: { completions: { create: vi.fn() } },
+vi.mock('@one-agent/agent-core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@one-agent/agent-core')>();
+  return {
+    ...original,
+    config: {
+      ...original.config,
+      model: 'gpt-test',
+      openai: { chat: { completions: { create: vi.fn() } } },
     },
-  },
-}));
+  };
+});
 
-import { config } from '../../src/config.js';
+import { config } from '@one-agent/agent-core';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 

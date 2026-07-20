@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import type { AgentEvent } from '../agents/events.js';
-import type { Plan, PlanStep } from '../planning/types.js';
-import type { Sandbox } from '../tools/sandbox.js';
-import type { ToolCall, ToolResult } from '../tools/types.js';
+import type { AgentEvent } from '@one-agent/agent-core';
+import type { Plan, PlanStep } from '@one-agent/agent-core';
+import type { Sandbox } from '@one-agent/agent-core';
+import type { ToolCall, ToolResult } from '@one-agent/agent-core';
 import type {
   CompletionEvidence,
   CompletionOutcome,

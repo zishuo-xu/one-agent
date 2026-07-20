@@ -1,5 +1,5 @@
-import type { AgentEvent } from '../agents/events.js';
-import { ToolCall } from '../tools/types.js';
+import type { AgentEvent } from '@one-agent/agent-core';
+import { ToolCall } from '@one-agent/agent-core';
 import type { CompletionOutcome } from '../verification/types.js';
 
 export interface MockChatCompletionResponse {

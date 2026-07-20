@@ -64,6 +64,42 @@ describe('AgentRuntime', () => {
     db.close();
   });
 
+  it.each([
+    ['simple', false],
+    ['planning', true],
+    ['auto', 'auto'],
+  ] as const)('uses runtime.loop=%s when the caller does not override planning', (loop, expected) => {
+    configureSystem({ runtime: { loop } });
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-loop-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: provider(FULL_CAPABILITIES),
+    });
+
+    const agent = runtime.createAgent();
+
+    expect((agent as unknown as { enablePlanning: boolean | 'auto' }).enablePlanning).toBe(expected);
+    db.close();
+  });
+
+  it('lets an entrypoint explicitly override the configured loop mode', () => {
+    configureSystem({ runtime: { loop: 'planning' } });
+    const db = createConnection({ path: ':memory:' });
+    const runtime = new AgentRuntime({
+      workspaceRoot: '/tmp/one-agent-runtime-loop-override-test',
+      db,
+      tools: new ToolRegistry(),
+      modelProvider: provider(FULL_CAPABILITIES),
+    });
+
+    const agent = runtime.createAgent({ planning: false });
+
+    expect((agent as unknown as { enablePlanning: boolean | 'auto' }).enablePlanning).toBe(false);
+    db.close();
+  });
+
   it('fails before creating an agent when registered tools are not supported', () => {
     const db = createConnection({ path: ':memory:' });
     const runtime = new AgentRuntime({

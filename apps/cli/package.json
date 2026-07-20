@@ -18,7 +18,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@one-agent/agent-core": "workspace:*"
+    "@one-agent/agent-core": "workspace:*",
+    "@one-agent/agent-eval": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

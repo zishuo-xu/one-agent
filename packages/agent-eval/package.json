@@ -1,5 +1,5 @@
 {
-  "name": "@one-agent/agent-core",
+  "name": "@one-agent/agent-eval",
   "version": "0.1.0",
   "private": false,
   "type": "module",
@@ -13,17 +13,13 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsc -b --watch",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "test:recovery": "vitest run tests/checkpoint-recovery.test.ts tests/process-crash-recovery.test.ts"
+    "eval": "vitest run tests/eval"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.112.3",
+    "@one-agent/agent-core": "workspace:*",
     "better-sqlite3": "^12.11.1",
-    "openai": "^4.52.0",
-    "zod": "^3.23.8",
-    "zod-to-json-schema": "^3.25.2"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -1,6 +1,6 @@
-import type { AgentEvent } from '../agents/events.js';
-import { ToolCall } from '../tools/types.js';
-import { Plan } from '../planning/types.js';
+import type { AgentEvent } from '@one-agent/agent-core';
+import { ToolCall } from '@one-agent/agent-core';
+import { Plan } from '@one-agent/agent-core';
 
 export function extractToolCalls(events: AgentEvent[]): ToolCall[] {
   return events

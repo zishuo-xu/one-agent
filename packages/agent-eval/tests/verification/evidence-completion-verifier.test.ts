@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EvidenceCompletionVerifier } from '../../src/verification/EvidenceCompletionVerifier.js';
-import { Sandbox } from '../../src/tools/sandbox.js';
-import type { AgentLoopEvent } from '../../src/agents/AgentLoop.js';
+import { Sandbox } from '@one-agent/agent-core';
+import type { AgentLoopEvent } from '@one-agent/agent-core';
 
 describe('EvidenceCompletionVerifier', () => {
   let root: string;

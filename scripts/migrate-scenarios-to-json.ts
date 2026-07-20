@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { builtInEvalTasks, realModelBenchmarkTasks } from '../packages/agent-core/src/eval/scenarios/index.js';
+import { builtInEvalTasks, realModelBenchmarkTasks } from '../packages/agent-eval/src/eval/scenarios/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const outRoot = path.join(here, '..', 'packages', 'agent-core', 'eval-datasets');

@@ -5,14 +5,15 @@
   "description": "模型无关、可靠性优先的轻量 Agent Runtime",
   "scripts": {
     "build:core": "pnpm --filter agent-core build",
+    "build:eval": "pnpm build:core && pnpm --filter agent-eval build",
     "dev:api": "pnpm build:core && pnpm --filter api dev",
     "dev:cli": "pnpm build:core && pnpm --filter cli dev",
     "dev:trace-web": "pnpm build:core && pnpm --filter trace-web dev",
     "dev": "pnpm build:core && pnpm --filter trace-web build && concurrently -n trace,cli -c cyan,green \"node apps/trace-web/dist/index.js\" \"pnpm --filter cli dev\"",
-    "build": "pnpm build:core && pnpm --filter api build && pnpm --filter cli build && pnpm --filter trace-web build",
-    "test": "pnpm build:core && pnpm --filter agent-core test && pnpm --filter api test && pnpm --filter cli test && pnpm --filter trace-web test",
+    "build": "pnpm build:eval && pnpm --filter api build && pnpm --filter cli build && pnpm --filter trace-web build",
+    "test": "pnpm build:eval && pnpm --filter agent-core test && pnpm --filter agent-eval test && pnpm --filter api test && pnpm --filter cli test && pnpm --filter trace-web test",
     "test:watch": "pnpm --filter agent-core test:watch",
-    "eval": "pnpm build:core && pnpm --filter agent-core eval",
+    "eval": "pnpm build:eval && pnpm --filter agent-eval eval",
     "eval:recovery": "pnpm build:core && pnpm --filter agent-core test:recovery"
   },
   "devDependencies": {
