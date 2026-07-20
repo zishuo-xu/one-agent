@@ -63,6 +63,11 @@ describe('SubAgentRunner', () => {
     expect(result.executionStatus).toBe('completed');
     expect(result.outcomeStatus).toBe('unverified');
     expect(result.summary).toBe('subtask done');
+    expect(result.evidencePacket).toMatchObject({
+      conclusion: 'subtask done',
+      evidence: [],
+      unresolvedQuestions: [],
+    });
     expect(result.tokenUsage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
@@ -109,7 +114,9 @@ describe('SubAgentRunner', () => {
     await runner.run({
       task: 'brew',
       context: 'host a guest',
+      constraints: ['do not add sugar'],
       expectedOutcome: 'tea is ready',
+      expectedEvidence: ['tea temperature'],
     });
 
     const params = mockCreate.mock.calls[0][0] as {
@@ -121,7 +128,24 @@ describe('SubAgentRunner', () => {
     expect(params.messages[1].content).toContain('Overall goal: host a guest');
     expect(params.messages[1].content).toContain('Your sub-task: brew');
     expect(params.messages[1].content).toContain('Expected outcome: tea is ready');
+    expect(params.messages[1].content).toContain('Constraints:\n- do not add sugar');
+    expect(params.messages[1].content).toContain('Requested evidence:\n- tea temperature');
     expect(params.messages[1].content).toContain('likes tea');
+  });
+
+  it('uses the parent-selected memory snapshot for the current Run', async () => {
+    mockCreate.mockResolvedValueOnce(textResponse('ok') as never);
+
+    const runner = new SubAgentRunner({ tools: makeRegistry(), memoryText: 'default memory' });
+    runner.resetBudget();
+    runner.setRunMemoryText('selected memory');
+    await runner.run({ task: 'inspect context' });
+
+    const params = mockCreate.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(params.messages[1].content).toContain('selected memory');
+    expect(params.messages[1].content).not.toContain('default memory');
   });
 
   it('collects the tool calls the sub-agent made', async () => {
@@ -141,6 +165,12 @@ describe('SubAgentRunner', () => {
 
     expect(result.executionStatus).toBe('completed');
     expect(result.toolCalls).toEqual([{ id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } }]);
+    expect(result.evidencePacket.evidence).toEqual([{
+      toolCallId: 'c1',
+      toolName: 'read_file',
+      source: 'a.txt',
+      observation: '{"content":"file-data"}',
+    }]);
   });
 
   it('wraps sub-agent failure into a failed result instead of throwing', async () => {

@@ -2,6 +2,7 @@ import { ToolCall, ToolResult } from '../../tools/types.js';
 import type { ModelToolCall } from '../../model/types.js';
 import { Plan, PlanStep, FailureAnalysis } from '../../planning/types.js';
 import type { SubAgentTask, SubAgentResult } from '../SubAgentRunner.js';
+import { formatSubAgentEvidencePacket } from '../SubAgentContract.js';
 import { SPAWN_AGENT_TOOL_NAME } from '../spawnAgentTool.js';
 import type { LoopInfrastructure, LoopStrategy } from './types.js';
 import type { LoopResult, RunContext } from '../RunContext.js';
@@ -433,11 +434,10 @@ export class PlanningLoop implements LoopStrategy {
   }
 
   /**
-   * Execute one plan step in an isolated sub-agent. Parallel steps get a
-   * read-only tool set (the safety invariant of wave execution); serial
-   * delegated steps inherit the full tool set. The sub-agent's result is
-   * recorded into the reasoning chain and surfaced into the parent's context
-   * so later steps and the final answer can build on it.
+   * Execute one plan step in an isolated sub-agent. Every delegated step uses
+   * the same read-only contract; allowedTools can only narrow that set. The
+   * structured evidence packet is recorded into the reasoning chain and
+   * surfaced into the parent's context so later steps can build on it.
    */
   private async executeDelegatedStep(
     state: PlanningRunState,
@@ -457,7 +457,7 @@ export class PlanningLoop implements LoopStrategy {
 
     state.context.reasoning.addThought(
       result.executionStatus === 'completed'
-        ? `Delegated execution completed; outcome remains unverified: ${result.summary.slice(0, 200)}`
+        ? `Delegated execution completed; outcome remains unverified: ${result.evidencePacket.conclusion.slice(0, 200)}`
         : `Delegated step failed: ${result.error ?? 'unknown'}`,
       step.id,
     );
@@ -468,7 +468,7 @@ export class PlanningLoop implements LoopStrategy {
       content:
         `[Sub-agent result for step ${step.id}: ${step.description}]\n` +
         (result.executionStatus === 'completed'
-          ? `EXECUTION COMPLETED; OUTCOME UNVERIFIED:\n${result.summary}`
+          ? `EXECUTION COMPLETED; OUTCOME UNVERIFIED:\n${formatSubAgentEvidencePacket(result.evidencePacket)}`
           : `FAILED: ${result.error ?? 'unknown error'}`),
       internal: true,
     });
@@ -907,6 +907,9 @@ export class PlanningLoop implements LoopStrategy {
       return {
         executionStatus: 'failed',
         outcomeStatus: 'unavailable',
+        evidencePacket: {
+          conclusion: '', evidence: [], uncertainty: ['Sub-agents are unavailable.'], unresolvedQuestions: [],
+        },
         summary: '',
         error: 'Sub-agents are disabled or the delegation depth limit was reached',
         toolCalls: [],
@@ -931,6 +934,7 @@ export class PlanningLoop implements LoopStrategy {
       stepId: task.stepId,
       reply: result.summary || undefined,
       outcomeStatus: result.outcomeStatus,
+      evidencePacket: result.evidencePacket,
       error: result.error,
       toolCallCount: result.toolCalls.length,
       durationMs: result.durationMs,

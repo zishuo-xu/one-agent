@@ -1030,7 +1030,9 @@ function renderViewerPage(): string {
         case 'sub_agent': {
           const status = d.status ?? '?';
           const task = (d.task ?? '').slice(0, 120);
-          const detail = d.status === 'completed' ? (d.reply ?? '').slice(0, 200) : (d.error ?? '');
+          const detail = d.status === 'completed'
+            ? (d.evidencePacket?.conclusion ?? d.reply ?? '').slice(0, 200)
+            : (d.error ?? '');
           const meta = d.durationMs !== undefined ? ' (' + (d.durationMs / 1000).toFixed(1) + 's)' : '';
           const childCount = Array.isArray(d.events) ? d.events.length : 0;
           const children = childCount > 0 ? ' · ' + childCount + ' events' : '';

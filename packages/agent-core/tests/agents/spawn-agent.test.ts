@@ -21,6 +21,8 @@ import { config } from '../../src/config.js';
 import { AgentLoop, AgentLoopEvent } from '../../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
 import { ToolDefinition } from '../../src/tools/types.js';
+import { createConnection } from '../../src/db/connection.js';
+import { MemoryStore } from '../../src/db/memoryStore.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -103,6 +105,11 @@ describe('AgentLoop spawn_agent', () => {
     const completed = subEvents[1];
     expect(completed.type === 'sub_agent' && completed.reply).toBe('cats are great');
     expect(completed.type === 'sub_agent' && completed.outcomeStatus).toBe('unverified');
+    expect(completed.type === 'sub_agent' && completed.evidencePacket?.conclusion).toBe('cats are great');
+
+    const parentWrapRequest = mockCreate.mock.calls[2][0] as { messages: unknown[] };
+    expect(JSON.stringify(parentWrapRequest.messages)).toContain('evidencePacket');
+    expect(JSON.stringify(parentWrapRequest.messages)).toContain('model-only');
 
     // Sub-agent usage rolled up into the parent's accounting.
     expect(tokenUsage?.totalTokens).toBe(30);
@@ -137,6 +144,11 @@ describe('AgentLoop spawn_agent', () => {
 
     const childToolCall = (completed.events ?? []).find((e) => e.type === 'tool_call');
     expect(childToolCall?.type === 'tool_call' && childToolCall.toolCall.name).toBe('echo');
+    expect(completed.evidencePacket?.evidence).toEqual([{
+      toolCallId: 'call_1',
+      toolName: 'echo',
+      observation: '{"message":"hi"}',
+    }]);
 
     // The started marker stays lightweight.
     const started = events.find((e) => e.type === 'sub_agent' && e.status === 'started');
@@ -157,6 +169,31 @@ describe('AgentLoop spawn_agent', () => {
     const subToolNames = subCallParams.tools?.map((t) => t.function.name) ?? [];
     expect(subToolNames).not.toContain('spawn_agent');
     expect(subToolNames).toContain('echo');
+  });
+
+  it('passes the parent-selected memory snapshot into simple-loop delegation', async () => {
+    mockCreate
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'use the preference' }) as never)
+      .mockResolvedValueOnce(textResponse('preference found') as never)
+      .mockResolvedValueOnce(textResponse('done') as never);
+    const db = createConnection({ path: ':memory:' });
+    const memories = new MemoryStore(db);
+    memories.create({
+      key: 'favorite_color',
+      value: 'green',
+      source: 'user',
+      kind: 'user_preference',
+      explicit: true,
+    });
+    const agent = new AgentLoop({ tools: makeTools(), memoryStore: memories });
+
+    await agent.chat('What is my favorite color? Ask a sub-agent to use it.');
+
+    const subAgentRequest = mockCreate.mock.calls[1][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(subAgentRequest.messages[1].content).toContain('favorite_color: green');
+    db.close();
   });
 
   it('does not mutate the registry passed in by the caller', async () => {

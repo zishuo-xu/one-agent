@@ -3,14 +3,18 @@ import { config } from '../config.js';
 type TraceContentMode = 'metadata' | 'redacted' | 'full';
 
 const SENSITIVE_KEY = /^(?:password|passwd|pass|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token)$/i;
-const LARGE_CONTENT_KEY = /^(?:content|feedback|stdout|stderr)$/i;
+const LARGE_CONTENT_KEY = /^(?:content|feedback|stdout|stderr|observation)$/i;
 
-function redactString(value: string): string {
+export function redactSensitiveText(value: string): string {
   return value
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, '$1[REDACTED]')
     .replace(
       /\b([A-Z0-9_]*(?:API_KEY|PASSWORD|PASS|SECRET|ACCESS_TOKEN|REFRESH_TOKEN)\s*=\s*)[^\s"']+/gi,
       '$1[REDACTED]',
+    )
+    .replace(
+      /(["']?(?:password|passwd|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token)["']?\s*:\s*["'])[^"']*(["'])/gi,
+      '$1[REDACTED]$2',
     );
 }
 
@@ -20,7 +24,7 @@ function sanitize(value: unknown, mode: TraceContentMode, key?: string): unknown
     if (mode === 'metadata' && key && LARGE_CONTENT_KEY.test(key)) {
       return `[OMITTED ${value.length} chars]`;
     }
-    return redactString(value);
+    return redactSensitiveText(value);
   }
   if (Array.isArray(value)) return value.map((item) => sanitize(item, mode));
   if (value && typeof value === 'object') {

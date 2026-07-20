@@ -26,8 +26,16 @@ describe('trace sanitizer', () => {
 
   it('keeps structure but omits large content fields in metadata mode', () => {
     configureSystem({ trace: { contentMode: 'metadata' } });
-    const event = sanitizeTraceEvent({ type: 'message', content: 'hello world' });
-    expect(event).toEqual({ type: 'message', content: '[OMITTED 11 chars]' });
+    const event = sanitizeTraceEvent({
+      type: 'sub_agent',
+      content: 'hello world',
+      evidencePacket: { evidence: [{ observation: 'file contents' }] },
+    });
+    expect(event).toEqual({
+      type: 'sub_agent',
+      content: '[OMITTED 11 chars]',
+      evidencePacket: { evidence: [{ observation: '[OMITTED 13 chars]' }] },
+    });
   });
 
   it('leaves the event untouched in full mode', () => {

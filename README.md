@@ -126,7 +126,7 @@ pnpm dev:api
 
 ```bash
 pnpm test                    # 全套单元测试
-pnpm eval                    # eval 场景回归（agent-core vitest）
+pnpm eval                    # eval 场景回归（独立 agent-eval 包）
 pnpm --filter cli eval       # CLI eval（mock 模式，20 个内置场景）
 pnpm --filter cli eval -- --real             # 真实模型 benchmark
 pnpm --filter cli eval -- --real --concurrency 4 # 任务级并发（默认 4；遇到限流可调低）
@@ -143,7 +143,7 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 - `web_search`：网络搜索（DuckDuckGo 或 Tavily）
 - `get_time`：当前时间
 - `manage_memory`：仅在用户明确要求时立即记住、修正、忘记或查询长期记忆
-- `spawn_agent`：拉起隔离上下文的只读子 Agent，执行自包含的调查或分析任务（不可写入、不可递归）
+- `spawn_agent`：拉起隔离上下文的只读子 Agent，返回带工具来源、观察值和已知缺口的 Evidence Packet（不可写入、不可递归）
 
 每个父 Run 共用一份 Sub-Agent 预算：默认最多接受 8 个子任务、最多 4 个并发、单个子任务 60 秒、
 累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
@@ -162,6 +162,7 @@ API 部署时可在配置表中设置 `tools.disabled: ["run_command", "delete_f
 - 流式 reasoning / message（落库时聚合，避免逐 token 写放大）
 - 长期记忆的召回候选、过滤依据、最终注入 ID 和上下文成本
 - 会话级 Memory Consolidation 的开始、完成或失败
+- 子 Agent 的任务、执行状态、Evidence Packet 与压缩后的内部事件流
 - 用于中断继续和持久化询问的 `recovery_point`
 
 Auto Planning 会先用成本敏感的分类器选择策略；对话、记忆问答、简短回答和一到两个独立操作优先直接执行。如果分类器判断可以直接执行，但 SimpleLoop 随后在首批响应中提出三个以上工具调用，

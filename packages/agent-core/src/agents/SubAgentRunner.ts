@@ -5,16 +5,13 @@ import { MANAGE_MEMORY_TOOL_NAME } from '../memory/manageMemoryTool.js';
 import { REQUEST_USER_INPUT_TOOL_NAME } from './requestUserInputTool.js';
 import { AgentLoop } from './AgentLoop.js';
 import type { AgentEvent } from './events.js';
+import {
+  buildSubAgentEvidencePacket,
+  type SubAgentEvidencePacket,
+  type SubAgentTaskContract,
+} from './SubAgentContract.js';
 
-export interface SubAgentTask {
-  /** What the sub-agent should accomplish. */
-  task: string;
-  /** The parent goal this task contributes to, for orientation. */
-  context?: string;
-  /** What a successful outcome looks like. */
-  expectedOutcome?: string;
-  /** Restrict the sub-agent to these tool names (default: all inherited tools). */
-  allowedTools?: string[];
+export interface SubAgentTask extends SubAgentTaskContract {
   /** Plan step id for trace correlation. */
   stepId?: string;
   /** Per-run memory override (defaults to the runner-level memoryText). */
@@ -26,6 +23,9 @@ export interface SubAgentResult {
   executionStatus: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'budget_exhausted';
   /** A completed execution reports an outcome; the parent still decides whether it satisfies the goal. */
   outcomeStatus: 'unverified' | 'unavailable';
+  /** Structured parent-facing conclusion, provenance and known gaps. */
+  evidencePacket: SubAgentEvidencePacket;
+  /** @deprecated Read evidencePacket.conclusion instead. */
   summary: string;
   error?: string;
   toolCalls: ToolCall[];
@@ -88,7 +88,8 @@ export interface SubAgentRunnerOptions {
 export class SubAgentRunner {
   private readonly tools: ToolRegistry;
   private readonly modelProvider?: ModelProvider;
-  private readonly memoryText?: string;
+  private readonly defaultMemoryText?: string;
+  private runMemoryText?: string;
   private readonly signal?: () => AbortSignal | undefined;
   private readonly budget: Readonly<DelegationBudget>;
   private acceptedTasks = 0;
@@ -99,7 +100,7 @@ export class SubAgentRunner {
   constructor(options: SubAgentRunnerOptions) {
     this.tools = options.tools;
     this.modelProvider = options.modelProvider;
-    this.memoryText = options.memoryText;
+    this.defaultMemoryText = options.memoryText;
     this.signal = options.signal;
     this.budget = Object.freeze({
       ...DEFAULT_DELEGATION_BUDGET,
@@ -118,6 +119,12 @@ export class SubAgentRunner {
     }
     this.acceptedTasks = 0;
     this.observedTokens = 0;
+    this.runMemoryText = undefined;
+  }
+
+  /** Inject the parent-selected memory snapshot for the current Run only. */
+  setRunMemoryText(memoryText?: string): void {
+    this.runMemoryText = memoryText;
   }
 
   async run(task: SubAgentTask): Promise<SubAgentResult> {
@@ -163,17 +170,22 @@ export class SubAgentRunner {
       subAgentDepth: 1,
       systemPrompt:
         'You are a read-only sub-task execution agent. Investigate the given sub-task with the ' +
-        'available tools, then report a concise result summary and relevant evidence. Do not claim ' +
+        'available tools, then report a concise conclusion. Distinguish tool-supported facts from ' +
+        'assumptions, and state uncertainty or unresolved questions. Do not claim ' +
         'that the parent task is complete. Do not ask ' +
         'follow-up questions; make reasonable assumptions and finish the task.',
       signal: taskSignal.signal,
     });
 
-    const memoryText = task.memoryText ?? this.memoryText;
+    const memoryText = task.memoryText ?? this.runMemoryText ?? this.defaultMemoryText;
     const prompt = [
       task.context ? `Overall goal: ${task.context}` : '',
       `Your sub-task: ${task.task}`,
+      task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
       task.expectedOutcome ? `Expected outcome: ${task.expectedOutcome}` : '',
+      task.expectedEvidence?.length
+        ? `Requested evidence:\n- ${task.expectedEvidence.join('\n- ')}`
+        : '',
       memoryText ? `Relevant context from past conversations:\n${memoryText}` : '',
     ]
       .filter(Boolean)
@@ -192,6 +204,7 @@ export class SubAgentRunner {
       const output: SubAgentResult = {
         executionStatus: 'completed',
         outcomeStatus: 'unverified',
+        evidencePacket: buildSubAgentEvidencePacket(task, result.reply, collected),
         summary: result.reply,
         toolCalls,
         tokenUsage: result.tokenUsage,
@@ -266,6 +279,12 @@ export class SubAgentRunner {
     return {
       executionStatus,
       outcomeStatus: 'unavailable',
+      evidencePacket: {
+        conclusion: '',
+        evidence: [],
+        uncertainty: [error],
+        unresolvedQuestions: [],
+      },
       summary: '',
       error,
       toolCalls: [],

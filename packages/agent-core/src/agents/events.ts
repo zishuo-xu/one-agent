@@ -4,6 +4,7 @@ import type { FailureAnalysis, Plan } from '../planning/types.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
 import type { UserInputRequest } from './requestUserInputTool.js';
 import type { RunCheckpoint } from './checkpoint.js';
+import type { SubAgentEvidencePacket } from './SubAgentContract.js';
 
 /**
  * Public facts emitted while an agent runs.
@@ -85,6 +86,7 @@ export type AgentEvent =
       stepId?: string;
       reply?: string;
       outcomeStatus?: 'unverified' | 'unavailable';
+      evidencePacket?: SubAgentEvidencePacket;
       error?: string;
       toolCallCount?: number;
       durationMs?: number;

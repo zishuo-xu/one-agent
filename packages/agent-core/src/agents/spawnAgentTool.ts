@@ -29,21 +29,31 @@ export function createSpawnAgentTool(
         .string()
         .optional()
         .describe('What a successful result should look like.'),
+      constraints: z
+        .array(z.string().min(1))
+        .optional()
+        .describe('Hard requirements the sub-agent must preserve.'),
+      expectedEvidence: z
+        .array(z.string().min(1))
+        .optional()
+        .describe('Concrete evidence or sources the sub-agent should collect.'),
     }),
     execute: async (args) => {
-      const { task, context, expectedOutcome } = args as {
+      const { task, context, expectedOutcome, constraints, expectedEvidence } = args as {
         task: string;
         context?: string;
         expectedOutcome?: string;
+        constraints?: string[];
+        expectedEvidence?: string[];
       };
-      const result = await run({ task, context, expectedOutcome });
+      const result = await run({ task, context, expectedOutcome, constraints, expectedEvidence });
       if (result.executionStatus !== 'completed') {
         throw new Error(`Sub-agent failed: ${result.error ?? 'unknown error'}`);
       }
       return {
         executionStatus: result.executionStatus,
         outcomeStatus: result.outcomeStatus,
-        summary: result.summary,
+        evidencePacket: result.evidencePacket,
         toolCallCount: result.toolCalls.length,
         durationMs: result.durationMs,
       };

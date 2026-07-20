@@ -30,6 +30,15 @@ export type {
   SubAgentResult,
   SubAgentRunnerOptions,
 } from './agents/SubAgentRunner.js';
+export {
+  buildSubAgentEvidencePacket,
+  formatSubAgentEvidencePacket,
+} from './agents/SubAgentContract.js';
+export type {
+  SubAgentTaskContract,
+  SubAgentEvidenceItem,
+  SubAgentEvidencePacket,
+} from './agents/SubAgentContract.js';
 export { createSpawnAgentTool } from './agents/spawnAgentTool.js';
 export {
   createRequestUserInputTool,

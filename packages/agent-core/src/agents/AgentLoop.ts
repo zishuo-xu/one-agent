@@ -531,6 +531,7 @@ export class AgentLoop extends EventEmitter {
       ? recovery.inputAnswer ?? message
       : message;
     const memoryText = this.recallMemory(memoryQuery);
+    this.subAgentRunner?.setRunMemoryText(memoryText);
 
     // Planning requires both the opt-in and a tool registry; in 'auto' mode
     // a cheap classifier decides per message whether planning is worth it.
