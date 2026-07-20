@@ -1,148 +1,110 @@
 import { z } from 'zod';
-import type { Memory } from '../db/types.js';
-import type { MemoryStore } from '../db/memoryStore.js';
 import type { ToolDefinition } from '../tools/types.js';
+import {
+  MemoryDocumentStore,
+  type MemoryDocumentScope,
+  type MemoryDocumentContents,
+} from './MemoryDocumentStore.js';
 
 export const MANAGE_MEMORY_TOOL_NAME = 'manage_memory';
 
 export const MANAGE_MEMORY_SYSTEM_INSTRUCTION =
   'When the user explicitly asks you to remember, correct, forget, or inspect long-term memory, ' +
-  'use the manage_memory tool. Do not call it merely because a message contains an implicit durable fact; ' +
-  'session-level memory consolidation handles implicit facts later. Never store credentials or secrets.';
+  'use the manage_memory tool. Global memory is for stable cross-folder user preferences; workspace ' +
+  'memory is for durable facts and decisions in the current folder. Do not call it for implicit facts; ' +
+  'session-level memory consolidation handles those later. Never store credentials or secrets.';
 
 export interface ManageMemoryToolOptions {
-  memoryStore: MemoryStore;
-  threadId?: string;
+  documentStore: MemoryDocumentStore;
 }
 
 const actions = ['remember', 'correct', 'forget', 'inspect'] as const;
-const kinds = [
-  'user_profile',
-  'user_preference',
-  'project_rule',
-  'durable_goal',
-  'fact',
-] as const;
-
-const sensitiveKeyPattern =
-  /(?:password|passcode|api[ _-]?key|access[ _-]?token|secret|credential|密码|口令|密钥|令牌)/i;
 const sensitiveValuePattern =
   /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._-]+|\bsk-[A-Za-z0-9_-]{12,}|\bghp_[A-Za-z0-9]{12,}|\bAKIA[A-Z0-9]{12,})/;
 
-function visibleMemories(memories: Memory[], threadId?: string): Memory[] {
-  return memories.filter(
-    (memory) => memory.scope === 'global' || (memory.scope === 'thread' && memory.threadId === threadId),
-  );
+function replaceUnique(content: string, oldText: string, newText: string): string {
+  const first = content.indexOf(oldText);
+  if (first < 0) throw new Error('The exact memory text was not found. Inspect memory and retry.');
+  if (content.indexOf(oldText, first + oldText.length) >= 0) {
+    throw new Error('The memory text is ambiguous. Supply a longer exact fragment.');
+  }
+  return `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`;
 }
 
-function publicMemory(memory: Memory) {
-  return {
-    id: memory.id,
-    key: memory.key,
-    value: memory.value,
-    kind: memory.kind,
-    scope: memory.scope,
-    explicit: memory.explicit,
-    observedAt: memory.observedAt,
-  };
+function appendExplicitMemory(content: string, text: string): string {
+  if (content.includes(text)) return content;
+  const heading = '## Explicit Memories';
+  const bullet = `- ${text}`;
+  if (content.includes(heading)) {
+    return content.replace(heading, `${heading}\n\n${bullet}`);
+  }
+  return `${content.trimEnd()}\n\n${heading}\n\n${bullet}\n`;
 }
 
-/** Explicit user control over long-term memory; implicit extraction remains session-level. */
+/** Explicit user control over the same Markdown documents used by consolidation. */
 export function createManageMemoryTool(options: ManageMemoryToolOptions): ToolDefinition {
-  const { memoryStore, threadId } = options;
+  const { documentStore } = options;
   return {
     name: MANAGE_MEMORY_TOOL_NAME,
     description:
-      'Manage long-term memory only when the user explicitly asks to remember, correct, forget, ' +
-      'or inspect it. Use a concise, stable key so later corrections target the same fact. ' +
-      'remember/correct require key and value; forget requires the exact key; inspect may use query. ' +
-      'For remember/correct, keep value to the smallest literal fact stated by the user; do not paraphrase it. ' +
-      'Use global for cross-conversation facts and thread only for facts limited to this conversation. ' +
-      'Never store passwords, API keys, tokens, secrets, credentials, temporary requests, or tool output.',
+      'Manage user-visible Markdown memory only when explicitly requested. ' +
+      'remember appends a concise literal statement. correct and forget require an exact existing text fragment. ' +
+      'Use global for stable cross-folder user preferences and workspace for facts or decisions limited to this folder. ' +
+      'inspect returns the latest documents. Never store credentials, secrets, temporary requests, or tool output.',
     parameters: z.object({
       action: z.enum(actions),
-      key: z.string().optional().describe('Concise stable memory key; exact existing key for correction/forget.'),
-      value: z.string().optional().describe('Durable memory value for remember/correct.'),
-      kind: z.enum(kinds).optional(),
-      scope: z.enum(['global', 'thread']).optional(),
-      query: z.string().optional().describe('Optional search text for inspect.'),
-      limit: z.number().int().min(1).max(20).optional().default(10),
+      scope: z.enum(['global', 'workspace']).optional(),
+      text: z.string().optional().describe('Literal statement for remember, or replacement text for correct.'),
+      oldText: z.string().optional().describe('Exact existing document fragment for correct or forget.'),
     }),
-    execute: (rawArgs) => {
+    execute: async (rawArgs) => {
       const args = rawArgs as {
         action: (typeof actions)[number];
-        key?: string;
-        value?: string;
-        kind?: (typeof kinds)[number];
-        scope?: Memory['scope'];
-        query?: string;
-        limit: number;
+        scope?: MemoryDocumentScope;
+        text?: string;
+        oldText?: string;
       };
-      const scope = args.scope ?? 'global';
-      if (scope === 'thread' && !threadId) {
-        throw new Error('Thread-scoped memory requires a persisted thread.');
-      }
-
       if (args.action === 'inspect') {
-        const active = visibleMemories(memoryStore.list({ status: 'active' }), threadId)
-          .filter((memory) => !args.scope || memory.scope === args.scope);
-        const query = args.query?.trim();
-        const recalled = query
-          ? memoryStore.recallRelevantMemories(query, {
-              limit: args.scope ? 20 : args.limit,
-              threadId,
-            }).memories
-          : active.slice(0, args.limit);
-        const matches = args.scope
-          ? recalled.filter((memory) => memory.scope === args.scope).slice(0, args.limit)
-          : recalled;
+        const documents = args.scope
+          ? [documentStore.read(args.scope)]
+          : documentStore.readAll();
         return {
           action: 'inspected',
-          memories: matches.map(publicMemory),
+          documents: documents.map(({ scope, path, content, hash, updatedAt }) => ({
+            scope, path, content, hash, updatedAt,
+          })),
         };
       }
 
-      const key = args.key?.trim();
-      if (!key) throw new Error(`${args.action} requires a non-empty key.`);
-      if (sensitiveKeyPattern.test(key)) {
+      const scope = args.scope ?? 'global';
+      const text = args.text?.trim();
+      const oldText = args.oldText?.trim();
+      if (text && sensitiveValuePattern.test(text)) {
         throw new Error('Credentials and secrets cannot be stored in long-term memory.');
       }
 
-      if (args.action === 'forget') {
-        const result = memoryStore.forget({
-          key,
-          scope,
-          threadId: scope === 'thread' ? threadId : undefined,
-          source: 'explicit_user',
-        });
-        return {
-          action: result.action,
-          memory: result.memory
-            ? { id: result.memory.id, key: result.memory.key, scope: result.memory.scope }
-            : undefined,
-        };
-      }
-
-      const value = args.value?.trim();
-      if (!value) throw new Error(`${args.action} requires a non-empty value.`);
-      if (sensitiveValuePattern.test(value)) {
-        throw new Error('Credentials and secrets cannot be stored in long-term memory.');
-      }
-      const result = memoryStore.remember({
-        key,
-        value,
-        scope,
-        threadId: scope === 'thread' ? threadId : undefined,
-        source: 'explicit_user',
-        confidence: 1,
-        kind: args.kind ?? 'fact',
-        explicit: true,
+      let changed = false;
+      await documentStore.update((current) => {
+        const next: MemoryDocumentContents = { ...current };
+        const content = current[scope];
+        if (args.action === 'remember') {
+          if (!text) throw new Error('remember requires non-empty text.');
+          next[scope] = appendExplicitMemory(content, text);
+        } else if (args.action === 'correct') {
+          if (!oldText || !text) throw new Error('correct requires oldText and text.');
+          next[scope] = replaceUnique(content, oldText, text);
+        } else {
+          if (!oldText) throw new Error('forget requires oldText.');
+          next[scope] = replaceUnique(content, oldText, '');
+        }
+        changed = next[scope] !== content;
+        return next;
       });
       return {
-        requestedAction: args.action,
-        action: result.action,
-        memory: publicMemory(result.memory),
-        previousMemoryId: result.previousMemoryId,
+        action: args.action,
+        scope,
+        changed,
+        document: documentStore.read(scope),
       };
     },
   };

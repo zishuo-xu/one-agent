@@ -1,34 +1,15 @@
 import { config } from '../config.js';
 import { modelName } from '../configAccess.js';
-import type { Memory } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider } from '../model/types.js';
+import type { MemoryDocumentContents } from './MemoryDocumentStore.js';
 import { z } from 'zod';
 
 export interface MemorySourceMessage {
   id: string;
+  role: 'user' | 'assistant';
   content: string;
   createdAt: string;
-}
-
-export interface ExtractedMemoryCandidate {
-  key: string;
-  value: string;
-  evidence: string;
-  kind: Memory['kind'];
-  scope: Memory['scope'];
-  confidence: number;
-  explicit: boolean;
-  sourceMessageId: string;
-  expiresAt?: string;
-}
-
-export interface ExistingMemorySnapshot {
-  key: string;
-  value: string;
-  kind: Memory['kind'];
-  scope: Memory['scope'];
-  explicit: boolean;
 }
 
 export interface MemoryExtractorOptions {
@@ -36,55 +17,40 @@ export interface MemoryExtractorOptions {
   model?: string;
   modelProvider?: ModelProvider;
   timeoutMs?: number;
+  maxDocumentCharacters?: number;
 }
 
-const MEMORY_KINDS = new Set<Memory['kind']>([
-  'user_profile',
-  'user_preference',
-  'project_rule',
-  'durable_goal',
-  'fact',
-]);
+const memoryDocumentEnvelopeSchema = z.object({
+  globalMemory: z.string(),
+  workspaceMemory: z.string(),
+}).strict();
 
-const memoryCandidateSchema = z.object({
-  key: z.string().min(1),
-  value: z.string().min(1),
-  evidence: z.string().min(1),
-  kind: z.enum(['user_profile', 'user_preference', 'project_rule', 'durable_goal', 'fact']),
-  scope: z.enum(['global', 'thread']),
-  confidence: z.number().min(0).max(1),
-  explicit: z.boolean(),
-  sourceMessageId: z.string().min(1),
-  expiresAt: z.string().nullable().optional(),
-});
-
-const memoryExtractionEnvelopeSchema = z.object({
-  memories: z.array(memoryCandidateSchema),
-});
+const CREDENTIAL_VALUE_PATTERN =
+  /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._-]+|\bsk-[A-Za-z0-9_-]{12,}|\bghp_[A-Za-z0-9]{12,}|\bAKIA[A-Z0-9]{12,})/;
 
 /**
- * Session-level Memory Agent. It receives only user-authored messages and
- * returns evidence-linked candidates; it never writes storage directly.
+ * Session-level Memory Agent. Assistant messages provide referential context,
+ * but only user-authored messages are authoritative evidence.
  */
 export class MemoryExtractor {
   private readonly systemPrompt: string;
   private readonly modelProvider: ModelProvider;
   private readonly timeoutMs: number;
+  private readonly maxDocumentCharacters: number;
 
   constructor(options: MemoryExtractorOptions = {}) {
     this.systemPrompt = options.systemPrompt ?? [
-      'You are the Memory Agent for a reliability-first agent runtime.',
-      'Review all user-authored messages from one conversation and extract only durable facts useful in future conversations.',
-      'Allowed kinds: user_profile, user_preference, project_rule, durable_goal, fact.',
-      'Do not store general knowledge, questions, assistant claims, search results, file contents, tool tasks, temporary requests, predictions, weather, news, passwords, API keys, tokens, secrets, or other credentials.',
-      'A question is not evidence of its answer. Never infer a preference or fact from something the user only asked about.',
-      'If an existing memory already expresses the same meaning, especially an explicit memory, do not emit a duplicate candidate.',
-      'When a user changes or corrects a fact, emit the latest durable value and cite the exact user message that supports it.',
-      'Every item must cite one sourceMessageId and include an exact verbatim evidence quote from that message. Do not invent IDs or evidence.',
-      'The value must be the smallest literal fact copied from the evidence, not a paraphrase or an inferred answer.',
-      'Return ONLY one JSON object with a memories array and no markdown:',
-      '{"memories":[{"key":"concise stable name","value":"literal fact","evidence":"exact user quote containing literal fact","kind":"user_preference","scope":"global","confidence":0.95,"explicit":true,"sourceMessageId":"message-id","expiresAt":null}]}',
-      'Use the same language as the user. If nothing should be remembered, return {"memories":[]}.',
+      'You maintain two concise, user-visible Markdown memory documents for a local agent runtime.',
+      'Review one complete user-visible conversation together with the latest documents.',
+      'Assistant messages provide context for references such as "I agree", but only user messages authorize a memory change.',
+      'Put stable cross-workspace user preferences in globalMemory.',
+      'Put durable facts, decisions, constraints and conventions for the current folder in workspaceMemory.',
+      'Do not store temporary requests, unfinished speculation, general knowledge, assistant claims, tool output, credentials or secrets.',
+      'Preserve existing unrelated content. Correct or remove existing content only when the user clearly changes or rejects it.',
+      'Keep Markdown concise, readable and organized under headings. Do not add IDs, confidence scores, timestamps or hidden metadata.',
+      'Return ONLY one JSON object with the complete updated documents:',
+      '{"globalMemory":"# Global Memory\\n...","workspaceMemory":"# Workspace Memory\\n..."}',
+      'If nothing changes, return the input documents unchanged.',
     ].join(' ');
     this.modelProvider = options.modelProvider ??
       (options.model
@@ -92,7 +58,8 @@ export class MemoryExtractor {
         : config.utilityModelProvider ??
           config.modelProvider ??
           new OpenAICompatibleProvider(config.openai, modelName()));
-    this.timeoutMs = options.timeoutMs ?? 30000;
+    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.maxDocumentCharacters = options.maxDocumentCharacters ?? 64 * 1024;
   }
 
   get model(): string {
@@ -101,64 +68,43 @@ export class MemoryExtractor {
 
   async extract(
     messages: MemorySourceMessage[],
-    existingMemories: ExistingMemorySnapshot[] = [],
-  ): Promise<ExtractedMemoryCandidate[]> {
-    if (messages.length === 0) return [];
-    const allowedIds = new Set(messages.map((message) => message.id));
-    const prompt = JSON.stringify({
-      userMessages: messages.map(({ id, content, createdAt }) => ({ id, createdAt, content })),
-      existingMemories,
-    });
+    current: MemoryDocumentContents,
+  ): Promise<MemoryDocumentContents> {
+    if (!messages.some((message) => message.role === 'user')) return current;
     const response = await this.modelProvider.complete({
       messages: [
         { role: 'system', content: this.systemPrompt },
-        { role: 'user', content: prompt },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            conversation: messages,
+            currentDocuments: {
+              globalMemory: current.global,
+              workspaceMemory: current.workspace,
+            },
+          }),
+        },
       ],
       jsonMode: true,
       timeoutMs: this.timeoutMs,
     });
-    return this.parseCandidates(response.content, messages, allowedIds);
+    return this.parseDocuments(response.content);
   }
 
-  private parseCandidates(
-    raw: string,
-    messages: MemorySourceMessage[],
-    allowedIds: Set<string>,
-  ): ExtractedMemoryCandidate[] {
+  private parseDocuments(raw: string): MemoryDocumentContents {
     const cleaned = raw.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim();
-    const envelope = memoryExtractionEnvelopeSchema.parse(JSON.parse(cleaned));
-    const parsed = envelope.memories;
-
-    const sourceById = new Map(messages.map((message) => [message.id, message.content]));
-    return parsed.flatMap((item, index) => {
-      const key = item.key.trim();
-      const value = item.value.trim();
-      const evidence = item.evidence.trim();
-      const sourceMessageId = item.sourceMessageId;
-      const kind = item.kind;
-      const scope = item.scope;
-      const confidence = item.confidence;
-      if (!key || !value || !MEMORY_KINDS.has(kind) || !allowedIds.has(sourceMessageId)) {
-        throw new TypeError(`Invalid memory candidate at index ${index}`);
-      }
-      if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-        throw new TypeError(`Invalid memory confidence at index ${index}`);
-      }
-      const sourceContent = sourceById.get(sourceMessageId) ?? '';
-      if (!evidence || !sourceContent.includes(evidence) || !evidence.includes(value)) {
-        return [];
-      }
-      return [{
-        key,
-        value,
-        evidence,
-        kind,
-        scope,
-        confidence,
-        explicit: item.explicit,
-        sourceMessageId,
-        expiresAt: item.expiresAt ?? undefined,
-      }];
-    });
+    const parsed = memoryDocumentEnvelopeSchema.parse(JSON.parse(cleaned));
+    const global = parsed.globalMemory.trim();
+    const workspace = parsed.workspaceMemory.trim();
+    if (!global.startsWith('# ') || !workspace.startsWith('# ')) {
+      throw new TypeError('Memory documents must start with a Markdown heading');
+    }
+    if (global.length > this.maxDocumentCharacters || workspace.length > this.maxDocumentCharacters) {
+      throw new RangeError('Memory document exceeds the configured safety limit');
+    }
+    if (CREDENTIAL_VALUE_PATTERN.test(`${global}\n${workspace}`)) {
+      throw new TypeError('Credentials and secrets cannot be stored in long-term memory');
+    }
+    return { global, workspace };
   }
 }

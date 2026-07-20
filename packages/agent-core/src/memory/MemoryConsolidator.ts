@@ -1,19 +1,17 @@
 import Database from 'better-sqlite3';
-import { MemoryStore } from '../db/memoryStore.js';
+import { config } from '../config.js';
 import { MessageStore } from '../db/messageStore.js';
 import { ThreadStore } from '../db/threadStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
+import { MemoryDocumentStore, type MemoryDocumentScope } from './MemoryDocumentStore.js';
 import { MemoryExtractor } from './MemoryExtractor.js';
 import type { AgentEvent } from '../agents/events.js';
-import type { Memory } from '../db/types.js';
 
 export interface MemoryConsolidationResult {
   threadId: string;
   status: 'completed' | 'failed' | 'skipped';
   messageCount: number;
-  candidateCount: number;
-  writtenCount: number;
-  rejectedCount: number;
+  changedScopes: MemoryDocumentScope[];
   markedExtracted: boolean;
   error?: string;
 }
@@ -22,33 +20,8 @@ export interface MemoryConsolidatorOptions {
   extractor?: MemoryExtractor;
   threadStore?: ThreadStore;
   messageStore?: MessageStore;
-  memoryStore?: MemoryStore;
+  documentStore?: MemoryDocumentStore;
   traceEventStore?: TraceEventStore;
-}
-
-const SENSITIVE_PATTERN = /(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|密码|密钥|令牌)/i;
-
-function compact(value: string): string {
-  return value.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
-}
-
-function equivalentLiteral(left: string, right: string): boolean {
-  const leftIsIdentifier = /^[a-z0-9]+$/.test(left);
-  const rightIsIdentifier = /^[a-z0-9]+$/.test(right);
-  if (leftIsIdentifier && rightIsIdentifier) return left === right;
-  return left.includes(right) || right.includes(left);
-}
-
-function isCoveredByExplicitMemory(
-  candidate: { value: string; scope: Memory['scope'] },
-  memories: Memory[],
-): boolean {
-  const candidateValue = compact(candidate.value);
-  return memories.some((memory) => {
-    if (!memory.explicit || memory.status !== 'active' || memory.scope !== candidate.scope) return false;
-    const existingValue = compact(memory.value);
-    return candidateValue.length > 0 && equivalentLiteral(existingValue, candidateValue);
-  });
 }
 
 /** Consolidates one complete thread at a time. Failed work stays unextracted. */
@@ -56,7 +29,7 @@ export class MemoryConsolidator {
   private readonly extractor: MemoryExtractor;
   private readonly threadStore: ThreadStore;
   private readonly messageStore: MessageStore;
-  private readonly memoryStore: MemoryStore;
+  private readonly documentStore: MemoryDocumentStore;
   private readonly traceEventStore: TraceEventStore;
   private readonly inFlight = new Map<string, Promise<MemoryConsolidationResult>>();
 
@@ -64,7 +37,9 @@ export class MemoryConsolidator {
     this.extractor = options.extractor ?? new MemoryExtractor();
     this.threadStore = options.threadStore ?? new ThreadStore(db);
     this.messageStore = options.messageStore ?? new MessageStore(db);
-    this.memoryStore = options.memoryStore ?? new MemoryStore(db);
+    this.documentStore = options.documentStore ?? new MemoryDocumentStore({
+      workspaceRoot: config.workspaceRoot,
+    });
     this.traceEventStore = options.traceEventStore ?? new TraceEventStore(db);
   }
 
@@ -87,87 +62,52 @@ export class MemoryConsolidator {
   private async runConsolidation(threadId: string): Promise<MemoryConsolidationResult> {
     const startedMs = Date.now();
     const thread = this.threadStore.getById(threadId);
-    if (!thread) {
-      return this.failedResult(threadId, 0, 0, 0, 'Thread not found');
-    }
+    if (!thread) return this.failedResult(threadId, 0, 'Thread not found');
     if (thread.memoryExtracted) {
       return {
         threadId,
         status: 'skipped',
         messageCount: 0,
-        candidateCount: 0,
-        writtenCount: 0,
-        rejectedCount: 0,
+        changedScopes: [],
         markedExtracted: true,
       };
     }
 
-    const userMessages = this.messageStore.getByThread(threadId)
-      .filter((message) => message.role === 'user' && !message.internal)
-      .map((message) => ({ id: message.id, content: message.content, createdAt: message.createdAt }));
-    this.record(threadId, 'started', { messageCount: userMessages.length });
+    const messages = this.messageStore.getByThread(threadId)
+      .filter((message) => !message.internal && (message.role === 'user' || message.role === 'assistant'))
+      .map((message) => ({
+        id: message.id,
+        role: message.role as 'user' | 'assistant',
+        content: message.content,
+        createdAt: message.createdAt,
+      }));
+    this.record(threadId, 'started', { messageCount: messages.length });
 
     try {
-      const activeMemories = this.memoryStore.list({ status: 'active' })
-        .filter((memory) => memory.scope === 'global' || memory.threadId === threadId);
-      const candidates = await this.extractor.extract(
-        userMessages,
-        activeMemories.map(({ key, value, kind, scope, explicit }) => ({
-          key, value, kind, scope, explicit,
-        })),
-      );
-      const sources = new Map(userMessages.map((message) => [message.id, message]));
-      let writtenCount = 0;
-      let rejectedCount = 0;
-      let markedExtracted = false;
-
-      const commit = this.db.transaction(() => {
-        for (const candidate of candidates) {
-          const sourceMessage = sources.get(candidate.sourceMessageId);
-          if (!sourceMessage || SENSITIVE_PATTERN.test(`${candidate.key}\n${candidate.value}`)) {
-            rejectedCount++;
-            continue;
-          }
-          if (isCoveredByExplicitMemory(candidate, activeMemories)) {
-            rejectedCount++;
-            continue;
-          }
-          this.memoryStore.remember({
-            key: candidate.key,
-            value: candidate.value,
-            kind: candidate.kind,
-            scope: candidate.scope,
-            confidence: candidate.confidence,
-            explicit: candidate.explicit,
-            expiresAt: candidate.expiresAt,
-            source: 'memory_agent',
-            threadId,
-            sourceMessageId: sourceMessage.id,
-            observedAt: sourceMessage.createdAt,
-          });
-          writtenCount++;
-        }
-        markedExtracted = this.threadStore.markMemoryExtractedIfUnchanged(
-          threadId,
-          thread.updatedAt,
-        );
+      const changedScopes: MemoryDocumentScope[] = [];
+      await this.documentStore.update(async (current) => {
+        const next = await this.extractor.extract(messages, current);
+        if (next.global.trim() !== current.global.trim()) changedScopes.push('global');
+        if (next.workspace.trim() !== current.workspace.trim()) changedScopes.push('workspace');
+        return next;
       });
-      commit();
 
+      // Files are committed before the database flag. A crash between these
+      // operations only causes an idempotent retry; it never loses memory.
+      const markedExtracted = this.threadStore.markMemoryExtractedIfUnchanged(
+        threadId,
+        thread.updatedAt,
+      );
       const result: MemoryConsolidationResult = {
         threadId,
         status: 'completed',
-        messageCount: userMessages.length,
-        candidateCount: candidates.length,
-        writtenCount,
-        rejectedCount,
+        messageCount: messages.length,
+        changedScopes,
         markedExtracted,
       };
       this.record(threadId, 'completed', {
-        messageCount: userMessages.length,
-        candidateCount: candidates.length,
-        writtenCount,
-        rejectedCount,
+        messageCount: messages.length,
+        changedScopes,
         markedExtracted,
         durationMs: Date.now() - startedMs,
       });
@@ -175,11 +115,11 @@ export class MemoryConsolidator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.record(threadId, 'failed', {
-        messageCount: userMessages.length,
+        messageCount: messages.length,
         durationMs: Date.now() - startedMs,
         error: message,
       });
-      return this.failedResult(threadId, userMessages.length, 0, 0, message);
+      return this.failedResult(threadId, messages.length, message);
     }
   }
 
@@ -200,20 +140,12 @@ export class MemoryConsolidator {
     }
   }
 
-  private failedResult(
-    threadId: string,
-    messageCount: number,
-    candidateCount: number,
-    rejectedCount: number,
-    error: string,
-  ): MemoryConsolidationResult {
+  private failedResult(threadId: string, messageCount: number, error: string): MemoryConsolidationResult {
     return {
       threadId,
       status: 'failed',
       messageCount,
-      candidateCount,
-      writtenCount: 0,
-      rejectedCount,
+      changedScopes: [],
       markedExtracted: false,
       error,
     };

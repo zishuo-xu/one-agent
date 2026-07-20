@@ -86,30 +86,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_thread_id ON tasks(thread_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks(status, created_at);
 
-CREATE TABLE IF NOT EXISTS memories (
-  id TEXT PRIMARY KEY,
-  key TEXT NOT NULL,
-  value TEXT NOT NULL,
-  source TEXT,
-  thread_id TEXT,
-  scope TEXT NOT NULL DEFAULT 'global',
-  source_run_id TEXT,
-  confidence REAL NOT NULL DEFAULT 0.7,
-  status TEXT NOT NULL DEFAULT 'active',
-  expires_at DATETIME,
-  last_used_at DATETIME,
-  superseded_by_id TEXT,
-  kind TEXT NOT NULL DEFAULT 'fact',
-  explicit INTEGER NOT NULL DEFAULT 0,
-  source_message_id TEXT,
-  observed_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_memories_key ON memories(key);
-CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at);
-
 CREATE TABLE IF NOT EXISTS tool_calls (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -196,29 +172,17 @@ export function migrate(instance: Database.Database): void {
   } catch {
     // Index already exists or pending creation.
   }
-  for (const sql of [
-    "ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'",
-    'ALTER TABLE memories ADD COLUMN source_run_id TEXT',
-    'ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7',
-    "ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
-    'ALTER TABLE memories ADD COLUMN expires_at DATETIME',
-    'ALTER TABLE memories ADD COLUMN last_used_at DATETIME',
-    'ALTER TABLE memories ADD COLUMN superseded_by_id TEXT',
-    "ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact'",
-    'ALTER TABLE memories ADD COLUMN explicit INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE memories ADD COLUMN source_message_id TEXT',
-    'ALTER TABLE memories ADD COLUMN observed_at DATETIME',
-  ]) {
-    try {
-      instance.exec(sql);
-    } catch {
-      // Column already exists.
-    }
-  }
-  try {
-    instance.exec('CREATE INDEX IF NOT EXISTS idx_memories_status_scope ON memories(status, scope, updated_at)');
-  } catch {
-    // Index already exists.
+  // Durable memory moved to user-visible Markdown documents. Preserve an old
+  // table as an inert rollback archive, but never create or read it at runtime.
+  // New databases contain no memory table at all.
+  const legacyMemoryTable = instance.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+  ).get();
+  const archivedMemoryTable = instance.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_legacy'",
+  ).get();
+  if (legacyMemoryTable && !archivedMemoryTable) {
+    instance.exec('ALTER TABLE memories RENAME TO memories_legacy');
   }
   try {
     instance.exec("ALTER TABLE agent_runs ADD COLUMN trace_status TEXT NOT NULL DEFAULT 'complete'");

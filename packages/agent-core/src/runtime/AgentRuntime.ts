@@ -6,7 +6,6 @@ import {
   REQUEST_USER_INPUT_TOOL_NAME,
 } from '../agents/requestUserInputTool.js';
 import { getSharedConnection } from '../db/connection.js';
-import { MemoryStore } from '../db/memoryStore.js';
 import { MessageStore } from '../db/messageStore.js';
 import { RunStore } from '../db/runStore.js';
 import { SqliteTaskStore } from '../db/taskStore.js';
@@ -14,6 +13,7 @@ import { ThreadStore } from '../db/threadStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
 import { MemoryConsolidator } from '../memory/MemoryConsolidator.js';
+import { MemoryDocumentStore } from '../memory/MemoryDocumentStore.js';
 import {
   createManageMemoryTool,
   MANAGE_MEMORY_TOOL_NAME,
@@ -66,9 +66,9 @@ export class AgentRuntime {
     toolCalls: ToolCallStore;
     traces: TraceEventStore;
     tasks: SqliteTaskStore;
-    memories: MemoryStore;
   };
   readonly memory: MemoryConsolidator;
+  readonly memoryDocuments: MemoryDocumentStore;
   readonly toolPolicy: ToolPolicy;
   private readonly modelProvider?: ModelProvider;
 
@@ -86,12 +86,12 @@ export class AgentRuntime {
       toolCalls: new ToolCallStore(this.db),
       traces: new TraceEventStore(this.db),
       tasks: new SqliteTaskStore(this.db),
-      memories: new MemoryStore(this.db),
     };
+    this.memoryDocuments = new MemoryDocumentStore({ workspaceRoot: options.workspaceRoot });
     this.memory = new MemoryConsolidator(this.db, {
       threadStore: this.stores.threads,
       messageStore: this.stores.messages,
-      memoryStore: this.stores.memories,
+      documentStore: this.memoryDocuments,
       traceEventStore: this.stores.traces,
     });
   }
@@ -103,8 +103,7 @@ export class AgentRuntime {
     const memoryToolDisabled = disabledTools.includes(MANAGE_MEMORY_TOOL_NAME);
     if (!memoryToolDisabled && !tools.has(MANAGE_MEMORY_TOOL_NAME)) {
       tools.register(createManageMemoryTool({
-        memoryStore: this.stores.memories,
-        threadId: options.threadId,
+        documentStore: this.memoryDocuments,
       }));
     }
     const inputToolDisabled = disabledTools.includes(REQUEST_USER_INPUT_TOOL_NAME);
@@ -136,7 +135,7 @@ export class AgentRuntime {
       runStore: this.stores.runs,
       toolCallStore: this.stores.toolCalls,
       traceEventStore: this.stores.traces,
-      memoryStore: this.stores.memories,
+      memoryDocumentStore: this.memoryDocuments,
       toolPolicy: options.userInput === false ? undefined : this.toolPolicy,
       requirePlanApproval:
         options.userInput !== false && (options.planApproval ?? config.runtime.planApproval),

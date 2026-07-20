@@ -39,7 +39,7 @@ export async function chatRoutes(
   const messageStore = runtime.stores.messages;
   const runStore = runtime.stores.runs;
   const toolCallStore = runtime.stores.toolCalls;
-  void runtime.memory.recoverUnextracted();
+  await runtime.memory.recoverUnextracted();
 
   fastify.post<{ Body: ChatBody; Reply: ChatReply }>('/api/chat', async (request, reply) => {
     const { message, threadId: bodyThreadId } = request.body;

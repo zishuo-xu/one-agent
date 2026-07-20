@@ -1,159 +1,62 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MemoryExtractor } from '../../src/memory/MemoryExtractor.js';
+import type { ModelProvider, ModelRequest } from '../../src/model/types.js';
 
-vi.mock('../../src/config.js', () => ({
-  config: {
-    model: 'glm-5.2',
-    openai: { chat: { completions: { create: vi.fn() } } },
-  },
-}));
-
-import { config } from '../../src/config.js';
-
-const source = [{ id: 'message-1', content: '以后请用中文回答我。', createdAt: '2026-07-18T10:00:00.000Z' }];
-const candidate = {
-  key: '回答语言偏好',
-  value: '中文',
-  evidence: '以后请用中文回答我',
-  kind: 'user_preference',
-  scope: 'global',
-  confidence: 0.95,
-  explicit: true,
-  sourceMessageId: 'message-1',
+const current = {
+  global: '# Global Memory\n',
+  workspace: '# Workspace Memory\n',
 };
 
+const messages = [
+  { id: 'a1', role: 'assistant' as const, content: 'Should this project use pnpm?', createdAt: '2026-01-01T00:00:00Z' },
+  { id: 'u1', role: 'user' as const, content: '可以，我认同。', createdAt: '2026-01-01T00:00:01Z' },
+];
+
+function provider(content: string) {
+  const complete = vi.fn(async (_request: ModelRequest) => ({ content }));
+  return {
+    complete,
+    provider: {
+      name: 'memory-test', model: 'memory-test',
+      capabilities: { streaming: 'native', toolCalling: 'native', structuredOutput: 'native', reasoning: 'none' },
+      complete,
+      async *stream() { yield { content: '' }; },
+    } as ModelProvider,
+  };
+}
+
 describe('MemoryExtractor', () => {
-  beforeEach(() => vi.mocked(config.openai.chat.completions.create).mockReset());
-
-  it('extracts evidence-linked candidates from all supplied user messages', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify({ memories: [candidate] }) } }],
-    } as never);
-
-    const facts = await new MemoryExtractor().extract(source);
-    expect(facts).toEqual([candidate]);
-    const request = vi.mocked(config.openai.chat.completions.create).mock.calls[0][0] as {
-      messages: Array<{ content: string }>;
-      response_format?: { type: string };
-    };
-    expect(request.messages[1].content).toContain('message-1');
-    expect(request.messages[1].content).toContain('以后请用中文回答我');
-    expect(request.messages[0].content).toContain('A question is not evidence of its answer');
-    expect(request.messages[0].content).toContain('{"memories":[');
-    expect(request.response_format).toEqual({ type: 'json_object' });
+  it('updates complete documents and includes assistant context', async () => {
+    const mock = provider(JSON.stringify({
+      globalMemory: '# Global Memory\n\n- Prefer Chinese.',
+      workspaceMemory: '# Workspace Memory\n\n- Use pnpm.',
+    }));
+    const result = await new MemoryExtractor({ modelProvider: mock.provider }).extract(messages, current);
+    expect(result.workspace).toContain('Use pnpm');
+    const request = mock.complete.mock.calls[0][0] as ModelRequest;
+    expect(request.jsonMode).toBe(true);
+    expect(request.messages[1].content).toContain('Should this project use pnpm?');
+    expect(request.messages[1].content).toContain('可以，我认同。');
   });
 
-  it('accepts an empty memories envelope as a successful no-memory result', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: '```json\n{"memories":[]}\n```' } }],
-    } as never);
-    await expect(new MemoryExtractor().extract(source)).resolves.toEqual([]);
+  it('returns current documents without a user-authored message', async () => {
+    const mock = provider('not used');
+    const result = await new MemoryExtractor({ modelProvider: mock.provider }).extract([
+      { ...messages[0] },
+    ], current);
+    expect(result).toEqual(current);
+    expect(mock.complete).not.toHaveBeenCalled();
   });
 
-  it('rejects the legacy top-level array so there is one output contract', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify([candidate]) } }],
-    } as never);
-    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
-  });
-
-  it('rejects invalid JSON so the thread remains unextracted', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: 'not json' } }],
-    } as never);
-    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
-  });
-
-  it('rejects an empty model response instead of treating it as no memories', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: '' } }],
-    } as never);
-    await expect(new MemoryExtractor().extract(source)).rejects.toThrow();
-  });
-
-  it('propagates model failures so startup recovery can retry', async () => {
-    const extractor = new MemoryExtractor({
-      modelProvider: {
-        name: 'failing',
-        model: 'failing-model',
-        capabilities: {
-          streaming: 'native',
-          toolCalling: 'native',
-          structuredOutput: 'native',
-          reasoning: 'native',
-        },
-        complete: async () => { throw new Error('timeout'); },
-        stream: async function* () { yield {}; },
-      },
-    });
-    await expect(extractor.extract(source)).rejects.toThrow('timeout');
-  });
-
-  it('requests JSON mode through the provider-neutral model contract', async () => {
-    let jsonMode: boolean | undefined;
-    const extractor = new MemoryExtractor({
-      modelProvider: {
-        name: 'structured-memory-test',
-        model: 'structured-memory-model',
-        capabilities: {
-          streaming: 'native',
-          toolCalling: 'native',
-          structuredOutput: 'emulated',
-          reasoning: 'native',
-        },
-        complete: async (request) => {
-          jsonMode = request.jsonMode;
-          return { content: '{"memories":[]}' };
-        },
-        stream: async function* () { yield {}; },
-      },
-    });
-
-    await expect(extractor.extract(source)).resolves.toEqual([]);
-    expect(jsonMode).toBe(true);
-  });
-
-  it('rejects candidates whose evidence is not one of the supplied messages', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify({ memories: [{ ...candidate, sourceMessageId: 'invented' }] }) } }],
-    } as never);
-    await expect(new MemoryExtractor().extract(source)).rejects.toThrow('Invalid memory candidate');
-  });
-
-  it('drops an inferred answer that is not literally grounded in the cited user message', async () => {
-    const question = [{
-      id: 'question-1',
-      content: '我偏好使用什么语言交流？',
-      createdAt: '2026-07-18T10:00:00.000Z',
-    }];
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: JSON.stringify({ memories: [{
-        ...candidate,
-        sourceMessageId: 'question-1',
-        evidence: '我偏好使用什么语言交流？',
-      }] }) } }],
-    } as never);
-
-    await expect(new MemoryExtractor().extract(question)).resolves.toEqual([]);
-  });
-
-  it('supplies existing explicit memories so the model can avoid semantic duplicates', async () => {
-    vi.mocked(config.openai.chat.completions.create).mockResolvedValue({
-      choices: [{ message: { content: '{"memories":[]}' } }],
-    } as never);
-
-    await new MemoryExtractor().extract(source, [{
-      key: 'language_preference',
-      value: '中文',
-      kind: 'user_preference',
-      scope: 'global',
-      explicit: true,
-    }]);
-
-    const request = vi.mocked(config.openai.chat.completions.create).mock.calls[0][0] as {
-      messages: Array<{ content: string }>;
-    };
-    expect(request.messages[1].content).toContain('language_preference');
-    expect(request.messages[1].content).toContain('existingMemories');
+  it('rejects malformed envelopes and credentials', async () => {
+    const malformed = provider('{"memories":[]}');
+    await expect(new MemoryExtractor({ modelProvider: malformed.provider }).extract(messages, current))
+      .rejects.toThrow();
+    const secret = provider(JSON.stringify({
+      globalMemory: '# Global Memory\n\n- token sk-abcdefghijklmnop',
+      workspaceMemory: '# Workspace Memory',
+    }));
+    await expect(new MemoryExtractor({ modelProvider: secret.provider }).extract(messages, current))
+      .rejects.toThrow('Credentials and secrets');
   });
 });

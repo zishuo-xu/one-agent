@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('../../src/config.js', () => ({
   config: {
@@ -21,8 +24,7 @@ import { config } from '../../src/config.js';
 import { AgentLoop, AgentLoopEvent } from '../../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
 import { ToolDefinition } from '../../src/tools/types.js';
-import { createConnection } from '../../src/db/connection.js';
-import { MemoryStore } from '../../src/db/memoryStore.js';
+import { MemoryDocumentStore } from '../../src/memory/MemoryDocumentStore.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -176,16 +178,10 @@ describe('AgentLoop spawn_agent', () => {
       .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'use the preference' }) as never)
       .mockResolvedValueOnce(textResponse('preference found') as never)
       .mockResolvedValueOnce(textResponse('done') as never);
-    const db = createConnection({ path: ':memory:' });
-    const memories = new MemoryStore(db);
-    memories.create({
-      key: 'favorite_color',
-      value: 'green',
-      source: 'user',
-      kind: 'user_preference',
-      explicit: true,
-    });
-    const agent = new AgentLoop({ tools: makeTools(), memoryStore: memories });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'one-agent-sub-memory-'));
+    const memories = new MemoryDocumentStore({ workspaceRoot: root, globalRoot: root });
+    await memories.write('global', '# Global Memory\n\n- Favorite color: green\n');
+    const agent = new AgentLoop({ tools: makeTools(), memoryDocumentStore: memories });
 
     await agent.chat('What is my favorite color? Ask a sub-agent to use it.');
 
@@ -193,11 +189,9 @@ describe('AgentLoop spawn_agent', () => {
       messages: Array<{ role: string; content: string }>;
     };
     const subAgentPrompt = subAgentRequest.messages[1].content;
-    expect(subAgentPrompt).toContain('current conversation override any conflicting memory');
-    expect(subAgentPrompt).toContain('"key":"favorite_color"');
-    expect(subAgentPrompt).toContain('"value":"green"');
-    expect(subAgentPrompt).not.toContain('favorite_color: green');
-    db.close();
+    expect(subAgentPrompt).toContain('current conversation');
+    expect(subAgentPrompt).toContain('Favorite color: green');
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('does not mutate the registry passed in by the caller', async () => {

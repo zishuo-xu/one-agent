@@ -1,4 +1,3 @@
-import type { MemoryRecallCandidate } from '../db/memoryStore.js';
 import type { ModelCallTraceEvent, TokenUsage } from '../model/types.js';
 import type { FailureAnalysis, Plan } from '../planning/types.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
@@ -98,21 +97,15 @@ export type AgentEvent =
       type: 'memory_consolidation';
       phase: 'started' | 'completed' | 'failed';
       messageCount?: number;
-      candidateCount?: number;
-      writtenCount?: number;
-      rejectedCount?: number;
+      changedScopes?: Array<'global' | 'workspace'>;
       markedExtracted?: boolean;
       durationMs?: number;
       error?: string;
     }
   | {
-      type: 'memory_recall';
-      keywords: string[];
-      skipReason?: 'no_keywords' | 'limit_zero';
-      candidateCount: number;
-      selectedCount: number;
-      candidates: MemoryRecallCandidate[];
-      injectedMemoryIds: string[];
+      type: 'memory_context_loaded';
+      scopes: Array<'global' | 'workspace'>;
+      documentHashes: Partial<Record<'global' | 'workspace', string>>;
       injectedCharacters: number;
       estimatedTokens: number;
       error?: string;

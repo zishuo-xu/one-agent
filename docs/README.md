@@ -12,9 +12,10 @@
 1. [项目目标、愿景与设计现状](./project-vision-and-status.md)：产品定位、架构、能力边界、数据结构、已知限制的唯一事实源；
 2. [配置清单](./configuration-reference.md)：环境变量、代码级 Runtime 参数、CLI 参数及默认值的唯一索引；
 3. [Sub-Agent Evidence Contract](./sub-agent-evidence-contract.md)：委派输入输出协议、证据来源与非目标；
-4. [根 README](../README.md)：面向使用者的安装、启动、命令和能力入口；
-5. [项目学习路线](../SIMPLIFIED_AGENT_PROJECT_ROADMAP.md)：阶段脉络和候选学习方向，不替代现状文档；
-6. 本索引：文档分类和维护规则。
+4. [Memory Document 设计](./memory-document-design.md)：全局/工作空间记忆、并发、提取与未来 RAG 边界；
+5. [根 README](../README.md)：面向使用者的安装、启动、命令和能力入口；
+6. [项目学习路线](../SIMPLIFIED_AGENT_PROJECT_ROADMAP.md)：阶段脉络和候选学习方向，不替代现状文档；
+7. 本索引：文档分类和维护规则。
 
 源代码、数据库迁移与自动化测试是实现行为的最终证据。当前文档与代码不一致时，应先核对代码，再在同一修复提交中更新当前文档。
 

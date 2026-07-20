@@ -87,10 +87,12 @@ describe('per-purpose model selection', () => {
 
   it('MemoryExtractor uses the utility model', async () => {
     mockCreate.mockResolvedValue({
-      choices: [{ message: { content: '{"memories":[]}' } }],
+      choices: [{ message: { content: '{"globalMemory":"# Global Memory","workspaceMemory":"# Workspace Memory"}' } }],
     } as never);
 
-    await new MemoryExtractor().extract([{ id: 'm1', content: 'hi', createdAt: new Date().toISOString() }]);
+    await new MemoryExtractor().extract([
+      { id: 'm1', role: 'user', content: 'hi', createdAt: new Date().toISOString() },
+    ], { global: '# Global Memory\n', workspace: '# Workspace Memory\n' });
 
     expect(lastCallModel()).toBe('utility-model');
   });
@@ -114,14 +116,14 @@ describe('per-purpose model selection', () => {
 
   it('an explicit modelProvider option always wins over purpose providers', async () => {
     mockCreate.mockResolvedValue({
-      choices: [{ message: { content: '{"memories":[]}' } }],
+      choices: [{ message: { content: '{"globalMemory":"# Global Memory","workspaceMemory":"# Workspace Memory"}' } }],
     } as never);
 
     const { OpenAICompatibleProvider } = await import('../../src/model/OpenAICompatibleProvider.js');
     const pinned = new OpenAICompatibleProvider(config.openai as never, 'pinned-model');
     await new MemoryExtractor({ modelProvider: pinned }).extract([
-      { id: 'm1', content: 'hi', createdAt: new Date().toISOString() },
-    ]);
+      { id: 'm1', role: 'user', content: 'hi', createdAt: new Date().toISOString() },
+    ], { global: '# Global Memory\n', workspace: '# Workspace Memory\n' });
 
     expect(lastCallModel()).toBe('pinned-model');
   });

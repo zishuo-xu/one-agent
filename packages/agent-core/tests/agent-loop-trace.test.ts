@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('../src/config.js', () => ({
   config: {
@@ -22,7 +25,7 @@ import { createReadFileTool } from '../src/tools/built-in/readFile.js';
 import { TraceEventStore } from '../src/db/traceEventStore.js';
 import { ThreadStore } from '../src/db/threadStore.js';
 import { RunStore } from '../src/db/runStore.js';
-import { MemoryStore } from '../src/db/memoryStore.js';
+import { MemoryDocumentStore } from '../src/memory/MemoryDocumentStore.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -128,48 +131,46 @@ describe('AgentLoop trace persistence', () => {
     expect(traces.some((t) => t.eventType === 'message')).toBe(true);
   });
 
-  it('records why memories were selected and how much context was injected', async () => {
+  it('records which memory documents were loaded and their context cost', async () => {
     const threadId = threadStore.create({ id: 'thread-memory-trace' }).id;
-    const memoryStore = new MemoryStore(db);
-    const memory = memoryStore.create({
-      key: 'preferred language', value: 'Chinese', explicit: true, confidence: 0.95,
-    });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'one-agent-memory-trace-'));
+    const memoryDocumentStore = new MemoryDocumentStore({ workspaceRoot: root, globalRoot: root });
+    await memoryDocumentStore.write('global', '# Global Memory\n\n- User prefers Chinese.\n');
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: { content: 'You prefer Chinese.' } }],
     } as never);
 
-    const agent = new AgentLoop({ threadId, db, memoryStore, enablePlanning: false });
+    const agent = new AgentLoop({ threadId, db, memoryDocumentStore, enablePlanning: false });
     const { runId } = await agent.chat('What language do I prefer?');
 
-    const trace = traceStore.getByRun(runId!).find((event) => event.eventType === 'memory_recall');
+    const trace = traceStore.getByRun(runId!).find((event) => event.eventType === 'memory_context_loaded');
     expect(trace?.eventData).toMatchObject({
-      type: 'memory_recall',
-      candidateCount: 1,
-      selectedCount: 1,
-      injectedMemoryIds: [memory.id],
+      type: 'memory_context_loaded',
+      scopes: ['global'],
     });
     expect((trace?.eventData as { estimatedTokens?: number }).estimatedTokens).toBeGreaterThan(0);
     expect(JSON.stringify(trace?.eventData)).not.toContain('Chinese');
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('continues the main run and traces the error when memory recall fails', async () => {
+  it('continues the main run and traces the error when memory loading fails', async () => {
     const threadId = threadStore.create({ id: 'thread-memory-recall-failure' }).id;
     const failingMemoryStore = {
-      recallRelevantMemories: vi.fn(() => { throw new Error('memory database unavailable'); }),
-    } as unknown as MemoryStore;
+      readAll: vi.fn(() => { throw new Error('memory document unavailable'); }),
+    } as unknown as MemoryDocumentStore;
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: { content: 'Reply without memory.' } }],
     } as never);
 
-    const agent = new AgentLoop({ threadId, db, memoryStore: failingMemoryStore, enablePlanning: false });
+    const agent = new AgentLoop({ threadId, db, memoryDocumentStore: failingMemoryStore, enablePlanning: false });
     const result = await agent.chat('Hi');
 
     expect(result.reply).toBe('Reply without memory.');
-    const trace = traceStore.getByRun(result.runId!).find((event) => event.eventType === 'memory_recall');
+    const trace = traceStore.getByRun(result.runId!).find((event) => event.eventType === 'memory_context_loaded');
     expect(trace?.eventData).toMatchObject({
-      type: 'memory_recall',
-      selectedCount: 0,
-      error: 'memory database unavailable',
+      type: 'memory_context_loaded',
+      scopes: [],
+      error: 'memory document unavailable',
     });
   });
 

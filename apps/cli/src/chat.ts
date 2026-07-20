@@ -19,7 +19,7 @@ import type { AgentRun, AgentRunResult, RunCheckpoint } from '@one-agent/agent-c
 import { CONFIG_PATH, WORKSPACE_ROOT } from './load-config.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
-import { formatMemoryDetail, formatMemoryList, resolveMemory } from './commands/memory.js';
+import { formatMemoryDocuments } from './commands/memory.js';
 import { formatHistoryContent, sanitizeTerminalText } from './output.js';
 import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
@@ -42,8 +42,8 @@ const COMMANDS = [
   '/context --verbose',
   '/reasoning',
   '/memory',
-  '/memory <id>',
-  '/memory delete <id>',
+  '/memory global',
+  '/memory workspace',
   '/threads',
   '/runs',
   '/runs <run-id>',
@@ -408,7 +408,7 @@ async function main() {
   const threadStore = runtime.stores.threads;
   const runStore = runtime.stores.runs;
   const messageStore = runtime.stores.messages;
-  const memoryStore = runtime.stores.memories;
+  const memoryDocuments = runtime.memoryDocuments;
   const memoryConsolidator = runtime.memory;
   const traceEventStore = runtime.stores.traces;
 
@@ -436,7 +436,7 @@ async function main() {
   let agent = runtime.createAgent({ threadId, planning });
   printRecoveryHint(runStore, traceEventStore, threadId);
   printWaitingHint(runStore, traceEventStore, threadId);
-  void memoryConsolidator.recoverUnextracted();
+  await memoryConsolidator.recoverUnextracted();
 
   // Optionally start the trace web viewer in the background.
   let traceProcess: ChildProcess | null = null;
@@ -583,32 +583,15 @@ async function main() {
     }
 
     if (trimmed === '/memory') {
-      for (const line of formatMemoryList(memoryStore.list({ status: 'active' }))) {
+      for (const line of formatMemoryDocuments(memoryDocuments.readAll())) {
         console.log(line);
       }
       continue;
     }
 
-    if (trimmed.startsWith('/memory delete ')) {
-      const id = trimmed.slice('/memory delete '.length).trim();
-      const memory = resolveMemory(memoryStore.list(), id);
-      if (!memory) {
-        console.log(`Memory not found or prefix is ambiguous: ${id}`);
-      } else {
-        memoryStore.deleteById(memory.id);
-        console.log(`Deleted memory ${shortId(memory.id)}.`);
-      }
-      continue;
-    }
-
-    if (trimmed.startsWith('/memory ')) {
-      const id = trimmed.slice('/memory '.length).trim();
-      const memory = resolveMemory(memoryStore.list(), id);
-      if (!memory) {
-        console.log(`Memory not found or prefix is ambiguous: ${id}`);
-      } else {
-        for (const line of formatMemoryDetail(memory)) console.log(line);
-      }
+    if (trimmed === '/memory global' || trimmed === '/memory workspace') {
+      const scope = trimmed.endsWith('global') ? 'global' : 'workspace';
+      for (const line of formatMemoryDocuments([memoryDocuments.read(scope)])) console.log(line);
       continue;
     }
 
@@ -718,10 +701,13 @@ async function main() {
         continue;
       }
       const leavingThreadId = threadId;
+      const consolidation = await memoryConsolidator.consolidateThread(leavingThreadId);
+      if (consolidation.status === 'failed') {
+        console.log('Previous session memory is not yet updated; it will be retried on next startup.');
+      }
       threadId = existing.id;
       title = existing.title;
       agent = runtime.createAgent({ threadId, planning });
-      void memoryConsolidator.consolidateThread(leavingThreadId);
       console.log(`Switched to thread ${threadId}${title ? ` (${title})` : ''}`);
       printRecoveryHint(runStore, traceEventStore, threadId);
       printWaitingHint(runStore, traceEventStore, threadId);

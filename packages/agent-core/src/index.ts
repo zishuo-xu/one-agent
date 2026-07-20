@@ -128,16 +128,6 @@ export { RunStore } from './db/runStore.js';
 export { ToolCallStore } from './db/toolCallStore.js';
 export { TraceEventStore } from './db/traceEventStore.js';
 export { SqliteTaskStore } from './db/taskStore.js';
-export { MemoryStore } from './db/memoryStore.js';
-export type {
-  ForgetMemoryInput,
-  ForgetMemoryResult,
-  MemoryRecallCandidate,
-  MemoryRecallOutcome,
-  MemoryRecallReport,
-  MemoryRecallResult,
-  RelevantMemoryOptions,
-} from './db/memoryStore.js';
 export {
   createManageMemoryTool,
   MANAGE_MEMORY_SYSTEM_INSTRUCTION,
@@ -145,7 +135,17 @@ export {
 } from './memory/manageMemoryTool.js';
 export type { ManageMemoryToolOptions } from './memory/manageMemoryTool.js';
 export { buildMemoryContext } from './memory/MemoryContext.js';
-export type { MemoryContextItem } from './memory/MemoryContext.js';
+export type { MemoryContextDocument } from './memory/MemoryContext.js';
+export {
+  MemoryDocumentConflictError,
+  MemoryDocumentStore,
+} from './memory/MemoryDocumentStore.js';
+export type {
+  MemoryDocument,
+  MemoryDocumentContents,
+  MemoryDocumentScope,
+  MemoryDocumentStoreOptions,
+} from './memory/MemoryDocumentStore.js';
 export type {
   Thread,
   PersistedMessage,
@@ -153,13 +153,11 @@ export type {
   PersistedToolCall,
   TraceEvent,
   PersistedTask,
-  Memory,
   CreateThreadInput,
   CreateRunInput,
   CreateToolCallInput,
   CreateTraceEventInput,
   CreateTaskPersistedInput,
-  CreateMemoryInput,
 } from './db/types.js';
 
 export { TaskQueue } from './tasks/TaskQueue.js';
@@ -189,8 +187,6 @@ export type {
 
 export { MemoryExtractor } from './memory/MemoryExtractor.js';
 export type {
-  ExtractedMemoryCandidate,
-  ExistingMemorySnapshot,
   MemorySourceMessage,
 } from './memory/MemoryExtractor.js';
 export { MemoryConsolidator } from './memory/MemoryConsolidator.js';

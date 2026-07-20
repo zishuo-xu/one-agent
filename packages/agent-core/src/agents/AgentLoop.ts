@@ -25,12 +25,12 @@ import { getSharedConnection } from '../db/connection.js';
 import { RunStore } from '../db/runStore.js';
 import { ToolCallStore } from '../db/toolCallStore.js';
 import { TraceEventStore } from '../db/traceEventStore.js';
-import { MemoryStore } from '../db/memoryStore.js';
 import {
   MANAGE_MEMORY_SYSTEM_INSTRUCTION,
   MANAGE_MEMORY_TOOL_NAME,
 } from '../memory/manageMemoryTool.js';
 import { buildMemoryContext } from '../memory/MemoryContext.js';
+import { MemoryDocumentStore } from '../memory/MemoryDocumentStore.js';
 import { CreateToolCallInput, type AgentRun } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
@@ -82,7 +82,7 @@ export interface AgentLoopOptions {
   runStore?: RunStore;
   toolCallStore?: ToolCallStore;
   traceEventStore?: TraceEventStore;
-  memoryStore?: MemoryStore;
+  memoryDocumentStore?: MemoryDocumentStore;
   maxContextTokens?: number;
   recentTokenBudget?: number;
   signal?: AbortSignal;
@@ -145,7 +145,7 @@ export class AgentLoop extends EventEmitter {
   private readonly runStore?: RunStore;
   private readonly toolCallStore?: ToolCallStore;
   private readonly traceEventStore?: TraceEventStore;
-  private readonly memoryStore?: MemoryStore;
+  private readonly memoryDocumentStore?: MemoryDocumentStore;
   private signal?: AbortSignal;
   private readonly taskId?: string;
   private readonly simpleLoop: SimpleLoop;
@@ -278,7 +278,7 @@ export class AgentLoop extends EventEmitter {
       onTrace: (event) => this.recorder.record(event),
     });
 
-    this.memoryStore = options.memoryStore;
+    this.memoryDocumentStore = options.memoryDocumentStore;
 
     if (options.threadId) {
       const db = options.db ?? getSharedConnection();
@@ -528,10 +528,7 @@ export class AgentLoop extends EventEmitter {
     const approval = await this.continueApprovedTool(execution.runId, recovery);
     if (approval.terminalResult) return approval.terminalResult;
 
-    const memoryQuery = recovery?.pendingInput?.kind === 'clarification'
-      ? recovery.inputAnswer ?? message
-      : message;
-    const memoryText = this.recallMemory(memoryQuery);
+    const memoryText = this.loadMemoryContext();
     this.subAgentRunner?.setRunMemoryText(memoryText);
 
     // Planning requires both the opt-in and a tool registry; in 'auto' mode
@@ -714,31 +711,30 @@ export class AgentLoop extends EventEmitter {
   }
 
   /** Recall is optional context; its failure remains visible but non-fatal. */
-  private recallMemory(query: string): string | undefined {
+  private loadMemoryContext(): string | undefined {
     let memoryText: string | undefined;
     this.contextManager.clearMemoryContext();
-    if (!this.memoryStore) return memoryText;
+    if (!this.memoryDocumentStore) return memoryText;
     try {
-      const recall = this.memoryStore.recallRelevantMemories(query, { threadId: this.threadId });
-      if (recall.memories.length > 0) {
-        memoryText = buildMemoryContext(recall.memories);
-        if (memoryText) this.contextManager.setMemoryContext(memoryText);
-      }
+      const documents = this.memoryDocumentStore.readAll();
+      memoryText = buildMemoryContext(documents);
+      if (memoryText) this.contextManager.setMemoryContext(memoryText);
       this.recorder.record({
-        type: 'memory_recall',
-        ...recall.report,
-        injectedMemoryIds: recall.memories.map((memory) => memory.id),
+        type: 'memory_context_loaded',
+        scopes: documents
+          .filter((document) => document.content.trim().split(/\r?\n/).length > 1)
+          .map((document) => document.scope),
+        documentHashes: Object.fromEntries(
+          documents.map((document) => [document.scope, document.hash]),
+        ),
         injectedCharacters: memoryText?.length ?? 0,
         estimatedTokens: estimateTokens(memoryText ?? ''),
       });
     } catch (error) {
       this.recorder.record({
-        type: 'memory_recall',
-        keywords: [],
-        candidateCount: 0,
-        selectedCount: 0,
-        candidates: [],
-        injectedMemoryIds: [],
+        type: 'memory_context_loaded',
+        scopes: [],
+        documentHashes: {},
         injectedCharacters: 0,
         estimatedTokens: 0,
         error: error instanceof Error ? error.message : String(error),

@@ -126,45 +126,6 @@ export interface CreateTaskPersistedInput {
   events?: AgentEvent[];
 }
 
-export interface Memory {
-  id: string;
-  key: string;
-  value: string;
-  source: string | null;
-  threadId: string | null;
-  scope: 'global' | 'thread';
-  sourceRunId: string | null;
-  confidence: number;
-  status: 'active' | 'superseded' | 'expired' | 'forgotten';
-  expiresAt: string | null;
-  lastUsedAt: string | null;
-  supersededById: string | null;
-  kind: 'user_profile' | 'user_preference' | 'project_rule' | 'durable_goal' | 'fact';
-  explicit: boolean;
-  sourceMessageId: string | null;
-  observedAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateMemoryInput {
-  id?: string;
-  key: string;
-  value: string;
-  source?: string;
-  threadId?: string;
-  scope?: Memory['scope'];
-  sourceRunId?: string;
-  confidence?: number;
-  status?: Memory['status'];
-  expiresAt?: string;
-  supersededById?: string;
-  kind?: Memory['kind'];
-  explicit?: boolean;
-  sourceMessageId?: string;
-  observedAt?: string;
-}
-
 export function messageToPersisted(message: Message): Pick<
   PersistedMessage,
   'role' | 'content' | 'toolCalls' | 'toolCallId' | 'internal'

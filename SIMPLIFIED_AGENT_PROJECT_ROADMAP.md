@@ -144,19 +144,20 @@ running 任务重置为 pending 后重新执行
 
 ## 阶段 10：长期记忆检索 ✅
 
-让独立 Memory Agent 按完整会话整理并跨 thread 召回可信长期事实。
+让独立 Memory Agent 按完整会话整理用户可见、可编辑的长期记忆文档。
 
 ```text
-memories 表保存全局事实
+GLOBAL_MEMORY.md 保存跨文件夹用户偏好
+<workspace>/.one-agent/MEMORY.md 保存文件夹及其子目录共享的事实与决策
 切换/退出时整理当前 Thread，启动时恢复未提取 Thread
-只以用户消息为证据，并按原始消息时间解决冲突
+完整用户可见会话提供指代上下文，只有用户消息授权记忆变化
 显式“记住 / 修正 / 忘记 / 查询”通过 manage_memory 当前轮立即执行
-遗忘墓碑阻止旧会话延迟提取后复活已撤销事实
-新提问按关键词召回并注入上下文
+本地独占锁、hash 校验与原子替换保护用户编辑
+每轮加载两份精简文档；未来 RAG 只替换文档读取方式
 ```
 
-产出：`MemoryStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、跨 thread 记忆共享、记忆管理 API、
-`manage_memory` 显式控制工具、召回决策 Trace 与 `memory-recall-v1` 离线评测基线。
+产出：`MemoryDocumentStore`、`MemoryExtractor`、`MemoryConsolidator`、可恢复会话状态、两级文档作用域、文档管理 API/Web、
+`manage_memory` 显式控制工具与不复制正文的记忆上下文 Trace。
 
 ## 最终架构
 
@@ -171,7 +172,7 @@ CLI / REST API
           ├─ ToolRunner（统一工具执行、结果、上下文与持久化协议）
           ├─ Tool Registry / Executor
           ├─ Context Manager（记忆 / 摘要）
-          ├─ Trace / Task / Memory Store
+          ├─ Trace / Task Store + Memory Document Store
           └─ Evaluation Runner
                   ↓
 SQLite：threads / messages / tool_calls / agent_runs / tasks / trace_events / memories

@@ -53,13 +53,11 @@ describe('migrate', () => {
     const messageColumns = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
     expect(messageColumns.some((column) => column.name === 'internal')).toBe(true);
     const memoryColumns = db.prepare('PRAGMA table_info(memories)').all() as Array<{ name: string }>;
-    expect(memoryColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
-      'scope', 'source_run_id', 'confidence', 'status', 'expires_at', 'last_used_at',
-      'superseded_by_id',
-      'kind', 'explicit', 'source_message_id', 'observed_at',
+    expect(memoryColumns).toEqual([]);
+    const archivedMemoryColumns = db.prepare('PRAGMA table_info(memories_legacy)').all() as Array<{ name: string }>;
+    expect(archivedMemoryColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      'id', 'key', 'value', 'source', 'thread_id',
     ]));
-    const memoryIndexes = db.prepare('PRAGMA index_list(memories)').all() as Array<{ name: string }>;
-    expect(memoryIndexes.some((index) => index.name === 'idx_memories_status_scope')).toBe(true);
     const threadColumns = db.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>;
     expect(threadColumns.some((column) => column.name === 'memory_extracted')).toBe(true);
   });

@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 export function parseWorkspaceArg(argv: string[]): string | undefined {
@@ -21,16 +20,20 @@ export function resolveWorkspaceRoot(options?: {
   const fromArg = parseWorkspaceArg(argv);
   if (fromArg) return fromArg;
 
-  if (
-    fs.existsSync(path.join(cwd, 'one-agent.config.json')) ||
-    fs.existsSync(path.join(cwd, 'one-agent.config.example.json'))
-  ) {
-    return cwd;
+  let candidate = path.resolve(cwd);
+  while (true) {
+    if (
+      fs.existsSync(path.join(candidate, 'one-agent.config.json')) ||
+      fs.existsSync(path.join(candidate, '.one-agent', 'MEMORY.md'))
+    ) return candidate;
+    const parent = path.dirname(candidate);
+    if (parent === candidate) break;
+    candidate = parent;
   }
 
   if (options?.repoConfig && fs.existsSync(options.repoConfig)) {
     return path.dirname(options.repoConfig);
   }
 
-  return path.join(os.homedir(), '.one-agent');
+  return path.resolve(cwd);
 }

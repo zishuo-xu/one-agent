@@ -5,6 +5,7 @@ import {
   ThreadStore,
   TraceEventStore,
   MessageStore,
+  MemoryDocumentStore,
   config,
 } from '@one-agent/agent-core';
 import type { AgentRun, TraceEvent } from '@one-agent/agent-core';
@@ -227,6 +228,37 @@ export function buildTraceWebServer(): FastifyInstance {
   const runStore = new RunStore(db);
   const traceEventStore = new TraceEventStore(db);
   const messageStore = new MessageStore(db);
+  const memoryDocuments = new MemoryDocumentStore({ workspaceRoot: config.workspaceRoot });
+
+  fastify.get<{ Params: { scope: string } }>('/api/memory/:scope', async (request, reply) => {
+    const scope = request.params.scope;
+    if (scope !== 'global' && scope !== 'workspace') {
+      return reply.status(400).send({ error: 'scope must be global or workspace' });
+    }
+    return memoryDocuments.read(scope);
+  });
+
+  fastify.put<{
+    Params: { scope: string };
+    Body: { content?: string; expectedHash?: string };
+  }>('/api/memory/:scope', async (request, reply) => {
+    const scope = request.params.scope;
+    if (scope !== 'global' && scope !== 'workspace') {
+      return reply.status(400).send({ error: 'scope must be global or workspace' });
+    }
+    if (typeof request.body?.content !== 'string' || !request.body.content.trim()) {
+      return reply.status(400).send({ error: 'content must be non-empty Markdown' });
+    }
+    const current = memoryDocuments.read(scope);
+    if (request.body.expectedHash && request.body.expectedHash !== current.hash) {
+      return reply.status(409).send({ error: 'Memory changed; reload before saving', document: current });
+    }
+    try {
+      return await memoryDocuments.write(scope, request.body.content, request.body.expectedHash);
+    } catch (error) {
+      return reply.status(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   fastify.get('/api/threads', async () => {
     return threadStore.list();
@@ -725,6 +757,40 @@ function renderViewerPage(): string {
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .memory-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: rgba(2, 6, 23, .78);
+      padding: 5vh 8vw;
+    }
+    .memory-modal.open { display: block; }
+    .memory-card {
+      height: 90vh;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .memory-card textarea {
+      flex: 1;
+      width: 100%;
+      resize: none;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #020617;
+      color: var(--text);
+      font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .memory-path { color: var(--muted); font-size: 12px; word-break: break-all; }
+    .memory-status { min-height: 20px; color: var(--muted); }
     @media (max-width: 1100px) {
       .sidebar { width: 220px; }
       .runs { width: 260px; }
@@ -768,6 +834,7 @@ function renderViewerPage(): string {
         <div class="toolbar">
           <button onclick="refreshTraces()">Refresh</button>
           <button onclick="showAllThreadTraces()">All traces</button>
+          <button onclick="openMemory()">Memory</button>
         </div>
       </div>
       <div id="run-overview" class="run-overview"></div>
@@ -782,14 +849,73 @@ function renderViewerPage(): string {
     </div>
   </div>
 
+  <div id="memory-modal" class="memory-modal">
+    <div class="memory-card">
+      <div class="header">
+        <h1>Memory Documents</h1>
+        <div class="toolbar">
+          <button onclick="loadMemory('global')">Global</button>
+          <button onclick="loadMemory('workspace')">Workspace</button>
+          <button onclick="closeMemory()">Close</button>
+        </div>
+      </div>
+      <div id="memory-path" class="memory-path"></div>
+      <textarea id="memory-content" spellcheck="false"></textarea>
+      <div class="toolbar">
+        <button onclick="saveMemory()">Save</button>
+        <span id="memory-status" class="memory-status"></span>
+      </div>
+    </div>
+  </div>
+
   <script>
     let selectedThreadId = null;
     let selectedRunId = null;
+    let selectedMemoryScope = 'global';
+    let selectedMemoryHash = null;
 
     async function fetchJson(url) {
       const res = await fetch(url);
       if (!res.ok) throw new Error(\`HTTP \${res.status}\`);
       return res.json();
+    }
+
+    async function openMemory() {
+      document.getElementById('memory-modal').classList.add('open');
+      await loadMemory(selectedMemoryScope);
+    }
+
+    function closeMemory() {
+      document.getElementById('memory-modal').classList.remove('open');
+    }
+
+    async function loadMemory(scope) {
+      selectedMemoryScope = scope;
+      const documentValue = await fetchJson('/api/memory/' + scope);
+      selectedMemoryHash = documentValue.hash;
+      document.getElementById('memory-path').textContent = documentValue.path;
+      document.getElementById('memory-content').value = documentValue.content;
+      document.getElementById('memory-status').textContent = scope + ' memory loaded';
+    }
+
+    async function saveMemory() {
+      const status = document.getElementById('memory-status');
+      status.textContent = 'Saving...';
+      const response = await fetch('/api/memory/' + selectedMemoryScope, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          content: document.getElementById('memory-content').value,
+          expectedHash: selectedMemoryHash,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        status.textContent = body.error || ('HTTP ' + response.status);
+        return;
+      }
+      selectedMemoryHash = body.hash;
+      status.textContent = 'Saved';
     }
 
     async function refreshThreads() {
@@ -1038,14 +1164,11 @@ function renderViewerPage(): string {
           const children = childCount > 0 ? ' · ' + childCount + ' events' : '';
           return { label: status + meta + children, preview: task + (detail ? ' — ' + detail : '') };
         }
-        case 'memory_recall': {
-          const selected = d.selectedCount ?? 0;
-          const candidates = d.candidateCount ?? 0;
-          const keywords = Array.isArray(d.keywords) ? d.keywords.join(', ') : '';
+        case 'memory_context_loaded': {
+          const scopes = Array.isArray(d.scopes) ? d.scopes.join(', ') : '';
           const cost = d.estimatedTokens !== undefined ? ' · ~' + d.estimatedTokens + ' tokens' : '';
-          const reason = d.skipReason ? ' · ' + d.skipReason : '';
           const error = d.error ? ' · failed: ' + d.error : '';
-          return { label: selected + '/' + candidates + ' selected' + cost, preview: keywords + reason + error };
+          return { label: (scopes || 'empty') + cost, preview: error };
         }
         case 'message_delta':
         case 'reasoning_delta':

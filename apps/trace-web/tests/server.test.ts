@@ -37,6 +37,18 @@ describe('trace web server', () => {
     expect(response.headers['content-type']).toContain('text/html');
     expect(response.body).toContain('one-agent Trace Viewer');
     expect(response.body).toContain('/api/threads');
+    expect(response.body).toContain('Memory Documents');
+    expect(response.body).toContain("/api/memory/");
+  });
+
+  it('GET /api/memory/workspace exposes the user-visible folder document', async () => {
+    const server = buildServer();
+    const response = await server.inject({ method: 'GET', url: '/api/memory/workspace' });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      scope: 'workspace',
+      content: '# Workspace Memory\n',
+    });
   });
 
   it('GET / escapes stored ids/errors for HTML, attribute, and JS-string contexts', async () => {

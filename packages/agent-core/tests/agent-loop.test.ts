@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('../src/config.js', () => ({
   config: {
@@ -21,10 +24,8 @@ import { config } from '../src/config.js';
 import { AgentLoop } from '../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { ToolDefinition } from '../src/tools/types.js';
-import type { MemoryStore } from '../src/db/memoryStore.js';
-import { MemoryStore as SqliteMemoryStore } from '../src/db/memoryStore.js';
-import { createConnection } from '../src/db/connection.js';
 import { createManageMemoryTool } from '../src/memory/manageMemoryTool.js';
+import { MemoryDocumentStore } from '../src/memory/MemoryDocumentStore.js';
 import { ContextManager } from '../src/context/ContextManager.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
@@ -118,28 +119,25 @@ describe('AgentLoop', () => {
       choices: [{ message: { content: 'Reply now' } }],
     } as never);
 
-    const memoryStore = {
-      recallRelevantMemories: vi.fn(() => ({
-        memories: [],
-        report: { keywords: [], candidateCount: 0, selectedCount: 0, candidates: [] },
-      })),
-    } as unknown as MemoryStore;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'one-agent-memory-loop-'));
+    const memoryDocumentStore = new MemoryDocumentStore({ workspaceRoot: root, globalRoot: root });
     const agent = new AgentLoop({
       enablePlanning: false,
-      memoryStore,
+      memoryDocumentStore,
     });
 
     const result = await agent.chat('Hi');
 
     expect(result.reply).toBe('Reply now');
     expect(mockCreate).toHaveBeenCalledTimes(1);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('applies an explicit natural-language memory request through the tool loop', async () => {
-    const db = createConnection({ path: ':memory:' });
-    const memoryStore = new SqliteMemoryStore(db);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'one-agent-memory-tool-loop-'));
+    const memoryDocumentStore = new MemoryDocumentStore({ workspaceRoot: root, globalRoot: root });
     const tools = new ToolRegistry();
-    tools.register(createManageMemoryTool({ memoryStore, threadId: 'thread-1' }));
+    tools.register(createManageMemoryTool({ documentStore: memoryDocumentStore }));
     mockCreate
       .mockResolvedValueOnce({
         choices: [{
@@ -152,9 +150,8 @@ describe('AgentLoop', () => {
                 name: 'manage_memory',
                 arguments: JSON.stringify({
                   action: 'remember',
-                  key: 'package manager',
-                  value: 'pnpm',
-                  kind: 'project_rule',
+                  scope: 'workspace',
+                  text: '这个项目使用 pnpm。',
                 }),
               },
             }],
@@ -165,17 +162,13 @@ describe('AgentLoop', () => {
         choices: [{ message: { content: '我已经记住这个项目使用 pnpm。' } }],
       } as never);
 
-    const agent = new AgentLoop({ tools, memoryStore, enablePlanning: false });
+    const agent = new AgentLoop({ tools, memoryDocumentStore, enablePlanning: false });
     const result = await agent.chat('记住这个项目使用 pnpm');
 
     expect(result.reply).toBe('我已经记住这个项目使用 pnpm。');
-    expect(memoryStore.list({ status: 'active' })[0]).toMatchObject({
-      key: 'package manager',
-      value: 'pnpm',
-      explicit: true,
-    });
+    expect(memoryDocumentStore.read('workspace').content).toContain('这个项目使用 pnpm。');
     expect(agent.getHistory()[0].content).toContain('explicitly asks you to remember');
-    db.close();
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('uses custom system prompt', async () => {

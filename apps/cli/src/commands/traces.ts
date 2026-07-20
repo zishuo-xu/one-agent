@@ -54,13 +54,11 @@ export function formatTraceEvent(event: TraceEvent, verbose = false): string {
       summary = `sub_agent ${status}: ${task}`;
       break;
     }
-    case 'memory_recall': {
-      const selected = Number(eventData.selectedCount ?? 0);
-      const candidates = Number(eventData.candidateCount ?? 0);
+    case 'memory_context_loaded': {
+      const scopes = Array.isArray(eventData.scopes) ? eventData.scopes.join(',') : '';
       const tokens = Number(eventData.estimatedTokens ?? 0);
-      const reason = eventData.skipReason ? ` · ${String(eventData.skipReason)}` : '';
       const error = eventData.error ? ` · failed: ${String(eventData.error)}` : '';
-      summary = `memory_recall: ${selected}/${candidates} selected · ~${tokens} tokens${reason}${error}`;
+      summary = `memory_context_loaded: ${scopes || 'empty'} · ~${tokens} tokens${error}`;
       break;
     }
     case 'message':
