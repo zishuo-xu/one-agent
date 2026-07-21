@@ -14,6 +14,7 @@ export function createSpawnAgentTool(
 ): ToolDefinition {
   return {
     name: SPAWN_AGENT_TOOL_NAME,
+    readOnly: true,
     description:
       'Spawn a sub-agent to execute a self-contained subtask in an isolated context. ' +
       'Use it for independent read-only research or analysis that benefits from ' +

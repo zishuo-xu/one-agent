@@ -25,6 +25,7 @@ import { AgentLoop, AgentLoopEvent } from '../../src/agents/AgentLoop.js';
 import { ToolRegistry } from '../../src/tools/registry.js';
 import { ToolDefinition } from '../../src/tools/types.js';
 import { MemoryDocumentStore } from '../../src/memory/MemoryDocumentStore.js';
+import { createSpawnAgentTool } from '../../src/agents/spawnAgentTool.js';
 
 const mockCreate = vi.mocked(config.openai.chat.completions.create);
 
@@ -60,6 +61,11 @@ function textResponse(content: string, usage?: { prompt_tokens: number; completi
 describe('AgentLoop spawn_agent', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+  });
+
+  it('declares isolated sub-agent delegation as read-only', () => {
+    const tool = createSpawnAgentTool(vi.fn());
+    expect(tool.readOnly).toBe(true);
   });
 
   it('registers spawn_agent into the agent tool schemas by default', async () => {
@@ -248,10 +254,14 @@ describe('AgentLoop spawn_agent', () => {
     const terminal = events.filter((event) =>
       event.type === 'sub_agent' && event.status !== 'started'
     );
-    expect(terminal.map((event) => event.type === 'sub_agent' && event.executionStatus)).toEqual([
-      'completed',
-      'budget_exhausted',
-    ]);
+    // Live sub-agent events reflect actual completion timing, so the rejected
+    // second task can finish before the accepted first task. Tool results are
+    // still committed to parent context/Trace in model call order.
+    expect(terminal.map((event) => event.type === 'sub_agent' && event.executionStatus).sort())
+      .toEqual(['budget_exhausted', 'completed']);
+    const toolResults = events.filter((event) => event.type === 'tool_result');
+    expect(toolResults.map((event) => event.type === 'tool_result' && event.toolCallId))
+      .toEqual(['call_1', 'call_2']);
   });
 
   it('resets the delegation budget for each new parent Run', async () => {

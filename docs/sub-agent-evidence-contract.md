@@ -48,6 +48,10 @@ Runtime 不额外调用模型整理 Packet。最终回答直接成为 `conclusio
 每个新父 Run 会重置委派预算和记忆快照。SimpleLoop 的临时 `spawn_agent` 与 PlanningLoop 的计划委派复用同一
 `SubAgentRunner`、只读工具规则和 Evidence Contract。
 
+当主模型在 SimpleLoop 的同一次响应中发出多个 `spawn_agent` 调用时，`ToolRunner` 将它们视为普通的只读工具批次
+并发执行，不引入复数工具或第二套委派协议；`SubAgentRunner.maxConcurrency` 仍是实际并发上限。父上下文中的
+工具结果和持久化 Trace 按原始调用顺序提交，实时 `sub_agent` 事件则保留真实开始、完成时序。
+
 PlanningLoop 中只有叶子步骤可以委派。带 `children` 的步骤只是分组容器；容器上的 `parallel` 意图会在计划解析时
 下沉到独立叶子，连续的只读叶子才组成并行波次。执行器对旧 Checkpoint 也忽略容器上的委派标记，防止重复执行。
 

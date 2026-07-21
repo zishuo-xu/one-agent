@@ -15,6 +15,17 @@ const echoTool: ToolDefinition = {
 };
 
 describe('ToolExecutor', () => {
+  it('only treats explicitly read-only registered tools as safe for parallel execution', () => {
+    const registry = new ToolRegistry();
+    registry.register({ ...echoTool, readOnly: true });
+    registry.register({ ...echoTool, name: 'mutable' });
+    const executor = new ToolExecutor(registry);
+
+    expect(executor.isReadOnly('echo')).toBe(true);
+    expect(executor.isReadOnly('mutable')).toBe(false);
+    expect(executor.isReadOnly('missing')).toBe(false);
+  });
+
   it('executes a valid tool call', async () => {
     const registry = new ToolRegistry();
     registry.register(echoTool);

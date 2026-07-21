@@ -149,6 +149,11 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
 PlanningLoop 只委派叶子步骤；分层计划中的父步骤仅作结构容器，并行意图会归一到独立的只读叶子，避免父子重复执行。
 
+SimpleLoop 会把同一次模型响应中的工具调用作为一个批次交给执行层。只有整批工具都显式声明
+`readOnly: true` 时才并发执行；只要包含写入、未知或未声明工具就保持串行。整个批次先完成工具策略预检，
+并发完成后再按模型原始调用顺序写入上下文与 Trace。多个独立 `spawn_agent` 调用也复用这条通用规则，
+并继续受每 Run 的 Sub-Agent 并发预算约束。
+
 API 部署时可在配置表中设置 `tools.disabled: ["run_command", "delete_file"]` 禁用高风险工具。
 
 ## Trace 与离线 Eval

@@ -4,6 +4,15 @@ import { ToolRegistry } from './registry.js';
 export class ToolExecutor {
   constructor(private registry: ToolRegistry) {}
 
+  /** Unknown tools are never assumed safe to parallelize. */
+  isReadOnly(name: string): boolean {
+    try {
+      return this.registry.get(name).readOnly === true;
+    } catch {
+      return false;
+    }
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     let tool: ToolDefinition;
     try {

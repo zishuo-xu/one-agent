@@ -242,4 +242,66 @@ describe('AgentLoop', () => {
     expect(events.at(-1)).toMatchObject({ type: 'run', phase: 'completed' });
     expect(events.map((event) => event.type)).not.toContain('verification');
   });
+
+  it('lets the direct loop execute one read-only tool batch concurrently', async () => {
+    const tools = new ToolRegistry();
+    const started: string[] = [];
+    let releaseFirst = () => undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    tools.register({
+      name: 'first_read',
+      readOnly: true,
+      description: 'First read',
+      parameters: z.object({}),
+      execute: async () => {
+        started.push('first');
+        await firstGate;
+        return 'first';
+      },
+    });
+    tools.register({
+      name: 'second_read',
+      readOnly: true,
+      description: 'Second read',
+      parameters: z.object({}),
+      execute: () => {
+        started.push('second');
+        return 'second';
+      },
+    });
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: 'first-call',
+                type: 'function',
+                function: { name: 'first_read', arguments: '{}' },
+              },
+              {
+                id: 'second-call',
+                type: 'function',
+                function: { name: 'second_read', arguments: '{}' },
+              },
+            ],
+          },
+        }],
+      } as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'done' } }] } as never);
+    const agent = new AgentLoop({ tools, enablePlanning: false, subAgents: false });
+
+    const run = agent.chat('read both');
+    await vi.waitFor(() => expect(started).toEqual(['first', 'second']));
+    releaseFirst();
+    const result = await run;
+
+    expect(result.reply).toBe('done');
+    const resultEvents = result.events.filter((event) => event.type === 'tool_result');
+    expect(resultEvents.map((event) => event.type === 'tool_result' && event.toolCallId))
+      .toEqual(['first-call', 'second-call']);
+  });
 });

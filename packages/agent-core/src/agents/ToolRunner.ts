@@ -37,6 +37,19 @@ export interface ToolRunnerOptions {
   policy?: ToolPolicy;
 }
 
+interface PreparedExecution {
+  call: ToolCall;
+  options: ToolExecutionOptions;
+  startedAt: number;
+  immediate?: ExecutionOutcome;
+}
+
+interface ExecutionOutcome {
+  result: ToolResult;
+  status: 'succeeded' | 'failed' | 'rejected';
+  durationMs: number;
+}
+
 /**
  * The one protocol for turning a model ToolCall into durable execution facts.
  * Loops decide when and why a tool should run; ToolRunner owns the invariant
@@ -84,6 +97,54 @@ export class ToolRunner {
   }
 
   async execute(call: ToolCall, options: ToolExecutionOptions = {}): Promise<ToolResult> {
+    const prepared = this.prepare(call, options);
+    const outcome = await this.perform(prepared, true);
+    this.commit(prepared, outcome);
+    return outcome.result;
+  }
+
+  /**
+   * Execute one model-selected batch. Parallelism is deliberately conservative:
+   * every tool must explicitly declare itself read-only. Mixed, mutating and
+   * unknown batches preserve the original sequential semantics.
+   */
+  async executeBatch(
+    calls: ToolCall[],
+    options: ToolExecutionOptions = {},
+  ): Promise<ToolResult[]> {
+    if (calls.length === 0) return [];
+
+    // Approval is checked for the entire batch before any tool starts.
+    this.preflight(calls, options);
+
+    const canRunConcurrently = calls.length > 1
+      && Boolean(this.options.executor)
+      && calls.every((call) => this.options.executor?.isReadOnly(call.name) === true);
+    if (!canRunConcurrently) {
+      const results: ToolResult[] = [];
+      for (const call of calls) {
+        results.push(await this.execute(call, options));
+      }
+      return results;
+    }
+
+    const prepared = calls.map((call) => this.prepare(call, options));
+    if (prepared.some((execution) => !execution.immediate)) {
+      this.options.checkSignal();
+    }
+    const outcomes = await Promise.all(
+      prepared.map((execution) => this.perform(execution, false)),
+    );
+
+    // Execution may finish out of order, but durable facts and model context
+    // always follow the model's original tool-call order.
+    for (let index = 0; index < prepared.length; index++) {
+      this.commit(prepared[index], outcomes[index]);
+    }
+    return outcomes.map((outcome) => outcome.result);
+  }
+
+  private prepare(call: ToolCall, options: ToolExecutionOptions): PreparedExecution {
     const startedAt = Date.now();
     const policyDecision = this.options.policy?.evaluate(call, {
       approvedFingerprint: options.approvedFingerprint,
@@ -110,32 +171,47 @@ export class ToolRunner {
     }
     if (policyDecision?.action === 'deny') {
       const result: ToolResult = { success: false, error: policyDecision.reason };
-      this.recordResult(call, result, {
-        ...options,
-        status: 'rejected',
-        durationMs: Date.now() - startedAt,
-        persist: true,
-      });
-      return result;
+      return {
+        call,
+        options,
+        startedAt,
+        immediate: { result, status: 'rejected', durationMs: Date.now() - startedAt },
+      };
     }
     options.onPhase?.('prepared', call);
+    return { call, options, startedAt };
+  }
 
+  private async perform(
+    execution: PreparedExecution,
+    checkSignal: boolean,
+  ): Promise<ExecutionOutcome> {
+    if (execution.immediate) return execution.immediate;
+
+    const { call, options } = execution;
     let result: ToolResult;
     if (!this.options.executor) {
       result = { success: false, error: 'No tool executor available' };
     } else {
-      this.options.checkSignal();
+      if (checkSignal) this.options.checkSignal();
       options.onPhase?.('running', call);
       result = await this.options.executor.execute(call);
     }
 
-    this.recordResult(call, result, {
-      ...options,
+    return {
+      result,
       status: result.success ? 'succeeded' : 'failed',
-      durationMs: Date.now() - startedAt,
+      durationMs: Date.now() - execution.startedAt,
+    };
+  }
+
+  private commit(execution: PreparedExecution, outcome: ExecutionOutcome): void {
+    this.recordResult(execution.call, outcome.result, {
+      ...execution.options,
+      status: outcome.status,
+      durationMs: outcome.durationMs,
       persist: true,
     });
-    return result;
   }
 
   recordResult(call: ToolCall, result: ToolResult, options: ToolResultOptions): void {

@@ -109,7 +109,7 @@ export class SimpleLoop implements LoopStrategy {
         }
 
         try {
-          this.toolRunner.preflight(calls, { attempt: toolIterations });
+          await this.toolRunner.executeBatch(calls, { runId, attempt: toolIterations });
         } catch (error) {
           if (error instanceof ToolApprovalRequiredError) {
             this.toolRunner.recordResult(error.call, {
@@ -124,10 +124,6 @@ export class SimpleLoop implements LoopStrategy {
             }
           }
           throw error;
-        }
-
-        for (const call of calls) {
-          await this.toolRunner.execute(call, { runId, attempt: toolIterations });
         }
 
         toolIterations++;
