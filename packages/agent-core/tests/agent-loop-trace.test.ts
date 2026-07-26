@@ -95,6 +95,23 @@ describe('AgentLoop trace persistence', () => {
       traces.map((_, index) => index)
     );
     expect(traces.some((t) => t.eventType === 'model_call')).toBe(true);
+    const modelCalls = traces
+      .filter((trace) => trace.eventType === 'model_call')
+      .map((trace) => trace.eventData)
+      .filter((event) => event.type === 'model_call');
+    expect(modelCalls.some(
+      (event) =>
+        event.phase === 'started' &&
+        event.input?.messages.some((message) => message.content.includes('Read notes.txt')),
+    )).toBe(true);
+    expect(modelCalls.some(
+      (event) =>
+        event.phase === 'completed' &&
+        (
+          event.output?.content.includes('Done reading.') ||
+          event.output?.toolCalls?.some((toolCall) => toolCall.name === 'read_file')
+        ),
+    )).toBe(true);
     expect(traces.some((t) => t.eventType === 'tool_call')).toBe(true);
     expect(traces.some((t) => t.eventType === 'tool_result')).toBe(true);
     expect(traces.some((t) => t.eventType === 'message')).toBe(true);

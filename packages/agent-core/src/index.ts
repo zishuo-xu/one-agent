@@ -5,9 +5,27 @@ export {
   configureSystem,
   loadSystemConfig,
   redactSystemConfig,
+  resolveModelConnections,
+  saveSystemConfig,
+  selectPrimaryModel,
   systemConfigSchema,
+  toSystemConfig,
 } from './config.js';
-export type { Config, ResolvedConfig, SystemConfig } from './config.js';
+export type {
+  Config,
+  ModelConnection,
+  ResolvedConfig,
+  SystemConfig,
+} from './config.js';
+export {
+  localizedText,
+  resolveDisplayLocale,
+  runtimePreferenceInstruction,
+} from './runtimePreferences.js';
+export type {
+  InteractionLocale,
+  RuntimePreferences,
+} from './runtimePreferences.js';
 export { AgentLoop } from './agents/AgentLoop.js';
 export type { AgentLoopOptions } from './agents/AgentLoop.js';
 export type { AgentEvent, AgentLoopEvent } from './agents/events.js';
@@ -63,6 +81,7 @@ export {
   FallbackProvider,
   defaultShouldFallback,
   createProviderFromConfig,
+  createStandaloneModelProvider,
   diagnoseModelProviders,
 } from './model/index.js';
 export type {
@@ -172,11 +191,19 @@ export type {
 } from './tasks/types.js';
 
 export { Planner } from './planning/Planner.js';
+export {
+  DelegationPolicy,
+  isDelegatedPlanStep,
+  isDelegatedWorkPackage,
+} from './planning/DelegationPolicy.js';
+export type { DelegationAssessment } from './planning/DelegationPolicy.js';
 export { ReasoningChain } from './planning/ReasoningChain.js';
 export { TaskJudge } from './planning/TaskJudge.js';
 export type {
   Plan,
   PlanStep,
+  PlanExecutor,
+  PlanChecklistItem,
   StepStatus,
   ReasoningStep,
   JudgeResult,

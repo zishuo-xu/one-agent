@@ -148,6 +148,68 @@ describe('delegated plan steps', () => {
     }
   });
 
+  it('runs each version-2 work package once while keeping its checklist inside the sub-agent', async () => {
+    const packageStep = (id: string, description: string): Plan['steps'][number] => ({
+      id,
+      description,
+      status: 'pending',
+      executor: 'subagent',
+      delegate: true,
+      parallel: true,
+      delegationReason: `${description} is an independent review direction.`,
+      expectedOutcome: `${description} report`,
+      expectedEvidence: ['file paths and line numbers'],
+      checklist: [
+        { id: `${id}.1`, description: `First internal check for ${description}` },
+        { id: `${id}.2`, description: `Second internal check for ${description}` },
+      ],
+    });
+    const plan: Plan = {
+      version: 2,
+      reasoning: 'three meaningful review directions',
+      steps: [
+        packageStep('1', 'Architecture review'),
+        packageStep('2', 'Security review'),
+        packageStep('3', 'Test quality review'),
+        {
+          id: '4',
+          description: 'Verify evidence and provide the final report',
+          status: 'pending',
+          executor: 'main',
+          dependsOn: ['1', '2', '3'],
+        },
+      ],
+    };
+    const { agent, events } = makeAgent(plan);
+
+    mockCreate.mockImplementation(async (params: unknown) => {
+      const text = JSON.stringify((params as { messages: unknown }).messages);
+      if (text.includes('Your sub-task: Architecture review')) return textResponse('architecture result');
+      if (text.includes('Your sub-task: Security review')) return textResponse('security result');
+      if (text.includes('Your sub-task: Test quality review')) return textResponse('testing result');
+      return textResponse('final review');
+    });
+
+    await agent.chat('review this project');
+
+    const started = events.filter((event) => event.type === 'sub_agent' && event.status === 'started');
+    expect(started).toHaveLength(3);
+    expect(started.map((event) => event.type === 'sub_agent' && event.task)).toEqual([
+      'Architecture review',
+      'Security review',
+      'Test quality review',
+    ]);
+    expect(events.some((event) =>
+      event.type === 'sub_agent' && event.task.includes('internal check'),
+    )).toBe(false);
+    expect(started[0]).toEqual(expect.objectContaining({
+      checklist: expect.arrayContaining([
+        expect.objectContaining({ id: '1.1' }),
+        expect.objectContaining({ id: '1.2' }),
+      ]),
+    }));
+  });
+
   it('parallel wave steps record separate reasoning entries with correct attribution', async () => {
     const plan: Plan = {
       reasoning: 'attribution wave',

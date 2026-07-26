@@ -6,13 +6,14 @@ const cliPackage = createRequire(import.meta.url)('../package.json') as { versio
 export const HELP_TEXT = `
 ${bold('Usage')}:
   one-agent [options]
+  one-agent web [--workspace <dir>]
   one-agent trace [--workspace <dir>]
   one-agent doctor [--workspace <dir>]
 
 ${bold('Options')}:
   --help, -h          Show this help message
   --version, -v       Show version
-  --init              Create one-agent.config.json in the workspace
+  --init              Create the shared config at ~/.one-agent/one-agent.config.json
   --new               Start a new thread (do not resume the most recent one)
   --new-thread        Alias of --new
   --thread <id>       Resume a specific thread
@@ -21,6 +22,7 @@ ${bold('Options')}:
   --verbose           Show model reasoning, internal thoughts, plans, and reflections
 
 ${bold('Commands')}:
+  web                 Start the local Web interface and Agent API
   trace               Start the read-only Trace Viewer without starting chat
   doctor              Run 3 live protocol probes per Provider (may incur model cost)
 
@@ -38,6 +40,7 @@ ${bold('REPL commands')}:
   /memory             Show global and workspace memory documents
   /memory global      Show the user-level memory document
   /memory workspace   Show the current folder memory document
+  /model              Select the global Agent model interactively
   /threads            List all threads
   /runs               List runs in the current thread
   /runs <run-id>      Show details for a specific run
@@ -50,6 +53,7 @@ ${bold('REPL commands')}:
   /exit, /quit        Exit the CLI
 
 ${dim('Without --thread/--new, the most recent thread is resumed automatically.')}
+${dim('Use --init --workspace <dir> only when that workspace needs its own model config.')}
 ${dim('Model reasoning is always recorded in Trace; use --verbose to also show it live.')}
 ${dim('The default --loop auto sends simple tasks directly and plans only complex tasks.')}
 `.trim();

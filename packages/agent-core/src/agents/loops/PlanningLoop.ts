@@ -23,6 +23,8 @@ import {
   createPlanReviewRequest,
   parsePlanReviewAnswer,
 } from '../../planning/planReview.js';
+import { runtimeSettings } from '../../configAccess.js';
+import { localizedText } from '../../runtimePreferences.js';
 import {
   allPlanStepsCompleted,
   buildExecutionUnits,
@@ -51,6 +53,7 @@ export class PlanningLoop implements LoopStrategy {
   private readonly toolRegistry: LoopInfrastructure['toolRegistry'];
   private readonly toolRunner: LoopInfrastructure['toolRunner'];
   private readonly planner: LoopInfrastructure['planner'];
+  private readonly delegationPolicy: LoopInfrastructure['delegationPolicy'];
   private readonly taskJudge: LoopInfrastructure['taskJudge'];
   private readonly subAgentRunner: LoopInfrastructure['subAgentRunner'];
   private readonly maxReplanAttempts: number;
@@ -65,6 +68,7 @@ export class PlanningLoop implements LoopStrategy {
     this.toolRegistry = infra.toolRegistry;
     this.toolRunner = infra.toolRunner;
     this.planner = infra.planner;
+    this.delegationPolicy = infra.delegationPolicy;
     this.taskJudge = infra.taskJudge;
     this.subAgentRunner = infra.subAgentRunner;
     this.maxReplanAttempts = infra.maxReplanAttempts;
@@ -83,6 +87,7 @@ export class PlanningLoop implements LoopStrategy {
     let plan = recoveryCheckpoint
       ? JSON.parse(JSON.stringify(recoveryCheckpoint.plan)) as Plan
       : await this.planner.createPlan(userMessage, this.planningTools(), memoryText);
+    plan = this.delegationPolicy.preparePlan(plan);
     let currentUnitIndex = recoveryCheckpoint?.currentUnitIndex ?? 0;
     let replanAttempts = recoveryCheckpoint?.replanAttempts ?? 0;
     let retryAttempts = recoveryCheckpoint?.retryAttempts ?? 0;
@@ -111,7 +116,14 @@ export class PlanningLoop implements LoopStrategy {
         feedback: review.decision === 'revise' ? review.feedback : undefined,
       });
       if (review.decision === 'reject') {
-        return this.completeWithoutExecution('Plan rejected; no steps were executed.');
+        return this.completeWithoutExecution(localizedText(
+          runtimeSettings().locale,
+          userMessage,
+          {
+            zhCN: '计划已拒绝，未执行任何步骤。',
+            enUS: 'Plan rejected; no steps were executed.',
+          },
+        ));
       }
       if (review.decision === 'revise') {
         plan = await this.planner.revisePlan(
@@ -121,6 +133,7 @@ export class PlanningLoop implements LoopStrategy {
           plan,
           memoryText,
         );
+        plan = this.delegationPolicy.preparePlan(plan);
         currentUnitIndex = 0;
         replanAttempts = 0;
         retryAttempts = 0;
@@ -447,9 +460,16 @@ export class PlanningLoop implements LoopStrategy {
 
     const planSummary = plan.steps.map((s) => `${s.id}. ${s.description}`).join('; ');
     const result = await this.runSubAgent({
+      contractVersion: plan.version,
       task: step.description,
       context: `Executing one step of a larger plan: ${planSummary}`,
       expectedOutcome: step.expectedOutcome,
+      expectedEvidence: step.expectedEvidence,
+      constraints: step.constraints,
+      scope: step.scope,
+      nonGoals: step.nonGoals,
+      checklist: step.checklist,
+      delegationReason: step.delegationReason,
       allowedTools: step.allowedTools ?? (step.toolName ? [step.toolName] : undefined),
       stepId: step.id,
       memoryText: state.context.memoryText,
@@ -753,13 +773,13 @@ export class PlanningLoop implements LoopStrategy {
     state.context.reasoning.addReflection(reflection);
     this.recorder.record({ type: 'reflection', content: reflection });
 
-    const newPlan = await this.planner.createPlan(
+    const newPlan = this.delegationPolicy.preparePlan(await this.planner.createPlan(
       userMessage,
       this.planningTools(),
       state.context.memoryText,
       currentPlan,
       failureAnalysis
-    );
+    ));
     this.recordPlan(newPlan);
     return newPlan;
   }
@@ -918,7 +938,34 @@ export class PlanningLoop implements LoopStrategy {
       };
     }
 
-    this.recorder.record({ type: 'sub_agent', task: task.task, status: 'started', stepId: task.stepId });
+    const assessment = this.delegationPolicy.assessTask(task);
+    if (!assessment.allowed) {
+      return {
+        executionStatus: 'failed',
+        outcomeStatus: 'unavailable',
+        evidencePacket: {
+          conclusion: '',
+          evidence: [],
+          uncertainty: [assessment.reason],
+          unresolvedQuestions: task.expectedEvidence ?? [],
+        },
+        summary: '',
+        error: `Delegation rejected: ${assessment.reason}`,
+        toolCalls: [],
+        durationMs: 0,
+        events: [],
+      };
+    }
+
+    this.recorder.record({
+      type: 'sub_agent',
+      task: task.task,
+      status: 'started',
+      stepId: task.stepId,
+      delegationReason: assessment.reason,
+      expectedOutcome: task.expectedOutcome,
+      checklist: task.checklist,
+    });
     const result = await this.subAgentRunner.run(task);
     if (result.tokenUsage) {
       // Roll the cost into the run totals, but never let the sub-agent's
@@ -932,6 +979,9 @@ export class PlanningLoop implements LoopStrategy {
       status: result.executionStatus === 'completed' ? 'completed' : 'failed',
       executionStatus: result.executionStatus,
       stepId: task.stepId,
+      delegationReason: assessment.reason,
+      expectedOutcome: task.expectedOutcome,
+      checklist: task.checklist,
       reply: result.summary || undefined,
       outcomeStatus: result.outcomeStatus,
       evidencePacket: result.evidencePacket,

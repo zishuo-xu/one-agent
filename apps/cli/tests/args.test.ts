@@ -20,6 +20,7 @@ describe('CLI arguments', () => {
     expect(isUsableApiKey(undefined)).toBe(false);
     expect(isUsableApiKey('your-api-key')).toBe(false);
     expect(isUsableApiKey(' sk-your-api-key ')).toBe(false);
+    expect(isUsableApiKey('missing-api-key')).toBe(false);
     expect(isUsableApiKey('test-key')).toBe(true);
   });
 
@@ -43,6 +44,11 @@ describe('CLI arguments', () => {
   it('parses doctor as a standalone command', () => {
     expect(parseArgs(['doctor'])).toMatchObject({ command: 'doctor' });
     expect(parseArgs(['--thread', 'doctor']).command).toBe('chat');
+  });
+
+  it('parses web as a standalone command', () => {
+    expect(parseArgs(['web'])).toMatchObject({ command: 'web' });
+    expect(parseArgs(['--thread', 'web']).command).toBe('chat');
   });
 
   it('keeps old planning and trace flags as deprecated aliases', () => {

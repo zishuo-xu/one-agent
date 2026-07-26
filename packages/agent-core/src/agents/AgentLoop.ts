@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import {
+  budgetSettings,
   modelName,
   modelTimeoutMs,
   runtimeSettings,
@@ -17,6 +18,7 @@ import { ContextManager } from '../context/ContextManager.js';
 import { PersistenceContextManager } from '../context/PersistenceContextManager.js';
 import { estimateTokens } from '../context/tokenEstimate.js';
 import { Planner } from '../planning/Planner.js';
+import { DelegationPolicy } from '../planning/DelegationPolicy.js';
 import { ReasoningChain } from '../planning/ReasoningChain.js';
 import type { Plan } from '../planning/types.js';
 import { TaskJudge } from '../planning/TaskJudge.js';
@@ -34,6 +36,7 @@ import { MemoryDocumentStore } from '../memory/MemoryDocumentStore.js';
 import { CreateToolCallInput, type AgentRun } from '../db/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelProvider, TokenUsage } from '../model/types.js';
+import { AgentTokenBudget } from '../model/TokenBudget.js';
 import { SubAgentRunner, type DelegationBudget } from './SubAgentRunner.js';
 import { createSpawnAgentTool } from './spawnAgentTool.js';
 import { ModelCaller } from './ModelCaller.js';
@@ -60,6 +63,7 @@ import {
   type ToolPolicy,
 } from '../tools/policy.js';
 import { StrategyController } from './StrategyController.js';
+import { localizedText, runtimePreferenceInstruction } from '../runtimePreferences.js';
 
 export type { AgentLoopEvent } from './events.js';
 
@@ -73,6 +77,8 @@ export interface AgentLoopOptions {
   tools?: ToolRegistry;
   contextManager?: ContextManager;
   planner?: Planner;
+  /** Shared semantic policy for planned and dynamic delegation. */
+  delegationPolicy?: DelegationPolicy;
   taskJudge?: TaskJudge;
   modelProvider?: ModelProvider;
   enablePlanning?: boolean | 'auto';
@@ -94,6 +100,8 @@ export interface AgentLoopOptions {
   maxSubAgentDepth?: number;
   /** Resource limits shared by all sub-agents created during one parent Run. */
   subAgentBudget?: Partial<DelegationBudget>;
+  /** Per-agent cumulative token limit. Null explicitly disables the limit. */
+  tokenBudget?: number | null;
   /** Runtime tool authorization policy. Omit to execute registered tools directly. */
   toolPolicy?: ToolPolicy;
   /** In-run direct-to-planning transition policy. */
@@ -138,6 +146,7 @@ export class AgentLoop extends EventEmitter {
   private subAgentRunner?: SubAgentRunner;
   private readonly contextManager: ContextManager;
   private readonly planner: Planner;
+  private readonly delegationPolicy: DelegationPolicy;
   private readonly taskJudge: TaskJudge;
   private readonly modelProvider: ModelProvider;
   private readonly modelCaller: ModelCaller;
@@ -152,6 +161,7 @@ export class AgentLoop extends EventEmitter {
   private readonly planningLoop: PlanningLoop;
   private readonly toolRunner: ToolRunner;
   private readonly strategyController: StrategyController;
+  private readonly tokenBudget: AgentTokenBudget;
   private lastReasoningChain: ReasoningChain;
 
   constructor(options: AgentLoopOptions = {}) {
@@ -159,7 +169,10 @@ export class AgentLoop extends EventEmitter {
     const runtimeConfig = runtimeSettings();
     const subAgentConfig = subAgentSettings();
     const baseSystemPrompt = options.systemPrompt ?? runtimeConfig.systemPrompt;
-    const systemInstructions = [baseSystemPrompt];
+    const systemInstructions = [
+      baseSystemPrompt,
+      runtimePreferenceInstruction(runtimeConfig),
+    ];
     if (options.tools?.has(MANAGE_MEMORY_TOOL_NAME)) {
       systemInstructions.push(MANAGE_MEMORY_SYSTEM_INSTRUCTION);
     }
@@ -177,9 +190,18 @@ export class AgentLoop extends EventEmitter {
     this.threadId = options.threadId;
     this.taskId = options.taskId;
     this.strategyController = options.strategyController ?? new StrategyController(strategySettings());
+    this.delegationPolicy = options.delegationPolicy ?? new DelegationPolicy();
     this.toolRegistry = options.tools;
     this.toolExecutor = this.toolRegistry ? new ToolExecutor(this.toolRegistry) : undefined;
     this.signal = options.signal;
+    this.subAgentDepth = options.subAgentDepth ?? 0;
+    const configuredTokenBudget = budgetSettings().mainAgentTokens;
+    const tokenBudgetLimit =
+      options.tokenBudget === undefined ? configuredTokenBudget : options.tokenBudget;
+    this.tokenBudget = new AgentTokenBudget(
+      this.subAgentDepth > 0 ? 'Sub-agent' : 'Main agent',
+      tokenBudgetLimit ?? undefined,
+    );
     // Resolve the model provider chain. Falls back to wrapping config.openai
     // directly so tests/eval that mock the raw client keep working.
     this.modelProvider =
@@ -191,7 +213,6 @@ export class AgentLoop extends EventEmitter {
     // cloned registry (never mutate the shared one). Sub-agents are built at
     // depth + 1, so at the cap they cannot spawn further agents — recursion
     // is impossible by construction.
-    this.subAgentDepth = options.subAgentDepth ?? 0;
     this.maxSubAgentDepth = options.maxSubAgentDepth ?? subAgentConfig.maxDepth;
     const subAgentsEnabled = options.subAgents ?? subAgentConfig.enabled;
     if (subAgentsEnabled && this.toolRegistry && this.subAgentDepth < this.maxSubAgentDepth) {
@@ -204,9 +225,8 @@ export class AgentLoop extends EventEmitter {
         modelProvider: subAgentProvider,
         signal: () => this.signal,
         budget: {
-          maxTasksPerRun: subAgentConfig.maxTasksPerRun,
           maxConcurrency: subAgentConfig.maxConcurrency,
-          maxTotalTokens: subAgentConfig.maxTotalTokens,
+          maxTokensPerAgent: budgetSettings().subAgentTokens ?? undefined,
           taskTimeoutMs: subAgentConfig.taskTimeoutMs,
           maxToolIterations: subAgentConfig.maxToolIterations,
           ...options.subAgentBudget,
@@ -259,9 +279,11 @@ export class AgentLoop extends EventEmitter {
     // into the run's token accounting. Their prompts are not part of the
     // conversation context, so they must not anchor its size estimate.
     const trackAuxUsage = (usage?: TokenUsage) =>
-      this.recorder.accumulateUsage(usage, { trackPromptSize: false });
+      this.recordMainUsage(usage, false);
     this.planner.onUsage = trackAuxUsage;
     this.taskJudge.onUsage = trackAuxUsage;
+    this.planner.beforeCall = () => this.tokenBudget.assertCanCall();
+    this.taskJudge.beforeCall = () => this.tokenBudget.assertCanCall();
     this.lastReasoningChain = new ReasoningChain();
 
     // The single entry point for this loop's own model calls: streaming and
@@ -273,7 +295,8 @@ export class AgentLoop extends EventEmitter {
       timeoutMs: this.timeoutMs,
       maxRetries: this.maxRetries,
       signal: () => this.signal,
-      onUsage: (usage) => this.recorder.accumulateUsage(usage),
+      beforeCall: () => this.tokenBudget.assertCanCall(),
+      onUsage: (usage) => this.recordMainUsage(usage, true),
       onDelta: (type, content) => this.recorder.record({ type, content }),
       onTrace: (event) => this.recorder.record(event),
     });
@@ -296,6 +319,7 @@ export class AgentLoop extends EventEmitter {
     this.planner.onTrace = (event) => this.recorder.record(event);
     this.taskJudge.onTrace = (event) => this.recorder.record(event);
     this.contextManager.onUsage = trackAuxUsage;
+    this.contextManager.beforeCall = () => this.tokenBudget.assertCanCall();
     this.contextManager.onTrace = (event) => this.recorder.record(event);
 
     // Execution strategies share one infrastructure bundle; adding a new
@@ -315,6 +339,7 @@ export class AgentLoop extends EventEmitter {
       toolRegistry: this.toolRegistry,
       toolRunner: this.toolRunner,
       planner: this.planner,
+      delegationPolicy: this.delegationPolicy,
       taskJudge: this.taskJudge,
       subAgentRunner: this.subAgentRunner,
       maxToolIterations: this.maxToolIterations,
@@ -424,7 +449,10 @@ export class AgentLoop extends EventEmitter {
       const review = parsePlanReviewAnswer(normalizedAnswer);
       const limits = pendingInput.planReview;
       if (review.decision === 'revise' && limits && limits.revision >= limits.maxRevisions) {
-        throw new Error('The plan has already been revised once. Reply approve or reject.');
+        throw new Error(localizedText(runtimeSettings().locale, checkpoint.originalMessage, {
+          zhCN: '计划已经修改过一次，请选择批准或拒绝。',
+          enUS: 'The plan has already been revised once. Reply approve or reject.',
+        }));
       }
     }
     if (!this.runStore.claimWaiting(runId)) {
@@ -477,6 +505,7 @@ export class AgentLoop extends EventEmitter {
   ): PreparedExecution {
     const startedMs = Date.now();
     this.signal = signal ?? this.signal;
+    this.tokenBudget.reset();
     this.checkSignal();
     this.subAgentRunner?.resetBudget();
     if (recovery?.addUserMessage !== false) {
@@ -810,10 +839,12 @@ export class AgentLoop extends EventEmitter {
       },
       { role: 'user', content: message },
     ];
+    this.tokenBudget.assertCanCall();
     this.recorder.record({
       type: 'model_call', phase: 'started', modelCallId, purpose: 'classifier',
       provider: this.modelProvider.name, model: this.modelProvider.model,
       attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
+      input: { messages },
     });
     try {
       const response = await this.modelProvider.complete({
@@ -822,7 +853,7 @@ export class AgentLoop extends EventEmitter {
         signal: this.signal,
       });
       if (response.usage) {
-        this.recorder.accumulateUsage(response.usage, { trackPromptSize: false });
+        this.recordMainUsage(response.usage, false);
       }
       const verdict = response.content.trim().toLowerCase();
       const plan = verdict.startsWith('plan');
@@ -831,10 +862,18 @@ export class AgentLoop extends EventEmitter {
         provider: this.modelProvider.name, model: this.modelProvider.model,
         attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
         usage: response.usage,
+        output: {
+          content: response.content,
+          reasoning: response.reasoning,
+          toolCalls: response.toolCalls,
+        },
       });
       this.recorder.record({
         type: 'thought',
-        content: `Auto planning decision: ${plan ? 'plan' : 'direct'}`,
+        content: localizedText(runtimeSettings().locale, message, {
+          zhCN: `自动规划判断：${plan ? '需要规划' : '直接执行'}`,
+          enUS: `Auto planning decision: ${plan ? 'plan' : 'direct'}`,
+        }),
       });
       return plan;
     } catch (error) {
@@ -846,7 +885,10 @@ export class AgentLoop extends EventEmitter {
       });
       this.recorder.record({
         type: 'thought',
-        content: 'Auto planning classifier failed; defaulting to plan',
+        content: localizedText(runtimeSettings().locale, message, {
+          zhCN: '自动规划判断失败，默认进入规划模式',
+          enUS: 'Auto planning classifier failed; defaulting to plan',
+        }),
       });
       return true;
     }
@@ -856,6 +898,12 @@ export class AgentLoop extends EventEmitter {
     if (this.signal?.aborted) {
       throw new Error('AgentLoop was cancelled');
     }
+    this.tokenBudget.assertCanCall();
+  }
+
+  private recordMainUsage(usage?: TokenUsage, trackPromptSize = false): void {
+    this.recorder.accumulateUsage(usage, { trackPromptSize });
+    this.tokenBudget.observe(usage);
   }
 
   private completeRun(runId: string | undefined): void {

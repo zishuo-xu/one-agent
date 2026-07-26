@@ -1,7 +1,7 @@
 # Sub-Agent Evidence Contract
 
 > 文档状态：当前设计
-> 最后更新：2026-07-21
+> 最后更新：2026-07-26
 
 ## 目标
 
@@ -13,11 +13,16 @@ Sub-Agent 是主 Agent 的一次性只读执行单元，不是独立会话或第
 
 `SubAgentTaskContract` 包含：
 
+- `contractVersion`：值为 `2` 时使用当前工作包准入规则；缺省表示旧委派契约；
 - `task`：自包含的子任务；
 - `context`：它服务的父级目标；
 - `constraints`：不能静默放宽的约束；
 - `expectedOutcome`：成功结果的形态；
 - `expectedEvidence`：期望采集的证据；
+- `scope`：明确包含的调查边界；
+- `nonGoals`：明确排除的区域，避免与兄弟工作包重叠；
+- `checklist`：由同一个子 Agent 内部完成的检查项，不展开为更多 Agent；
+- `delegationReason`：为什么独立委派有价值；
 - `allowedTools`：只能收窄 Runtime 已判定为只读的工具集合。
 
 `stepId` 和 `memoryText` 属于 Runtime 执行关联信息，不是模型可以扩大权限的契约字段。
@@ -44,16 +49,21 @@ Runtime 不额外调用模型整理 Packet。最终回答直接成为 `conclusio
 
 ## 上下文与权限
 
-主 Agent 只把本轮已经加载的全局/工作空间 Memory Document 快照交给 Sub-Agent；Sub-Agent 不能直接访问或修改记忆文档。
-每个新父 Run 会重置委派预算和记忆快照。SimpleLoop 的临时 `spawn_agent` 与 PlanningLoop 的计划委派复用同一
+主 Agent 把本轮已加载的全局/工作空间 Memory Document 快照交给 Sub-Agent。子 Agent 不继承
+`manage_memory`，不能通过记忆接口修改文档；当前 workspace Sandbox 没有专门屏蔽
+`.one-agent/MEMORY.md`，继承 `read_file` 时仍可直接读取该工作区文件。全局记忆位于 workspace 外，
+不能通过文件工具访问。每个新父 Run 会清除上一个 Run 的注入快照，并确保没有活动子任务跨越 Run 边界；
+当前不存在父 Run 累计委派预算。SimpleLoop 的临时 `spawn_agent` 与 PlanningLoop 的计划委派复用同一
 `SubAgentRunner`、只读工具规则和 Evidence Contract。
 
 当主模型在 SimpleLoop 的同一次响应中发出多个 `spawn_agent` 调用时，`ToolRunner` 将它们视为普通的只读工具批次
-并发执行，不引入复数工具或第二套委派协议；`SubAgentRunner.maxConcurrency` 仍是实际并发上限。父上下文中的
+并发执行，不引入复数工具或第二套委派协议；`subAgent.maxConcurrency` 仍是实际并发上限。父上下文中的
 工具结果和持久化 Trace 按原始调用顺序提交，实时 `sub_agent` 事件则保留真实开始、完成时序。
 
-PlanningLoop 中只有叶子步骤可以委派。带 `children` 的步骤只是分组容器；容器上的 `parallel` 意图会在计划解析时
-下沉到独立叶子，连续的只读叶子才组成并行波次。执行器对旧 Checkpoint 也忽略容器上的委派标记，防止重复执行。
+version 2 Planning Plan 的委派单元是完整工作包。`DelegationPolicy` 会把委派节点的 `children`
+收敛进该工作包的 `checklist`，由同一个子 Agent 内部完成，而不是为每个叶子创建 Agent。只有无依赖的
+只读工作包可以并行；`dependsOn` 会阻止伪并行。缺少 `version` 的历史 Plan 仍按旧叶子步骤语义恢复，
+保持旧 Checkpoint 可读。
 
 ## Trace
 

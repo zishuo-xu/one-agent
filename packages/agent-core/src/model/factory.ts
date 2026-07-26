@@ -63,3 +63,25 @@ export function createProviderFromConfig(
     createProvider(fallbackClient, fallbackConfig),
   ]);
 }
+
+/** Build an isolated Provider for connection testing without changing global configuration. */
+export function createStandaloneModelProvider(
+  modelConfig: ModelConnectionConfig,
+): ModelProvider {
+  const openai = new OpenAI({
+    baseURL: normalizeProvider(modelConfig.provider) === 'openai-compatible'
+      ? modelConfig.baseUrl
+      : undefined,
+    apiKey: modelConfig.apiKey || 'missing-api-key',
+  });
+  const anthropic = normalizeProvider(modelConfig.provider) === 'anthropic'
+    ? new Anthropic({
+        apiKey: modelConfig.apiKey || 'missing-api-key',
+        baseURL: modelConfig.baseUrl,
+      })
+    : undefined;
+  return createProviderFromConfig(openai, { ...modelConfig, fallback: undefined }, {
+    anthropicClient: anthropic,
+    includeFallback: false,
+  });
+}

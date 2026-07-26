@@ -25,6 +25,18 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
+export interface ModelCallInput {
+  messages: Message[];
+  tools?: ModelToolDefinition[];
+  jsonMode?: boolean;
+}
+
+export interface ModelCallOutput {
+  content: string;
+  reasoning?: string;
+  toolCalls?: ModelToolCall[];
+}
+
 export interface ModelCallTraceEvent {
   type: 'model_call';
   phase: 'started' | 'completed' | 'failed';
@@ -38,6 +50,10 @@ export interface ModelCallTraceEvent {
   durationMs?: number;
   messageCount?: number;
   toolCount?: number;
+  /** Provider-neutral request snapshot, sanitized before durable Trace storage. */
+  input?: ModelCallInput;
+  /** Provider-neutral response snapshot, sanitized before durable Trace storage. */
+  output?: ModelCallOutput;
   usage?: TokenUsage;
   error?: string;
 }

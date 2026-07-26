@@ -1,7 +1,7 @@
 # Memory Document 设计
 
 > 文档状态：当前有效
-> 最后更新：2026-07-20
+> 最后更新：2026-07-26
 
 ## 目标
 
@@ -44,9 +44,11 @@ Trace 的 `memory_context_loaded` 事件只记录作用域、内容 hash、字�
 
 ## 会话整理
 
-切换、退出或启动恢复时，Memory Agent 一次读取完整用户可见 Thread 和两份最新文档，返回完整更新后的
-`globalMemory` 与 `workspaceMemory`。Assistant 消息用于解释“可以，我认同”等指代，但只有用户消息能够授权记忆变化。
-失败时不提交文件，`threads.memory_extracted` 保持 `0`，下次启动重新处理。
+CLI 在切换 Thread、正常退出和启动恢复时调用 Memory Agent；API/Web 在工作区 Runtime 创建或聊天路由
+初始化时恢复尚未提取的 Thread，当前不会在浏览器每次切换会话时立即整理。Memory Agent 一次读取完整用户可见
+Thread 和两份最新文档，返回完整更新后的 `globalMemory` 与 `workspaceMemory`。Assistant 消息用于解释
+“可以，我认同”等指代，但只有用户消息能够授权记忆变化。失败时不提交文件，
+`threads.memory_extracted` 保持 `0`，后续恢复时重新处理。
 
 文件先提交，Thread 再标记完成。两步之间崩溃只会造成基于最新文档的幂等重试，不会丢失记忆。
 
@@ -73,7 +75,9 @@ Trace 的 `memory_context_loaded` 事件只记录作用域、内容 hash、字�
 - Trace Web：Memory 面板查看和编辑两份文档，保存使用同一 hash 冲突保护；
 - 对话：明确要求记住、纠正、忘记或检查时，`manage_memory` 直接追加、精确替换或删除文档文本。
 
-Sub-Agent 只接收父 Run 已加载的文档快照，不直接读取或修改长期记忆。
+Sub-Agent 接收父 Run 已加载的文档快照，并且不继承 `manage_memory`，所以不能通过记忆接口修改文档。
+当前 workspace Sandbox 没有专门屏蔽 `.one-agent/MEMORY.md`；如果子 Agent 继承 `read_file`，仍可直接
+读取该工作区文件。全局记忆位于 workspace 外，不能通过文件工具访问。
 
 ## RAG 扩展边界
 

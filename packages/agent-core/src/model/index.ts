@@ -21,7 +21,10 @@ export { AnthropicProvider } from './AnthropicProvider.js';
 export type { AnthropicProviderOptions } from './AnthropicProvider.js';
 export { FallbackProvider, defaultShouldFallback } from './FallbackProvider.js';
 export type { FallbackPredicate } from './FallbackProvider.js';
-export { createProviderFromConfig } from './factory.js';
+export {
+  createProviderFromConfig,
+  createStandaloneModelProvider,
+} from './factory.js';
 export type { ModelConnectionConfig, ModelProviderKind, ProviderFactoryOptions } from './factory.js';
 export { diagnoseModelProviders } from './diagnostics.js';
 export type {

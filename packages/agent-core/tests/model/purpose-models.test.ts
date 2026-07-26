@@ -39,11 +39,17 @@ function callModel(index: number): string {
 }
 
 function spawnAgentResponse() {
+  const args = {
+    task: 'sub job',
+    expectedOutcome: 'An evidence-backed sub-task result',
+    delegationReason: 'The task benefits from isolated investigation.',
+    expectedEvidence: ['Relevant tool-supported evidence'],
+  };
   return {
     choices: [{
       message: {
         content: '',
-        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"sub job"}' } }],
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: JSON.stringify(args) } }],
       },
     }],
   };

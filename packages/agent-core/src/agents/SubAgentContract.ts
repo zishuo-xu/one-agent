@@ -1,11 +1,14 @@
 import type { AgentEvent } from './events.js';
 import { redactSensitiveText } from './traceSanitizer.js';
+import type { PlanChecklistItem } from '../planning/types.js';
 
 const MAX_EVIDENCE_ITEMS = 8;
 const MAX_OBSERVATION_CHARS = 1200;
 
 /** Caller-owned delegation request. Runtime-only correlation fields live on SubAgentTask. */
 export interface SubAgentTaskContract {
+  /** Missing denotes a legacy delegation contract. */
+  contractVersion?: 2;
   /** A self-contained objective for the isolated execution. */
   task: string;
   /** The parent goal this task contributes to. */
@@ -16,6 +19,14 @@ export interface SubAgentTaskContract {
   expectedOutcome?: string;
   /** Evidence the caller expects the sub-agent to collect where possible. */
   expectedEvidence?: string[];
+  /** Bounded areas included in the investigation. */
+  scope?: string[];
+  /** Areas explicitly excluded to avoid overlap with sibling agents. */
+  nonGoals?: string[];
+  /** Internal checks owned by this agent; they are not separate agents. */
+  checklist?: PlanChecklistItem[];
+  /** Why this work benefits from isolated execution. */
+  delegationReason?: string;
   /** Optional narrowing of the inherited read-only tool set. */
   allowedTools?: string[];
 }

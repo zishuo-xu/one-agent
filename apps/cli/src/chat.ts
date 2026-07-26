@@ -16,7 +16,7 @@ import {
   getSharedConnection,
 } from '@one-agent/agent-core';
 import type { AgentRun, AgentRunResult, RunCheckpoint } from '@one-agent/agent-core';
-import { CONFIG_PATH, WORKSPACE_ROOT } from './load-config.js';
+import { CONFIG_PATH, INIT_CONFIG_PATH, WORKSPACE_ROOT } from './load-config.js';
 import { printTraces, printRunSummary } from './commands/traces.js';
 import { formatContextDisplay } from './commands/context.js';
 import { formatMemoryDocuments } from './commands/memory.js';
@@ -25,7 +25,13 @@ import { renderMarkdown } from './markdown.js';
 import { HELP_TEXT, printHelp, printVersion, printStartup } from './help.js';
 import { categorizeError, printError } from './errors.js';
 import { createChatEventHandler } from './chat-events.js';
+import {
+  applyModelChoice,
+  configuredModelChoices,
+  printModelChoices,
+} from './commands/model.js';
 import { isUsableApiKey, parseArgs, resolveThread, toPlanningOption } from './args.js';
+import { validateStartupConfiguration } from './config-validation.js';
 import {
   cyan,
   dim,
@@ -44,6 +50,7 @@ const COMMANDS = [
   '/memory',
   '/memory global',
   '/memory workspace',
+  '/model',
   '/threads',
   '/runs',
   '/runs <run-id>',
@@ -130,8 +137,8 @@ function applyLegacyConfig(template: ReturnType<typeof createDefaultSystemConfig
 }
 
 function createConfigFile(): void {
-  if (fs.existsSync(CONFIG_PATH)) {
-    console.log(`A configuration file already exists at ${CONFIG_PATH}.`);
+  if (fs.existsSync(INIT_CONFIG_PATH)) {
+    console.log(`A configuration file already exists at ${INIT_CONFIG_PATH}.`);
     console.log('Please edit it directly if you need to update the system configuration.');
     return;
   }
@@ -142,29 +149,15 @@ function createConfigFile(): void {
   } else {
     template.model.apiKey = 'your-api-key';
   }
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(template, null, 2)}\n`, { mode: 0o600 });
-  console.log(`Created ${CONFIG_PATH}`);
+  fs.mkdirSync(path.dirname(INIT_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(INIT_CONFIG_PATH, `${JSON.stringify(template, null, 2)}\n`, { mode: 0o600 });
+  console.log(`Created ${INIT_CONFIG_PATH}`);
   if (fs.existsSync(legacyEnvPath)) {
     console.log('Imported existing .env values. The legacy .env file is no longer read by One Agent.');
   }
   if (!isUsableApiKey(template.model.apiKey)) {
     console.log('Please open it and set model.apiKey, then run one-agent again.');
   }
-}
-
-function validateApiKey(): boolean {
-  if (isUsableApiKey(config.model.apiKey)) {
-    return true;
-  }
-  console.error('Error: model.apiKey is missing or still uses the template placeholder.');
-  console.error(`Workspace: ${WORKSPACE_ROOT}`);
-  console.error('');
-  console.error('To fix this, either:');
-  console.error(`  1. Run "one-agent --init" to create ${CONFIG_PATH}, then edit it.`);
-  console.error(`  2. Copy one-agent.config.example.json to ${CONFIG_PATH}.`);
-  console.error('');
-  console.error('Run "one-agent --help" for more options.');
-  return false;
 }
 
 function truncateTitle(text: string, maxLength = 50): string {
@@ -393,7 +386,11 @@ async function main() {
     return;
   }
 
-  if (!validateApiKey()) {
+  if (!validateStartupConfiguration({
+    apiKey: config.model.apiKey,
+    configPath: CONFIG_PATH,
+    workspaceRoot: WORKSPACE_ROOT,
+  })) {
     process.exit(1);
   }
 
@@ -592,6 +589,43 @@ async function main() {
     if (trimmed === '/memory global' || trimmed === '/memory workspace') {
       const scope = trimmed.endsWith('global') ? 'global' : 'workspace';
       for (const line of formatMemoryDocuments([memoryDocuments.read(scope)])) console.log(line);
+      continue;
+    }
+
+    if (trimmed === '/model') {
+      if (runStore.getWaitingByThread(threadId)) {
+        console.log('当前任务正在等待输入，请先完成或取消该任务后再切换模型。');
+        continue;
+      }
+      const choices = configuredModelChoices();
+      printModelChoices(choices);
+      const selection = await readInput();
+      if (selection === null) break;
+      const selectedIndex = Number(selection.trim()) - 1;
+      if (!selection.trim()) {
+        console.log('已取消模型切换。');
+        continue;
+      }
+      if (!Number.isInteger(selectedIndex) || !choices[selectedIndex]) {
+        console.log('无效选择，模型未切换。');
+        continue;
+      }
+      const selected = choices[selectedIndex];
+      if (selected.active) {
+        console.log(`当前已经在使用 ${selected.connectionName} / ${selected.model}。`);
+        continue;
+      }
+      try {
+        applyModelChoice(selected, {
+          configPath: CONFIG_PATH,
+          workspaceRoot: WORKSPACE_ROOT,
+        });
+        agent = runtime.createAgent({ threadId, planning });
+        console.log(`已切换到 ${selected.connectionName} / ${selected.model}。`);
+        console.log('从下一次任务开始生效。');
+      } catch (error) {
+        console.log(`模型切换失败：${error instanceof Error ? error.message : String(error)}`);
+      }
       continue;
     }
 

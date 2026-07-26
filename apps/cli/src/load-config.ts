@@ -1,17 +1,38 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CONFIG_FILE_NAME, loadSystemConfig } from '@one-agent/agent-core';
-import { resolveWorkspaceRoot } from './workspace.js';
+import { loadSystemConfig } from '@one-agent/agent-core';
+import {
+  getGlobalConfigPath,
+  isWebCommand,
+  resolveInitConfigPath,
+  resolveStartupConfigPath,
+  resolveWorkspaceRoot,
+} from './workspace.js';
 
-export const WORKSPACE_ROOT = resolveWorkspaceRoot();
-export const CONFIG_PATH = path.join(WORKSPACE_ROOT, CONFIG_FILE_NAME);
+const argv = process.argv.slice(2);
+const requestedWorkspaceRoot = resolveWorkspaceRoot({ argv });
+const globalConfigPath = getGlobalConfigPath();
+const webMode = isWebCommand(argv);
+
+export const WORKSPACE_ROOT = webMode
+  ? path.dirname(globalConfigPath)
+  : requestedWorkspaceRoot;
+export const CONFIG_PATH = resolveStartupConfigPath({
+  argv,
+  workspaceRoot: requestedWorkspaceRoot,
+});
+export const INIT_CONFIG_PATH = resolveInitConfigPath({
+  argv,
+  workspaceRoot: requestedWorkspaceRoot,
+});
 
 if (!fs.existsSync(WORKSPACE_ROOT)) {
   fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
 }
 
-// --init/help/version must still start before a config exists. Chat and doctor
-// perform their own required-config checks before using the model.
+// A local configuration is optional and takes precedence over the user's
+// global configuration. --init/help/version must still work before either
+// configuration exists.
 if (fs.existsSync(CONFIG_PATH)) {
   loadSystemConfig({ workspaceRoot: WORKSPACE_ROOT, configPath: CONFIG_PATH });
 }

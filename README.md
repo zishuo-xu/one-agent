@@ -1,17 +1,20 @@
 # one-agent
 
 One Agent 是一个**模型无关、可靠性优先的轻量 Agent Runtime**，支持可控工具执行、
-长任务规划与恢复、跨会话记忆，以及完整可信的 Trace / Eval 验证闭环。
+长任务规划与恢复、跨会话记忆，以及带完整性状态的 Trace / Eval 验证闭环。
 
 运行时只负责执行并记录事实：Agent 执行结束后直接向用户返回，不在主链路追加自动验证、
 自动分析、自动修复或自动优化任务。开发者通过 Trace Viewer 与离线 Eval 检查过程并决定如何改进 Agent。
 
 项目的长期目标、产品边界、架构设计和当前实现状态统一维护在
 [《One Agent：目标、愿景与设计现状》](./docs/project-vision-and-status.md)。
-全部阶段报告、工程记录和评测报告的状态与阅读顺序见
+当前规范、保留的评测记录及文档治理规则见
 [《文档索引与治理规则》](./docs/README.md)。
 系统的环境变量、代码级 Runtime 参数、CLI 参数和默认值统一维护在
 [《One Agent 配置清单》](./docs/configuration-reference.md)。
+首次接手代码的开发 Agent 应先阅读根目录
+[《AGENTS.md》](./AGENTS.md)和
+[《Agent 项目接手指南》](./docs/agent-maintainer-guide.md)。
 
 ## 项目结构
 
@@ -20,6 +23,7 @@ one-agent/
 ├── apps/
 │   ├── api/        # Fastify + TypeScript 后端（可选 REST API）
 │   ├── cli/        # 交互式 REPL CLI
+│   ├── web/        # 本地 Web 交互界面（复用 API 与 AgentRuntime）
 │   └── trace-web/  # 运行追踪可视化 Web 界面
 └── packages/
     ├── agent-core/  # 在线 Runtime：AgentRuntime、AgentLoop、工具、记忆、Trace、恢复
@@ -33,11 +37,17 @@ one-agent/
 ## 环境准备
 
 ```bash
-cp one-agent.config.example.json one-agent.config.json
-# 编辑 one-agent.config.json，填写 model.apiKey / model.model / model.baseUrl
+# 推荐：创建所有工作目录共享的全局配置
+one-agent --init
+# 编辑 ~/.one-agent/one-agent.config.json，填写 model.apiKey / model.model / model.baseUrl
+
+# 仅当某个项目确实需要独立配置时
+one-agent --init --workspace /path/to/project
 ```
 
-`one-agent.config.json` 是代码唯一读取的系统配置表，包含模型密钥、Runtime、上下文、工具、Trace、数据库和服务参数；真实文件已被 Git 忽略。完整字段、默认值和所属层见
+One Agent 只从 `one-agent.config.json` 读取业务配置。普通 CLI 优先使用 workspace 根目录的项目配置，
+不存在时回退到 `~/.one-agent/one-agent.config.json`；`one-agent web` 始终使用全局配置。
+配置包含模型密钥、Runtime、上下文、工具、Trace、数据库和服务参数；真实文件已被 Git 忽略。完整字段、默认值和所属层见
 [配置清单](./docs/configuration-reference.md)。
 
 当前有两种协议适配器：OpenAI Compatible（OpenAI / DeepSeek / Qwen / Kimi / GLM / Ollama）
@@ -72,6 +82,39 @@ pnpm install
 pnpm dev:cli
 ```
 
+### 启动本地 Web 界面
+
+```bash
+pnpm dev:web
+# 或全局安装后
+one-agent web
+```
+
+浏览器访问 `http://127.0.0.1:3000`。Web 与 CLI 共用 `packages/agent-core` 中同一套
+Runtime、规划、记忆、工具审批和 Trace 规则，不创建第二套 Agent 系统。每个 CLI 进程或 Web 工作区
+分别创建自己的 `AgentRuntime` 实例，并使用该工作区对应的 SQLite 数据库。
+首版提供会话切换、历史消息、任务执行、计划确认、工具审批、澄清输入，以及工具/子 Agent
+执行详情。每轮对话会将 Runtime 已记录的模型 reasoning、思考判断、规划依据与执行复盘整理为
+可折叠的“思考过程”，并在执行摘要中显示记录数量。新产生的模型调用会保存经过 Trace 内容策略
+处理的 Input / Output 快照；在执行面板展开模型调用即可查看消息、工具定义、正文、Reasoning
+与 Tool Calls。历史 Run 因未记录快照，只继续显示调用元数据。
+
+左侧底部“设置”进入全局 Agent 配置页，可管理第三方模型连接、主备模型、运行策略、
+子 Agent、工具审批和 Trace 内容策略。设置写入 `~/.one-agent/one-agent.config.json`，
+API Key 不会明文返回浏览器；新配置从下一次任务开始生效，运行中或等待审批的任务不会被切换。
+CLI 中输入 `/model` 可以从同一连接表交互选择全局主模型。
+
+`one-agent web` 的启动目录不会决定 Agent 工作区。点击“新会话”时，可以通过系统文件夹选择器浏览电脑目录，
+也可以输入绝对路径或选择最近使用目录；
+进入会话后工作区只读，不允许把已有会话切换到其他目录。每个目录继续使用自己的相对
+`storage.databasePath`、会话、记忆和 Trace，Thread 表无需增加工作区字段。
+最近目录保存在 `~/.one-agent/web-state.json`。`--workspace <path>` 只覆盖本次 Web 首次打开的目录；
+不传时恢复上次选择。任务执行期间禁止创建不同工作区的新会话，绝对数据库路径也不支持跨工作区。
+
+Web 服务默认复用 `api.host` 和 `api.port`，只监听本机地址。再次执行
+`one-agent web` 时会识别并停止同一端口上的旧 One Agent Web 进程，然后自动启动新进程；
+若端口属于其他程序则只报告冲突，不会终止它。
+
 ### 诊断模型配置
 
 ```bash
@@ -86,7 +129,7 @@ one-agent doctor
 
 ```bash
 pnpm dev:trace-web       # 仓库开发模式
-one-agent trace          # 全局命令，只启动只读 Trace Viewer
+one-agent trace          # 全局命令，启动独立 Trace Viewer
 ```
 
 旧的 `one-agent --trace` 仍可暂时同时启动聊天和 Viewer，但已作为兼容参数废弃。
@@ -94,6 +137,7 @@ one-agent trace          # 全局命令，只启动只读 Trace Viewer
 Trace Viewer 会按 Thread 和 Run 展示执行时间线。选中单次 Run 后，顶部总览会汇总状态、Trace 健康度、
 耗时、token、模型调用、工具调用、重试次数和事件数量；中断前后的 Run 可以沿恢复关系互相跳转。
 工具审批会以“请求 → 批准/拒绝 → 执行结果”的跨 Run 时间线单独展示，等待中的审批也会明确标记。
+Viewer 不执行、恢复或修改 Run/Trace；其中的 Memory 面板可以通过 hash 冲突保护编辑全局和工作区记忆文档。
 
 ### 全局安装（输入 `one-agent` 启动）
 
@@ -102,19 +146,21 @@ pnpm build
 cd apps/cli
 pnpm link --global
 
-# 首次运行前准备 API key
-mkdir -p ~/.one-agent
-cp ../../one-agent.config.example.json ~/.one-agent/one-agent.config.json
+# 首次运行只需初始化一次全局配置
+one-agent --init
 # 编辑 ~/.one-agent/one-agent.config.json，填入 model.apiKey
 
 # 在非仓库目录任意位置启动
 one-agent
 
+# 启动本地 Web 交互层
+one-agent web
+
 # 指定工作目录
 one-agent --workspace ~/my-agent
 ```
 
-注意：如果在仓库根目录运行 `one-agent`，由于当前目录存在配置或示例文件，会优先使用仓库目录作为 workspace。要体验全局默认行为，请在非仓库目录启动。
+默认情况下，各工作目录共享 `~/.one-agent/one-agent.config.json`，但工具执行、项目记忆和相对数据库路径仍以当前 workspace 为准。若某个 workspace 自己包含 `one-agent.config.json`，则优先使用该项目配置。需要创建项目配置时，可执行 `one-agent --init --workspace <path>`。
 
 ### 启动 REST API（可选）
 
@@ -145,14 +191,21 @@ pnpm eval:recovery                           # 真实子进程崩溃与断点恢
 - `manage_memory`：仅在用户明确要求时立即记住、修正、忘记或查询长期记忆
 - `spawn_agent`：拉起隔离上下文的只读子 Agent，返回带工具来源、观察值和已知缺口的 Evidence Packet（不可写入、不可递归）
 
-每个父 Run 共用一份 Sub-Agent 预算：默认最多接受 8 个子任务、最多 4 个并发、单个子任务 60 秒、
-累计观测到 50,000 tokens 后不再接受新委派。预算耗尽、超时和取消都会作为独立执行状态写入父 Trace。
-PlanningLoop 只委派叶子步骤；分层计划中的父步骤仅作结构容器，并行意图会归一到独立的只读叶子，避免父子重复执行。
+主 Agent 与子 Agent 分别使用 `budget.mainAgentTokens` 和 `budget.subAgentTokens`：
+前者限制单个主 Agent，后者限制单个子 Agent；默认都为 `null`，表示不设置 token 上限。
+当前没有父 Run 共享的子 Agent 总 token 池，也没有子 Agent 总数量上限。资源保护继续由默认最多 4 个并发、
+单个子任务 60 秒超时、委派深度和单子 Agent 工具迭代上限共同提供。预算耗尽、超时和取消都会作为
+独立执行状态写入父 Trace。
+
+新 Planning Plan 使用 version 2 的“工作包 + checklist”语义：只有具备清晰范围、交付物和证据契约的
+完整工作包才可委派给子 Agent；内部检查项不会各自创建 Agent。规划执行和动态 `spawn_agent` 共用
+`DelegationPolicy`，最终汇总与用户回答始终由主 Agent 完成。没有 version 的历史 Plan 继续按旧叶子步骤
+语义恢复。
 
 SimpleLoop 会把同一次模型响应中的工具调用作为一个批次交给执行层。只有整批工具都显式声明
 `readOnly: true` 时才并发执行；只要包含写入、未知或未声明工具就保持串行。整个批次先完成工具策略预检，
 并发完成后再按模型原始调用顺序写入上下文与 Trace。多个独立 `spawn_agent` 调用也复用这条通用规则，
-并继续受每 Run 的 Sub-Agent 并发预算约束。
+并继续受 Sub-Agent 并发上限约束。
 
 API 部署时可在配置表中设置 `tools.disabled: ["run_command", "delete_file"]` 禁用高风险工具。
 
@@ -191,10 +244,17 @@ Completion Contract 只在 `EvalRunner` 中离线执行，用数据集 checkpoin
 <workspace>/.one-agent/MEMORY.md    # 当前文件夹及其子目录共享的事实、决策与约束
 ```
 
-当前会话不创建第三份文档，原始上下文继续由 `messages` 和 Trace 保存。主 Agent 每轮回答不调用记忆模型；切换 Thread、退出或启动恢复时，独立 Memory Agent 一次读取完整用户可见会话和两份最新文档。Assistant 消息只用于理解“我同意”等指代，只有用户消息能够授权记忆变化。成功后 Thread 标记为已提取，失败保持未提取并在下次启动重试。
+当前会话不创建第三份文档，原始上下文继续由 `messages` 和 Trace 保存。主 Agent 每轮回答不调用记忆模型。
+CLI 在切换 Thread、正常退出和启动恢复时整理尚未提取的会话；API/Web 在工作区 Runtime 创建或服务路由
+初始化时恢复尚未提取的会话，当前不会在浏览器每次切换会话时立即整理。独立 Memory Agent 一次读取完整
+用户可见会话和两份最新文档。Assistant 消息只用于理解“我同意”等指代，只有用户消息能够授权记忆变化。
+成功后 Thread 标记为已提取，失败保持未提取并在后续恢复时重试。
 
 用户明确说“记住”“修正”“忘记”或“你记得什么”时，主模型可在当前工具循环中调用 `manage_memory` 立即操作，
-不会额外调用一次提取模型；普通对话中的隐含事实仍等到会话边界统一整理。显式操作直接追加、精确替换或删除用户可见文本。子 Agent 不继承该工具，凭据和密钥也禁止进入长期记忆。
+不会额外调用一次提取模型；普通对话中的隐含事实仍等到上述整理时机统一处理。显式操作直接追加、精确替换
+或删除用户可见文本。子 Agent 不继承 `manage_memory`，因此不能通过记忆接口修改文档；当前文件 Sandbox
+没有专门屏蔽 workspace 内的 `.one-agent/MEMORY.md`，如果继承了 `read_file`，仍可像读取其他 workspace
+Markdown 一样直接读取它。全局记忆位于 workspace 外，不能通过文件工具访问。凭据和密钥禁止进入长期记忆。
 
 两个作用域共用一把机器本地写锁，允许低频竞争时等待。写入使用临时文件和原子替换；模型处理期间若外部编辑器修改了文件，hash 校验会阻止 Agent 覆盖用户修改，并让该 Thread 保持未提取等待重试。Trace 只记录加载作用域、文档 hash、字符数和估算 token，不复制记忆正文，也不参与自动优化。
 
@@ -209,9 +269,13 @@ Trace Web 的 `Memory` 入口可以查看和编辑两份文档，保存时使用
 - `/context`：查看用户可见上下文（含 token 估算、预算、摘要和记忆）
 - `/context --verbose`：同时查看最近的内部工具与上下文消息
 - `/reasoning`：查看当前运行的 PlanningLoop 结构化推理链
+- `/model`：从全局模型连接表选择主模型并写回配置
 - `/threads`：列出所有会话
 - `/runs`：列出当前会话的运行记录
+- `/runs <run-id>`：查看指定运行详情
 - `/traces`：查看最近运行的 trace 事件
+- `/traces <run-id>`：查看指定运行的 Trace
+- `/traces <run-id> --verbose`：查看指定运行的完整 Trace JSON
 - `/memory`：查看全局和当前工作空间的完整记忆文档
 - `/memory global`：查看跨文件夹用户记忆
 - `/memory workspace`：查看当前文件夹及其子目录共享的记忆
@@ -230,7 +294,8 @@ pnpm dev:cli -- --thread <id>         # 恢复指定 thread
 pnpm dev:cli -- --loop simple         # 调试：强制 SimpleLoop
 pnpm dev:cli -- --loop planning       # 调试：强制 PlanningLoop
 pnpm dev:cli -- --verbose             # 分区展示模型 reasoning 与内部规划信息
-one-agent trace                       # 独立启动只读 Trace Viewer
+one-agent trace                       # 独立启动 Trace Viewer（Run/Trace 只读，Memory 可编辑）
+one-agent web                         # 启动本地 Web 交互界面与 Agent API
 ```
 
 `--plan`、`--plan-auto` 和 `--trace` 仅保留为兼容别名并输出废弃提示；新的公开入口统一为
@@ -278,30 +343,5 @@ Detected 1 interrupted planning run(s).
 注入 `SIGKILL`，再启动新进程执行恢复。评测会检查 Run 状态、恢复来源、Trace 连续性、
 孤立 tool-call 修复以及副作用工具是否被重复执行。
 
-## 阶段
-
-见 [SIMPLIFIED_AGENT_PROJECT_ROADMAP.md](./SIMPLIFIED_AGENT_PROJECT_ROADMAP.md)。
-
-## 当前阶段
-
-- [x] Phase 1：单 Agent（CLI + API）
-- [x] Phase 2：Tool Calling
-- [x] Phase 3：上下文与记忆管理
-- [x] Phase 4：规划与自我纠错
-- [x] Phase 5：SQLite 持久化
-- [x] Phase 6：异步任务与流式输出
-- [x] Phase 7：Trace 与 Evaluation
-- [x] Phase 8：全局 CLI 命令
-- [x] Phase 9：任务持久化（SQLite TaskStore + 重启恢复）
-- [x] Phase 10：长期记忆检索（跨 thread 记忆共享）
-- [x] Phase 11：规划增强（plan-execution 绑定 + 分层计划 + 结构化失败分析）
-- [x] Phase 12：多模型抽象层（OpenAI Compatible / 原生 Anthropic + 能力契约 + 跨协议 failover）
-- [x] Phase 13：工具生态扩展（run_command + 文件工具补齐）
-- [x] Phase 14：Eval+Trace 联动（失败案例可观测闭环 + JSON 数据集）
-- [x] Phase 15：子 Agent（spawn_agent 工具 + delegate/parallel 波次并行委派）
-- [x] Phase 16：子 Agent 观测性（嵌套 trace 展示内部事件流）+ 子 Agent 模型降级（UTILITY_MODEL）
-- [x] Phase 17：能力评测基线（40 个任务 / 77 个 checkpoint，SimpleLoop 与 PlanningLoop 真实模型对照）
-
-此后完成的会话级记忆治理、召回可解释性和断点恢复 v1 属于现有 Runtime 的可靠性增强，不再为展示数量强行拆分阶段。
 当前已实现能力、限制和尚未立项的通用认知架构候选，以
 [《One Agent：目标、愿景与设计现状》](./docs/project-vision-and-status.md)为准。

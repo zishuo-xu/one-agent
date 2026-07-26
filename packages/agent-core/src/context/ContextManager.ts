@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { contextSettings, modelName, modelTimeoutMs } from '../configAccess.js';
+import { contextSettings, modelName, modelTimeoutMs, runtimeSettings } from '../configAccess.js';
 import { Message } from '../agents/types.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
+import { runtimePreferenceInstruction } from '../runtimePreferences.js';
 import { estimateMessageTokens, estimateMessagesTokens, estimateTokens } from './tokenEstimate.js';
 
 export interface ContextManagerOptions {
@@ -21,6 +22,7 @@ export interface ContextManagerOptions {
 export class ContextManager {
   /** Optional run-level observability sinks, wired by AgentLoop. */
   onUsage?: (usage: TokenUsage) => void;
+  beforeCall?: () => void;
   onTrace?: (event: ModelCallTraceEvent) => void;
   private messages: Message[] = [];
   private summaryMessage: Message | null = null;
@@ -278,13 +280,18 @@ export class ContextManager {
     const startedAt = new Date().toISOString();
     const startedMs = Date.now();
     const requestMessages: Message[] = [
-        { role: 'system', content: 'You are a helpful summarizer.' },
+        {
+          role: 'system',
+          content: `You are a helpful summarizer. ${runtimePreferenceInstruction(runtimeSettings())}`,
+        },
         { role: 'user', content: prompt },
     ];
+    this.beforeCall?.();
     this.onTrace?.({
       type: 'model_call', phase: 'started', modelCallId, purpose: 'summary',
       provider: provider.name, model: provider.model, attempt: 0, streaming: false,
       startedAt, messageCount: requestMessages.length, toolCount: 0,
+      input: { messages: requestMessages },
     });
     try {
       const response = await provider.complete({
@@ -296,6 +303,11 @@ export class ContextManager {
         type: 'model_call', phase: 'completed', modelCallId, purpose: 'summary',
         provider: provider.name, model: provider.model, attempt: 0, streaming: false,
         startedAt, durationMs: Date.now() - startedMs, usage: response.usage,
+        output: {
+          content: response.content,
+          reasoning: response.reasoning,
+          toolCalls: response.toolCalls,
+        },
       });
       return response.content.trim() || 'No summary available.';
     } catch (error) {

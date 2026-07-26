@@ -54,6 +54,15 @@ function toolCallResponse(name: string, args: Record<string, unknown>) {
   };
 }
 
+function delegationArgs(task: string) {
+  return {
+    task,
+    expectedOutcome: `Evidence-backed result for ${task}`,
+    delegationReason: 'The task benefits from an isolated investigation.',
+    expectedEvidence: ['Relevant tool-supported evidence'],
+  };
+}
+
 function textResponse(content: string, usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) {
   return { choices: [{ message: { content } }], ...(usage ? { usage } : {}) };
 }
@@ -94,7 +103,7 @@ describe('AgentLoop spawn_agent', () => {
   it('delegates a subtask, returns its result, and emits sub_agent events', async () => {
     mockCreate
       // Parent decides to delegate.
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'research cats' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('research cats')) as never)
       // Sub-agent answers.
       .mockResolvedValueOnce(textResponse('cats are great', { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }) as never)
       // Parent wraps up.
@@ -126,7 +135,7 @@ describe('AgentLoop spawn_agent', () => {
   it('attaches the sub-agent internal event stream to the completed event', async () => {
     mockCreate
       // Parent decides to delegate.
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'echo something' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('echo something')) as never)
       // Sub-agent makes a tool call, then answers.
       .mockResolvedValueOnce(toolCallResponse('echo', { message: 'hi' }) as never)
       .mockResolvedValueOnce(textResponse('echoed hi') as never)
@@ -165,7 +174,7 @@ describe('AgentLoop spawn_agent', () => {
 
   it('sub-agent cannot spawn further agents (recursion blocked by construction)', async () => {
     mockCreate
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'try to recurse' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('try to recurse')) as never)
       // Sub-agent's model call: its schema list must NOT contain spawn_agent.
       .mockResolvedValueOnce(textResponse('done') as never)
       .mockResolvedValueOnce(textResponse('wrapped') as never);
@@ -181,7 +190,7 @@ describe('AgentLoop spawn_agent', () => {
 
   it('passes the parent-selected memory snapshot into simple-loop delegation', async () => {
     mockCreate
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'use the preference' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('use the preference')) as never)
       .mockResolvedValueOnce(textResponse('preference found') as never)
       .mockResolvedValueOnce(textResponse('done') as never);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'one-agent-sub-memory-'));
@@ -208,7 +217,7 @@ describe('AgentLoop spawn_agent', () => {
 
   it('reports sub-agent failure as a tool error the parent can see', async () => {
     mockCreate
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'doomed task' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('doomed task')) as never)
       // Sub-agent exhausts its retries (maxRetries=2 → 3 attempts).
       .mockRejectedValueOnce(new Error('sub model down'))
       .mockRejectedValueOnce(new Error('sub model down'))
@@ -226,25 +235,25 @@ describe('AgentLoop spawn_agent', () => {
     expect(subEvents.map((e) => e.type === 'sub_agent' && e.status)).toEqual(['started', 'failed']);
   });
 
-  it('records budget exhaustion distinctly when one Run delegates too many tasks', async () => {
+  it('does not impose a per-Run child count limit', async () => {
     mockCreate
       .mockResolvedValueOnce({
         choices: [{
           message: {
             content: '',
             tool_calls: [
-              { id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"first"}' } },
-              { id: 'call_2', type: 'function', function: { name: 'spawn_agent', arguments: '{"task":"second"}' } },
+              { id: 'call_1', type: 'function', function: { name: 'spawn_agent', arguments: JSON.stringify(delegationArgs('first')) } },
+              { id: 'call_2', type: 'function', function: { name: 'spawn_agent', arguments: JSON.stringify(delegationArgs('second')) } },
             ],
           },
         }],
       } as never)
       .mockResolvedValueOnce(textResponse('first result') as never)
+      .mockResolvedValueOnce(textResponse('second result') as never)
       .mockResolvedValueOnce(textResponse('finished with available evidence') as never);
 
     const agent = new AgentLoop({
       tools: makeTools(),
-      subAgentBudget: { maxTasksPerRun: 1 },
     });
     const events: AgentLoopEvent[] = [];
     agent.on('event', (event) => events.push(event));
@@ -254,28 +263,24 @@ describe('AgentLoop spawn_agent', () => {
     const terminal = events.filter((event) =>
       event.type === 'sub_agent' && event.status !== 'started'
     );
-    // Live sub-agent events reflect actual completion timing, so the rejected
-    // second task can finish before the accepted first task. Tool results are
-    // still committed to parent context/Trace in model call order.
-    expect(terminal.map((event) => event.type === 'sub_agent' && event.executionStatus).sort())
-      .toEqual(['budget_exhausted', 'completed']);
+    expect(terminal.map((event) => event.type === 'sub_agent' && event.executionStatus))
+      .toEqual(['completed', 'completed']);
     const toolResults = events.filter((event) => event.type === 'tool_result');
     expect(toolResults.map((event) => event.type === 'tool_result' && event.toolCallId))
       .toEqual(['call_1', 'call_2']);
   });
 
-  it('resets the delegation budget for each new parent Run', async () => {
+  it('can delegate again in a later parent Run', async () => {
     mockCreate
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'first run' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('first run')) as never)
       .mockResolvedValueOnce(textResponse('first evidence') as never)
       .mockResolvedValueOnce(textResponse('first done') as never)
-      .mockResolvedValueOnce(toolCallResponse('spawn_agent', { task: 'second run' }) as never)
+      .mockResolvedValueOnce(toolCallResponse('spawn_agent', delegationArgs('second run')) as never)
       .mockResolvedValueOnce(textResponse('second evidence') as never)
       .mockResolvedValueOnce(textResponse('second done') as never);
 
     const agent = new AgentLoop({
       tools: makeTools(),
-      subAgentBudget: { maxTasksPerRun: 1 },
     });
     const events: AgentLoopEvent[] = [];
     agent.on('event', (event) => events.push(event));

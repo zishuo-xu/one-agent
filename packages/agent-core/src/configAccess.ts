@@ -21,15 +21,20 @@ export function runtimeSettings() {
     maxReplanAttempts?: number;
     maxRetryAttempts?: number;
     planApproval?: boolean;
+    locale?: 'auto' | 'zh-CN' | 'en-US';
+    customInstructions?: string;
   };
-  return config.runtime ?? {
-    systemPrompt: legacy.systemPrompt ?? 'You are a helpful assistant.',
-    loop: 'auto' as const,
-    maxRetries: legacy.maxRetries ?? 2,
-    maxToolIterations: legacy.maxToolIterations ?? 5,
-    maxReplanAttempts: legacy.maxReplanAttempts ?? 3,
-    maxRetryAttempts: legacy.maxRetryAttempts ?? 2,
-    planApproval: legacy.planApproval ?? true,
+  const runtime = config.runtime as Partial<typeof config.runtime> | undefined;
+  return {
+    systemPrompt: runtime?.systemPrompt ?? legacy.systemPrompt ?? 'You are a helpful assistant.',
+    locale: runtime?.locale ?? legacy.locale ?? 'zh-CN',
+    customInstructions: runtime?.customInstructions ?? legacy.customInstructions ?? '',
+    loop: runtime?.loop ?? 'auto' as const,
+    maxRetries: runtime?.maxRetries ?? legacy.maxRetries ?? 2,
+    maxToolIterations: runtime?.maxToolIterations ?? legacy.maxToolIterations ?? 5,
+    maxReplanAttempts: runtime?.maxReplanAttempts ?? legacy.maxReplanAttempts ?? 3,
+    maxRetryAttempts: runtime?.maxRetryAttempts ?? legacy.maxRetryAttempts ?? 2,
+    planApproval: runtime?.planApproval ?? legacy.planApproval ?? true,
   };
 }
 
@@ -44,13 +49,18 @@ export function contextSettings() {
   };
 }
 
+export function budgetSettings() {
+  return config.budget ?? {
+    mainAgentTokens: null,
+    subAgentTokens: null,
+  };
+}
+
 export function subAgentSettings() {
   return config.subAgent ?? {
     enabled: true,
     maxDepth: 1,
-    maxTasksPerRun: 8,
     maxConcurrency: 4,
-    maxTotalTokens: 50000,
     taskTimeoutMs: 60000,
     maxToolIterations: 5,
   };

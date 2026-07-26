@@ -4,11 +4,13 @@ import { buildServer } from '../src/server.js';
 
 vi.mock('../../../packages/agent-core/dist/config.js', () => ({
   config: {
+    workspaceRoot: process.cwd(),
     api: { port: 3000, host: '127.0.0.1', logLevel: 'silent' },
     model: { model: 'gpt-test', timeoutMs: 30000, apiKey: 'test-key' },
     runtime: { systemPrompt: 'You are a test assistant.', maxRetries: 2, maxToolIterations: 5, maxReplanAttempts: 3, maxRetryAttempts: 2 },
     context: { maxTokens: 4096, recentTokenBudget: 2048 },
-    subAgent: { enabled: true, maxDepth: 1, maxTasksPerRun: 8, maxConcurrency: 4, maxTotalTokens: 50000, taskTimeoutMs: 60000, maxToolIterations: 5 },
+    budget: { mainAgentTokens: null, subAgentTokens: null },
+    subAgent: { enabled: true, maxDepth: 1, maxConcurrency: 4, taskTimeoutMs: 60000, maxToolIterations: 5 },
     tools: { disabled: [], search: {} },
     trace: { contentMode: 'redacted' },
     taskQueue: { maxConcurrency: 2, taskTimeoutMs: 300000, maxRetries: 3, retryDelayMs: 1000 },
@@ -45,7 +47,11 @@ describe('chat routes', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toMatchObject({ status: 'ok' });
+    expect(JSON.parse(response.body)).toMatchObject({
+      status: 'ok',
+      model: 'gpt-test',
+      workspace: process.cwd(),
+    });
   });
 
   it('POST /api/chat rejects missing message', async () => {
@@ -111,6 +117,49 @@ describe('chat routes', () => {
     expect(body.threadId).toBe(threadId);
   });
 
+  it('POST /api/web/chat returns a running Run before the model finishes', async () => {
+    let resolveModel: ((value: unknown) => void) | undefined;
+    mockCreate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveModel = resolve;
+        }) as never,
+    );
+
+    const server = await buildServer();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/web/chat',
+      payload: { message: 'Inspect asynchronously' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    const started = JSON.parse(response.body);
+    expect(started).toMatchObject({
+      status: 'running',
+      threadId: expect.any(String),
+      runId: expect.any(String),
+    });
+
+    const runningResponse = await server.inject({
+      method: 'GET',
+      url: `/api/runs/${started.runId}`,
+    });
+    expect(JSON.parse(runningResponse.body).status).toBe('running');
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalled());
+    resolveModel?.({
+      choices: [{ message: { content: 'Finished asynchronously.' } }],
+    });
+    await vi.waitFor(async () => {
+      const completedResponse = await server.inject({
+        method: 'GET',
+        url: `/api/runs/${started.runId}`,
+      });
+      expect(JSON.parse(completedResponse.body).status).toBe('completed');
+    });
+  });
+
   it('persists a clarification and accepts the answer through the run endpoint', async () => {
     mockCreate.mockResolvedValueOnce({
       choices: [{ message: {
@@ -153,6 +202,64 @@ describe('chat routes', () => {
       status: 'completed',
       reply: 'Using staging.',
       threadId: waiting.threadId,
+    });
+  });
+
+  it('POST /api/web/runs/:id/input starts a continuation without waiting for it', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: {
+        content: '',
+        tool_calls: [{
+          id: 'ask-target-async',
+          type: 'function',
+          function: {
+            name: 'request_user_input',
+            arguments: JSON.stringify({ question: 'Which async target?' }),
+          },
+        }],
+      } }],
+    } as never);
+
+    const server = await buildServer();
+    const first = await server.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { message: 'Deploy asynchronously' },
+    });
+    const waiting = JSON.parse(first.body);
+
+    let resolveContinuation: ((value: unknown) => void) | undefined;
+    mockCreate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveContinuation = resolve;
+        }) as never,
+    );
+    const continued = await server.inject({
+      method: 'POST',
+      url: `/api/web/runs/${waiting.runId}/input`,
+      payload: { answer: 'staging' },
+    });
+
+    expect(continued.statusCode).toBe(202);
+    const started = JSON.parse(continued.body);
+    expect(started).toMatchObject({
+      status: 'running',
+      threadId: waiting.threadId,
+      runId: expect.any(String),
+    });
+    expect(started.runId).not.toBe(waiting.runId);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    resolveContinuation?.({
+      choices: [{ message: { content: 'Async staging completed.' } }],
+    });
+    await vi.waitFor(async () => {
+      const completedResponse = await server.inject({
+        method: 'GET',
+        url: `/api/runs/${started.runId}`,
+      });
+      expect(JSON.parse(completedResponse.body).status).toBe('completed');
     });
   });
 

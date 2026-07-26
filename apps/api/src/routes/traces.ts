@@ -1,41 +1,40 @@
 import { FastifyInstance } from 'fastify';
 import {
-  AgentRuntime,
-} from '@one-agent/agent-core';
+  currentRuntime,
+  type RuntimeRouteOptions,
+} from '../runtime-provider.js';
 
 export async function traceRoutes(
   fastify: FastifyInstance,
-  options: { runtime: AgentRuntime },
+  options: RuntimeRouteOptions,
 ): Promise<void> {
-  const runStore = options.runtime.stores.runs;
-  const threadStore = options.runtime.stores.threads;
-  const taskStore = options.runtime.stores.tasks;
-  const traceEventStore = options.runtime.stores.traces;
-
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/traces', async (request, reply) => {
+    const stores = currentRuntime(options).runtime.stores;
     const { id } = request.params;
-    const run = runStore.getById(id);
+    const run = stores.runs.getById(id);
     if (!run) {
       return reply.status(404).send({ error: `Run not found: ${id}` });
     }
-    return traceEventStore.getByRun(id);
+    return stores.traces.getByRun(id);
   });
 
   fastify.get<{ Params: { id: string } }>('/api/tasks/:id/traces', async (request, reply) => {
+    const stores = currentRuntime(options).runtime.stores;
     const { id } = request.params;
-    const task = taskStore.get(id);
+    const task = stores.tasks.get(id);
     if (!task) {
       return reply.status(404).send({ error: `Task not found: ${id}` });
     }
-    return traceEventStore.getByTask(id);
+    return stores.traces.getByTask(id);
   });
 
   fastify.get<{ Params: { id: string } }>('/api/threads/:id/traces', async (request, reply) => {
+    const stores = currentRuntime(options).runtime.stores;
     const { id } = request.params;
-    const thread = threadStore.getById(id);
+    const thread = stores.threads.getById(id);
     if (!thread) {
       return reply.status(404).send({ error: `Thread not found: ${id}` });
     }
-    return traceEventStore.getByThread(id);
+    return stores.traces.getByThread(id);
   });
 }

@@ -1,4 +1,4 @@
-export type CliCommand = 'chat' | 'trace' | 'doctor';
+export type CliCommand = 'chat' | 'trace' | 'doctor' | 'web';
 export type LoopMode = 'auto' | 'simple' | 'planning';
 
 export interface CliArgs {
@@ -32,7 +32,7 @@ export function parseArgs(
   const positional = argv.find((arg, index) =>
     !arg.startsWith('-') && !valueFlags.has(argv[index - 1] ?? ''),
   );
-  if (positional && positional !== 'trace' && positional !== 'doctor') {
+  if (positional && positional !== 'trace' && positional !== 'doctor' && positional !== 'web') {
     throw new Error(`Unknown command: ${positional}`);
   }
 
@@ -62,7 +62,10 @@ export function parseArgs(
     (legacyPlan ? 'planning' : defaultLoop);
 
   return {
-    command: positional === 'trace' || positional === 'doctor' ? positional : 'chat',
+    command:
+      positional === 'trace' || positional === 'doctor' || positional === 'web'
+        ? positional
+        : 'chat',
     threadId,
     newThread,
     verbose: argv.includes('--verbose'),
@@ -83,7 +86,12 @@ export function toPlanningOption(loop: LoopMode): boolean | 'auto' {
 
 export function isUsableApiKey(value: string | undefined): boolean {
   const normalized = value?.trim();
-  return Boolean(normalized && normalized !== 'your-api-key' && normalized !== 'sk-your-api-key');
+  return Boolean(
+    normalized &&
+    normalized !== 'your-api-key' &&
+    normalized !== 'sk-your-api-key' &&
+    normalized !== 'missing-api-key'
+  );
 }
 
 export interface ThreadResolution {

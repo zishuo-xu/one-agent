@@ -16,9 +16,11 @@ export function createSpawnAgentTool(
     name: SPAWN_AGENT_TOOL_NAME,
     readOnly: true,
     description:
-      'Spawn a sub-agent to execute a self-contained subtask in an isolated context. ' +
-      'Use it for independent read-only research or analysis that benefits from ' +
-      'a focused agent loop. The sub-agent cannot modify state or spawn further agents. ' +
+      'Spawn one sub-agent for a complete, self-contained, read-only work package. ' +
+      'Use it for a distinct investigation domain or outcome that benefits from context isolation or parallel work. ' +
+      'Do not use it for one file read, one search, one keyword check, one tool call, sibling-result aggregation, or the final answer. ' +
+      'Put related internal checks in checklist so they stay inside this one agent. ' +
+      'The sub-agent cannot modify state or spawn further agents. ' +
       'Its result is unverified evidence for the parent agent, not proof that the parent task is complete.',
     parameters: z.object({
       task: z.string().describe('A clear, self-contained description of the subtask to execute.'),
@@ -28,26 +30,70 @@ export function createSpawnAgentTool(
         .describe('The overall goal this subtask contributes to, for the sub-agent\'s orientation.'),
       expectedOutcome: z
         .string()
-        .optional()
-        .describe('What a successful result should look like.'),
+        .min(1)
+        .describe('The concrete, parent-facing deliverable this work package must return.'),
+      delegationReason: z
+        .string()
+        .min(1)
+        .describe('Why isolation or parallel execution materially improves this work.'),
       constraints: z
         .array(z.string().min(1))
         .optional()
         .describe('Hard requirements the sub-agent must preserve.'),
       expectedEvidence: z
         .array(z.string().min(1))
-        .optional()
+        .min(1)
         .describe('Concrete evidence or sources the sub-agent should collect.'),
+      scope: z
+        .array(z.string().min(1))
+        .optional()
+        .describe('Bounded areas included in the investigation.'),
+      nonGoals: z
+        .array(z.string().min(1))
+        .optional()
+        .describe('Areas explicitly excluded to avoid overlap with sibling agents.'),
+      checklist: z
+        .array(z.object({
+          id: z.string().min(1),
+          description: z.string().min(1),
+        }))
+        .optional()
+        .describe('Related internal checks owned by this one sub-agent.'),
     }),
     execute: async (args) => {
-      const { task, context, expectedOutcome, constraints, expectedEvidence } = args as {
+      const {
+        task,
+        context,
+        expectedOutcome,
+        delegationReason,
+        constraints,
+        expectedEvidence,
+        scope,
+        nonGoals,
+        checklist,
+      } = args as {
         task: string;
         context?: string;
-        expectedOutcome?: string;
+        expectedOutcome: string;
+        delegationReason: string;
         constraints?: string[];
-        expectedEvidence?: string[];
+        expectedEvidence: string[];
+        scope?: string[];
+        nonGoals?: string[];
+        checklist?: Array<{ id: string; description: string }>;
       };
-      const result = await run({ task, context, expectedOutcome, constraints, expectedEvidence });
+      const result = await run({
+        contractVersion: 2,
+        task,
+        context,
+        expectedOutcome,
+        delegationReason,
+        constraints,
+        expectedEvidence,
+        scope,
+        nonGoals,
+        checklist,
+      });
       if (result.executionStatus !== 'completed') {
         throw new Error(`Sub-agent failed: ${result.error ?? 'unknown error'}`);
       }

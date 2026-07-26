@@ -6,6 +6,11 @@ import {
 } from '@one-agent/agent-core';
 import type { TaskStatus } from '@one-agent/agent-core';
 import { config } from '@one-agent/agent-core';
+import {
+  beginRuntimeOperation,
+  currentRuntime,
+  type RuntimeRouteOptions,
+} from '../runtime-provider.js';
 
 export interface CreateTaskBody {
   message: string;
@@ -15,44 +20,74 @@ export interface CreateTaskBody {
 
 export async function taskRoutes(
   fastify: FastifyInstance,
-  options: { runtime: AgentRuntime },
+  options: RuntimeRouteOptions,
 ): Promise<void> {
-  const { runtime } = options;
-  const taskStore = runtime.stores.tasks;
-  const taskQueue = new TaskQueue({
-    store: taskStore,
-    maxConcurrency: config.taskQueue.maxConcurrency,
-    taskTimeoutMs: config.taskQueue.taskTimeoutMs,
-    maxRetries: config.taskQueue.maxRetries,
-    retryDelayMs: config.taskQueue.retryDelayMs,
-  });
-  function createAgent(options: { threadId?: string; taskId?: string; signal?: AbortSignal }) {
-    return runtime.createAgent({
-      threadId: options.threadId,
-      taskId: options.taskId,
-      signal: options.signal,
-      userInput: false,
+  const managers = new Map<AgentRuntime, { queue: TaskQueue; worker: QueueWorker }>();
+
+  function getManager(): { queue: TaskQueue; worker: QueueWorker } {
+    const runtime = currentRuntime(options).runtime;
+    const existing = managers.get(runtime);
+    if (existing) return existing;
+    const taskStore = runtime.stores.tasks;
+    const queue = new TaskQueue({
+      store: taskStore,
+      maxConcurrency: config.taskQueue.maxConcurrency,
+      taskTimeoutMs: config.taskQueue.taskTimeoutMs,
+      maxRetries: config.taskQueue.maxRetries,
+      retryDelayMs: config.taskQueue.retryDelayMs,
     });
-  }
-
-  // Rehydrate any tasks that survived an API restart.
-  const survivingTasks = taskStore.listByStatus(['pending', 'running']);
-  for (const task of survivingTasks) {
-    if (task.status === 'running') {
-      taskStore.setStatus(task.id, 'pending');
+    const taskOperations = new Map<string, () => void>();
+    const trackTask = (task: { id: string }) => {
+      if (!taskOperations.has(task.id)) {
+        taskOperations.set(task.id, beginRuntimeOperation(runtime));
+      }
+    };
+    const releaseTask = (task: { id: string }) => {
+      taskOperations.get(task.id)?.();
+      taskOperations.delete(task.id);
+    };
+    queue.on('enqueued', trackTask);
+    queue.on('started', trackTask);
+    queue.on('completed', releaseTask);
+    queue.on('failed', releaseTask);
+    queue.on('cancelled', releaseTask);
+    queue.on('dead_letter', releaseTask);
+    function createAgent(agentOptions: {
+      threadId?: string;
+      taskId?: string;
+      signal?: AbortSignal;
+    }) {
+      return runtime.createAgent({
+        threadId: agentOptions.threadId,
+        taskId: agentOptions.taskId,
+        signal: agentOptions.signal,
+        userInput: false,
+      });
     }
-    const fresh = taskStore.get(task.id)!;
-    taskQueue.restore(fresh);
-  }
 
-  const worker = new QueueWorker({ queue: taskQueue, createAgent });
-  worker.start();
+    // Rehydrate any tasks that survived an API restart.
+    const survivingTasks = taskStore.listByStatus(['pending', 'running']);
+    for (const task of survivingTasks) {
+      trackTask(task);
+      if (task.status === 'running') {
+        taskStore.setStatus(task.id, 'pending');
+      }
+      queue.restore(taskStore.get(task.id)!);
+    }
+
+    const worker = new QueueWorker({ queue, createAgent });
+    worker.start();
+    const manager = { queue, worker };
+    managers.set(runtime, manager);
+    return manager;
+  }
 
   fastify.addHook('onClose', async () => {
-    worker.stop();
+    for (const manager of managers.values()) manager.worker.stop();
   });
 
   fastify.post<{ Body: CreateTaskBody }>('/api/tasks', async (request, reply) => {
+    const taskQueue = getManager().queue;
     const { message, threadId, idempotencyKey } = request.body;
 
     if (!message || typeof message !== 'string') {
@@ -69,6 +104,7 @@ export async function taskRoutes(
   });
 
   fastify.get('/api/tasks', async (request) => {
+    const taskQueue = getManager().queue;
     const status = (request.query as { status?: string }).status;
     if (status && typeof status === 'string') {
       return taskQueue.listByStatus([status as TaskStatus]);
@@ -77,6 +113,7 @@ export async function taskRoutes(
   });
 
   fastify.get<{ Params: { id: string } }>('/api/tasks/:id', async (request, reply) => {
+    const taskQueue = getManager().queue;
     const { id } = request.params;
     const task = taskQueue.get(id);
     if (!task) {
@@ -86,6 +123,7 @@ export async function taskRoutes(
   });
 
   fastify.get<{ Params: { id: string } }>('/api/tasks/:id/events', async (request, reply) => {
+    const taskQueue = getManager().queue;
     const { id } = request.params;
     const task = taskQueue.get(id);
     if (!task) {
@@ -205,6 +243,7 @@ export async function taskRoutes(
   });
 
   fastify.post<{ Params: { id: string } }>('/api/tasks/:id/cancel', async (request, reply) => {
+    const taskQueue = getManager().queue;
     const { id } = request.params;
     const cancelled = taskQueue.cancel(id);
     if (!cancelled) {
@@ -214,6 +253,7 @@ export async function taskRoutes(
   });
 
   fastify.post<{ Params: { id: string } }>('/api/tasks/:id/retry', async (request, reply) => {
+    const taskQueue = getManager().queue;
     const { id } = request.params;
     const retried = taskQueue.retry(id);
     if (!retried) {

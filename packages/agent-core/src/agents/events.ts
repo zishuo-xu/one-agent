@@ -1,5 +1,5 @@
 import type { ModelCallTraceEvent, TokenUsage } from '../model/types.js';
-import type { FailureAnalysis, Plan } from '../planning/types.js';
+import type { FailureAnalysis, Plan, PlanChecklistItem } from '../planning/types.js';
 import type { ToolCall, ToolResult } from '../tools/types.js';
 import type { UserInputRequest } from './requestUserInputTool.js';
 import type { RunCheckpoint } from './checkpoint.js';
@@ -83,6 +83,9 @@ export type AgentEvent =
       status: 'started' | 'completed' | 'failed';
       executionStatus?: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'budget_exhausted';
       stepId?: string;
+      delegationReason?: string;
+      expectedOutcome?: string;
+      checklist?: PlanChecklistItem[];
       reply?: string;
       outcomeStatus?: 'unverified' | 'unavailable';
       evidencePacket?: SubAgentEvidencePacket;

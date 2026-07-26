@@ -38,6 +38,27 @@ describe('trace sanitizer', () => {
     });
   });
 
+  it('redacts model-call snapshots and omits their content in metadata mode', () => {
+    configureSystem({ trace: { contentMode: 'metadata' } });
+    const event = sanitizeTraceEvent({
+      type: 'model_call',
+      input: {
+        messages: [{ role: 'user', content: 'secret prompt' }],
+        tools: [{ name: 'run', description: 'tool description' }],
+      },
+      output: {
+        content: 'secret response',
+        reasoning: 'private reasoning',
+        toolCalls: [{ name: 'run', arguments: '{"password":"secret"}' }],
+      },
+    });
+    expect(event.input.messages[0].content).toBe('[OMITTED 13 chars]');
+    expect(event.input.tools[0].description).toBe('[OMITTED 16 chars]');
+    expect(event.output.content).toBe('[OMITTED 15 chars]');
+    expect(event.output.reasoning).toBe('[OMITTED 17 chars]');
+    expect(event.output.toolCalls[0].arguments).toBe('[OMITTED 21 chars]');
+  });
+
   it('leaves the event untouched in full mode', () => {
     configureSystem({ trace: { contentMode: 'full' } });
     const event = { type: 'message', content: 'Bearer visible-token' };

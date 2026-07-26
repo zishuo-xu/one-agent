@@ -18,6 +18,8 @@ export interface ModelCallerOptions {
   signal?: () => AbortSignal | undefined;
   /** Usage sink for every model call made here (fed back into run accounting). */
   onUsage?: (usage: TokenUsage) => void;
+  /** Admission guard invoked immediately before each provider request. */
+  beforeCall?: () => void;
   /** Live deltas for the client (message_delta / reasoning_delta events). */
   onDelta?: (type: 'message_delta' | 'reasoning_delta', content: string) => void;
   onTrace?: (event: ModelCallTraceEvent) => void;
@@ -48,6 +50,7 @@ export class ModelCaller {
   private readonly maxRetries: number;
   private readonly signal?: () => AbortSignal | undefined;
   private readonly onUsage?: (usage: TokenUsage) => void;
+  private readonly beforeCall?: () => void;
   private readonly onDelta?: (type: 'message_delta' | 'reasoning_delta', content: string) => void;
   private readonly onTrace?: (event: ModelCallTraceEvent) => void;
 
@@ -59,6 +62,7 @@ export class ModelCaller {
     this.maxRetries = options.maxRetries;
     this.signal = options.signal;
     this.onUsage = options.onUsage;
+    this.beforeCall = options.beforeCall;
     this.onDelta = options.onDelta;
     this.onTrace = options.onTrace;
   }
@@ -70,6 +74,7 @@ export class ModelCaller {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      this.beforeCall?.();
       const modelCallId = crypto.randomUUID();
       const startedAt = new Date().toISOString();
       const startedMs = Date.now();
@@ -86,6 +91,7 @@ export class ModelCaller {
           startedAt,
           messageCount: messages.length,
           toolCount: tools?.length ?? 0,
+          input: { messages, tools },
         });
         const response = await this.modelProvider.complete({
           messages,
@@ -102,6 +108,11 @@ export class ModelCaller {
           startedAt,
           durationMs: Date.now() - startedMs,
           usage: response.usage,
+          output: {
+            content: response.content,
+            reasoning: response.reasoning,
+            toolCalls: response.toolCalls,
+          },
         });
         return response;
       } catch (error) {
@@ -137,6 +148,7 @@ export class ModelCaller {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       this.checkSignal();
+      this.beforeCall?.();
       const modelCallId = crypto.randomUUID();
       const startedAt = new Date().toISOString();
       const startedMs = Date.now();
@@ -159,6 +171,7 @@ export class ModelCaller {
           startedAt,
           messageCount: messages.length,
           toolCount: tools?.length ?? 0,
+          input: { messages, tools },
         });
 
         let content = '';
@@ -219,16 +232,24 @@ export class ModelCaller {
           emittedDelta = true;
         }
 
-        const toolCalls =
+        const normalizedToolCalls =
           toolCallMap.size > 0
             ? [...toolCallMap.entries()]
                 .sort((a, b) => a[0] - b[0])
                 .map(([, tc]) => ({
                   id: tc.id ?? '',
-                  type: 'function' as const,
-                  function: { name: tc.name ?? '', arguments: tc.arguments },
+                  name: tc.name ?? '',
+                  arguments: tc.arguments,
                 }))
             : undefined;
+        const toolCalls = normalizedToolCalls?.map((toolCall) => ({
+          id: toolCall.id,
+          type: 'function' as const,
+          function: {
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          },
+        }));
 
         this.emitTrace({
           phase: 'completed',
@@ -238,6 +259,11 @@ export class ModelCaller {
           startedAt,
           durationMs: Date.now() - startedMs,
           usage,
+          output: {
+            content,
+            reasoning: reasoningBuffer || undefined,
+            toolCalls: normalizedToolCalls,
+          },
         });
         return { content, toolCalls };
       } catch (error) {

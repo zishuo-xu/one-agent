@@ -1,11 +1,20 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { modelName } from '../configAccess.js';
+import { modelName, runtimeSettings } from '../configAccess.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
+import { AgentTokenBudgetExceededError } from '../model/TokenBudget.js';
+import { localizedText, runtimePreferenceInstruction } from '../runtimePreferences.js';
 import { ToolDefinition } from '../tools/types.js';
-import { Plan, PlanStep, PlannerOptions, FailureAnalysis } from './types.js';
+import {
+  Plan,
+  PlanChecklistItem,
+  PlanExecutor,
+  PlanStep,
+  PlannerOptions,
+  FailureAnalysis,
+} from './types.js';
 import { extractJsonObject } from './extractJson.js';
 
 interface RawPlanStep {
@@ -13,10 +22,23 @@ interface RawPlanStep {
   description: string;
   toolName?: string;
   expectedOutcome?: string;
+  expectedEvidence?: string[];
+  constraints?: string[];
+  scope?: string[];
+  nonGoals?: string[];
+  delegationReason?: string;
+  executor?: PlanExecutor;
   delegate?: boolean;
   parallel?: boolean;
+  dependsOn?: string[];
+  checklist?: PlanChecklistItem[];
   children?: RawPlanStep[];
 }
+
+const checklistItemSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+});
 
 const planStepSchema: z.ZodType<RawPlanStep, z.ZodTypeDef, RawPlanStep> = z.lazy(() =>
   z.object({
@@ -24,13 +46,22 @@ const planStepSchema: z.ZodType<RawPlanStep, z.ZodTypeDef, RawPlanStep> = z.lazy
     description: z.string(),
     toolName: z.string().optional(),
     expectedOutcome: z.string().optional(),
+    expectedEvidence: z.array(z.string()).optional(),
+    constraints: z.array(z.string()).optional(),
+    scope: z.array(z.string()).optional(),
+    nonGoals: z.array(z.string()).optional(),
+    delegationReason: z.string().optional(),
+    executor: z.enum(['main', 'subagent']).optional(),
     delegate: z.boolean().optional(),
     parallel: z.boolean().optional(),
+    dependsOn: z.array(z.string()).optional(),
+    checklist: z.array(checklistItemSchema).optional(),
     children: z.array(planStepSchema).optional(),
   })
 );
 
 const planSchema = z.object({
+  version: z.literal(2).optional(),
   reasoning: z.string(),
   steps: z.array(planStepSchema),
 });
@@ -45,13 +76,16 @@ export class Planner {
    * context, so it never anchors the context-size estimate).
    */
   onUsage?: (usage: TokenUsage) => void;
+  beforeCall?: () => void;
   onTrace?: (event: ModelCallTraceEvent) => void;
 
   constructor(options: PlannerOptions = {}) {
+    const runtime = runtimeSettings();
     this.systemPrompt =
       options.systemPrompt ??
       'You are a planning assistant. Break down the user request into clear, executable steps. ' +
-      'Each step may optionally use a tool. Respond ONLY with a JSON object matching the requested format.';
+      'Each step may optionally use a tool. Respond ONLY with a JSON object matching the requested format. ' +
+      runtimePreferenceInstruction(runtime);
     this.modelProvider =
       options.modelProvider ??
       (options.model
@@ -106,12 +140,16 @@ export class Planner {
       revisionSection +
       '\nAvailable tools:\n' +
       `${toolDescriptions || '(none)'}\n\n` +
-      'Delegation:\n' +
-      '- Set "delegate": true on steps that are self-contained subtasks better executed by an isolated sub-agent with its own tool loop.\n' +
-      '- Set "parallel": true on delegated steps that are independent of each other, so they run in parallel.\n' +
-      '- A step with "children" is only a grouping container: never set "delegate" or "parallel" on the container; put those flags on each independent leaf child.\n' +
-      '- Parallel steps MUST be read-only (no file writes or side effects) and MUST NOT depend on each other\'s output.\n' +
-      '- Use delegation sparingly; simple sequential steps need neither flag.\n\n' +
+      'Execution ownership and delegation:\n' +
+      '- Use executor "main" by default. The main agent owns user interaction, state changes, synthesis, and the final answer.\n' +
+      '- Use executor "subagent" only for a complete, self-contained, read-only work package with a distinct scope and verifiable deliverable.\n' +
+      '- A sub-agent work package may contain a "checklist". The checklist belongs to that one sub-agent and MUST NOT become separate plan steps or separate agents.\n' +
+      '- Never create a sub-agent merely to read one file, run one search, check one keyword, call one tool, aggregate sibling results, or write the final answer.\n' +
+      '- Prefer a few non-overlapping domain or outcome work packages over many narrow operation-level tasks.\n' +
+      '- Every sub-agent work package MUST include expectedOutcome, expectedEvidence, delegationReason, and a meaningful checklist.\n' +
+      '- Set parallel true only for independent sub-agent work packages. Parallel work MUST be read-only and MUST NOT depend on sibling output.\n' +
+      '- Use dependsOn for prerequisites. A step with dependencies is not parallel.\n' +
+      '- Do not impose an arbitrary number of sub-agents; create only work packages whose isolation or parallelism materially improves the result.\n\n' +
       'Requirements fidelity:\n' +
       '- If the request explicitly specifies an output file name or location (e.g. "write REPORT.md to the workspace root"), steps MUST use that exact name and location — never invent substitutes.\n' +
       '- Intermediate results produced by earlier steps are available in the conversation context; do NOT assume they exist as files and do NOT plan steps to "find" them.\n\n' +
@@ -120,21 +158,26 @@ export class Planner {
       '- If required information is missing and cannot be obtained with tools, make a reasonable assumption and note it in the final answer instead of stalling.\n\n' +
       'You must respond ONLY with a JSON object matching this exact format, no markdown, no explanation:\n' +
       '{\n' +
+      '  "version": 2,\n' +
       '  "reasoning": "brief explanation of the plan",\n' +
       '  "steps": [\n' +
       '    {\n' +
       '      "id": "1",\n' +
-      '      "description": "what to do in this step",\n' +
+      '      "description": "what to do in this work package",\n' +
+      '      "executor": "main",\n' +
       '      "toolName": "optional_tool_name",\n' +
       '      "expectedOutcome": "what should happen after this step",\n' +
-      '      "delegate": false,\n' +
       '      "parallel": false,\n' +
-      '      "children": [\n' +
+      '      "dependsOn": [],\n' +
+      '      "delegationReason": "required only when executor is subagent",\n' +
+      '      "constraints": ["hard requirement"],\n' +
+      '      "scope": ["area included in this work package"],\n' +
+      '      "nonGoals": ["area owned by another work package"],\n' +
+      '      "expectedEvidence": ["concrete evidence to return"],\n' +
+      '      "checklist": [\n' +
       '        {\n' +
       '          "id": "1.1",\n' +
-      '          "description": "sub-step description",\n' +
-      '          "toolName": "optional_tool_name",\n' +
-      '          "expectedOutcome": "sub-step outcome"\n' +
+      '          "description": "an internal check owned by this one work package"\n' +
       '        }\n' +
       '      ]\n' +
       '    }\n' +
@@ -142,18 +185,31 @@ export class Planner {
       '}\n\n' +
       'Example:\n' +
       '{\n' +
-      '  "reasoning": "Read the requested file and summarize its content.",\n' +
+      '  "version": 2,\n' +
+      '  "reasoning": "Run independent review work packages, then let the main agent verify and synthesize them.",\n' +
       '  "steps": [\n' +
       '    {\n' +
       '      "id": "1",\n' +
-      '      "description": "Read data.txt",\n' +
-      '      "toolName": "read_file",\n' +
-      '      "expectedOutcome": "File content retrieved"\n' +
+      '      "description": "Review architecture and module boundaries",\n' +
+      '      "executor": "subagent",\n' +
+      '      "parallel": true,\n' +
+      '      "delegationReason": "Architecture analysis is an independent evidence-producing direction.",\n' +
+      '      "expectedOutcome": "A prioritized architecture review with concrete code locations",\n' +
+      '      "expectedEvidence": ["file paths", "line numbers", "dependency relationships"],\n' +
+      '      "constraints": ["read-only", "do not cover security or tests"],\n' +
+      '      "scope": ["module boundaries", "dependency direction"],\n' +
+      '      "nonGoals": ["security risks", "test quality"],\n' +
+      '      "checklist": [\n' +
+      '        {"id": "1.1", "description": "Identify module boundaries and entry points"},\n' +
+      '        {"id": "1.2", "description": "Check coupling and dependency direction"}\n' +
+      '      ]\n' +
       '    },\n' +
       '    {\n' +
       '      "id": "2",\n' +
-      '      "description": "Summarize the content for the user",\n' +
-      '      "expectedOutcome": "A concise summary is produced"\n' +
+      '      "description": "Verify evidence, remove duplicates, and present the final review",\n' +
+      '      "executor": "main",\n' +
+      '      "dependsOn": ["1"],\n' +
+      '      "expectedOutcome": "A concise evidence-backed final answer"\n' +
       '    }\n' +
       '  ]\n' +
       '}';
@@ -162,6 +218,7 @@ export class Planner {
       const raw = await this.callModelWithJsonFormat(prompt);
       return this.parsePlan(raw, userRequest);
     } catch (error) {
+      if (error instanceof AgentTokenBudgetExceededError) throw error;
       return this.fallbackPlan(userRequest, String(error));
     }
   }
@@ -186,10 +243,12 @@ export class Planner {
       { role: 'system' as const, content: this.systemPrompt },
       { role: 'user' as const, content: prompt },
     ];
+    this.beforeCall?.();
     this.onTrace?.({
       type: 'model_call', phase: 'started', modelCallId, purpose: 'planner',
       provider: this.modelProvider.name, model: this.modelProvider.model,
       attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
+      input: { messages, jsonMode: true },
     });
     try {
       const response = await this.modelProvider.complete({
@@ -205,6 +264,11 @@ export class Planner {
         provider: this.modelProvider.name, model: this.modelProvider.model,
         attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
         usage: response.usage,
+        output: {
+          content: response.content,
+          reasoning: response.reasoning,
+          toolCalls: response.toolCalls,
+        },
       });
       return response.content || '{}';
     } catch (error) {
@@ -228,6 +292,7 @@ export class Planner {
       const parsed = JSON.parse(extracted);
       const validated = planSchema.parse(parsed);
       return {
+        version: 2,
         reasoning: validated.reasoning,
         steps: validated.steps.map((step) => this.prepareStep(step)),
       };
@@ -236,38 +301,68 @@ export class Planner {
     }
   }
 
-  private prepareStep(step: RawPlanStep, parentId?: string, inheritedParallel = false): PlanStep {
+  private prepareStep(
+    step: RawPlanStep,
+    parentId?: string,
+    inheritedLegacyParallel = false,
+  ): PlanStep {
     const hasChildren = Boolean(step.children?.length);
-    const parallel = !hasChildren && (inheritedParallel || Boolean(step.parallel));
+    const legacyParallel =
+      step.executor === undefined &&
+      (inheritedLegacyParallel || Boolean(step.parallel));
+    const executor: PlanExecutor =
+      step.executor ??
+      (step.delegate || (!hasChildren && legacyParallel) ? 'subagent' : 'main');
     const prepared: PlanStep = {
       id: step.id,
       description: step.description,
       status: 'pending',
       toolName: step.toolName,
       expectedOutcome: step.expectedOutcome,
-      // Containers organize leaves; executing them would duplicate their
-      // completed child work. A model that marks a container parallel means
-      // its independent leaves form the wave instead.
-      delegate: hasChildren ? false : parallel ? true : step.delegate,
-      parallel: hasChildren ? false : parallel || undefined,
+      expectedEvidence: step.expectedEvidence,
+      constraints: step.constraints,
+      scope: step.scope,
+      nonGoals: step.nonGoals,
+      delegationReason: step.delegationReason,
+      executor,
+      delegate: executor === 'subagent',
+      parallel: executor === 'subagent' && !step.dependsOn?.length
+        ? legacyParallel || step.parallel || undefined
+        : false,
+      dependsOn: step.dependsOn,
+      checklist: step.checklist,
       parentId,
     };
-    if (hasChildren) {
+    if (step.children?.length) {
       prepared.children = step.children!.map((child) =>
-        this.prepareStep(child, step.id, inheritedParallel || Boolean(step.parallel))
+        this.prepareStep(
+          child,
+          step.id,
+          inheritedLegacyParallel ||
+            (step.executor === undefined && Boolean(step.parallel)),
+        )
       );
     }
     return prepared;
   }
 
   private fallbackPlan(userRequest: string, error: string): Plan {
+    const runtime = runtimeSettings();
     return {
-      reasoning: `Directly respond to the user request. (${error})`,
+      version: 2,
+      reasoning: localizedText(runtime.locale, userRequest, {
+        zhCN: `直接回答用户请求。（${error}）`,
+        enUS: `Directly respond to the user request. (${error})`,
+      }),
       steps: [
         {
           id: '1',
-          description: `Respond to: ${userRequest}`,
+          description: localizedText(runtime.locale, userRequest, {
+            zhCN: `回答：${userRequest}`,
+            enUS: `Respond to: ${userRequest}`,
+          }),
           status: 'pending',
+          executor: 'main',
         },
       ],
     };

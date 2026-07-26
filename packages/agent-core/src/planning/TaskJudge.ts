@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { modelName } from '../configAccess.js';
+import { modelName, runtimeSettings } from '../configAccess.js';
 import { OpenAICompatibleProvider } from '../model/OpenAICompatibleProvider.js';
 import type { ModelCallTraceEvent, ModelProvider, TokenUsage } from '../model/types.js';
+import { AgentTokenBudgetExceededError } from '../model/TokenBudget.js';
+import { localizedText, runtimePreferenceInstruction } from '../runtimePreferences.js';
 import { JudgeOptions, JudgeResult, Plan, ReasoningStep } from './types.js';
 import { extractJsonObject } from './extractJson.js';
 
@@ -36,13 +38,16 @@ export class TaskJudge {
   private readonly timeoutMs: number;
   /** Same usage-sink contract as Planner.onUsage (wired by AgentLoop). */
   onUsage?: (usage: TokenUsage) => void;
+  beforeCall?: () => void;
   onTrace?: (event: ModelCallTraceEvent) => void;
 
   constructor(options: JudgeOptions = {}) {
+    const runtime = runtimeSettings();
     this.systemPrompt =
       options.systemPrompt ??
       'You are a task judge. Given a plan and the execution history, decide whether the task is complete, ' +
-      'and what the next action should be. Respond ONLY with a JSON object.';
+      'and what the next action should be. Respond ONLY with a JSON object. ' +
+      runtimePreferenceInstruction(runtime);
     this.modelProvider =
       options.modelProvider ??
       (options.model
@@ -62,10 +67,12 @@ export class TaskJudge {
       { role: 'system' as const, content: this.systemPrompt },
       { role: 'user' as const, content: prompt },
     ];
+    this.beforeCall?.();
     this.onTrace?.({
       type: 'model_call', phase: 'started', modelCallId, purpose: 'judge',
       provider: this.modelProvider.name, model: this.modelProvider.model,
       attempt: 0, streaming: false, startedAt, messageCount: messages.length, toolCount: 0,
+      input: { messages, jsonMode: true },
     });
 
     try {
@@ -82,11 +89,18 @@ export class TaskJudge {
         provider: this.modelProvider.name, model: this.modelProvider.model,
         attempt: 0, streaming: false, startedAt, durationMs: Date.now() - startedMs,
         usage: response.usage,
+        output: {
+          content: response.content,
+          reasoning: response.reasoning,
+          toolCalls: response.toolCalls,
+        },
       });
 
       const raw = response.content || '{}';
       return this.parseResult(raw);
     } catch (error) {
+      if (error instanceof AgentTokenBudgetExceededError) throw error;
+      const sample = plan.reasoning || plan.steps.map((step) => step.description).join('\n');
       this.onTrace?.({
         type: 'model_call', phase: 'failed', modelCallId, purpose: 'judge',
         provider: this.modelProvider.name, model: this.modelProvider.model,
@@ -95,7 +109,10 @@ export class TaskJudge {
       });
       return {
         complete: false,
-        reasoning: `Judge failed: ${error instanceof Error ? error.message : String(error)}`,
+        reasoning: localizedText(runtimeSettings().locale, sample, {
+          zhCN: `任务判断失败：${error instanceof Error ? error.message : String(error)}`,
+          enUS: `Judge failed: ${error instanceof Error ? error.message : String(error)}`,
+        }),
         nextAction: 'continue',
       };
     }
@@ -157,7 +174,10 @@ export class TaskJudge {
     if (!extracted) {
       return {
         complete: false,
-        reasoning: 'Judge response did not contain a JSON object; continuing execution.',
+        reasoning: localizedText(runtimeSettings().locale, raw, {
+          zhCN: '任务判断结果不包含 JSON 对象，将继续执行。',
+          enUS: 'Judge response did not contain a JSON object; continuing execution.',
+        }),
         nextAction: 'continue',
       };
     }
@@ -169,7 +189,10 @@ export class TaskJudge {
     } catch {
       return {
         complete: false,
-        reasoning: 'Judge response parsing failed; continuing execution.',
+        reasoning: localizedText(runtimeSettings().locale, raw, {
+          zhCN: '任务判断结果解析失败，将继续执行。',
+          enUS: 'Judge response parsing failed; continuing execution.',
+        }),
         nextAction: 'continue',
       };
     }

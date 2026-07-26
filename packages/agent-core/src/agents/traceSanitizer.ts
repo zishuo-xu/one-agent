@@ -3,7 +3,8 @@ import { config } from '../config.js';
 type TraceContentMode = 'metadata' | 'redacted' | 'full';
 
 const SENSITIVE_KEY = /^(?:password|passwd|pass|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token)$/i;
-const LARGE_CONTENT_KEY = /^(?:content|feedback|stdout|stderr|observation)$/i;
+const LARGE_CONTENT_KEY =
+  /^(?:content|reasoning|arguments|description|feedback|stdout|stderr|observation)$/i;
 
 export function redactSensitiveText(value: string): string {
   return value

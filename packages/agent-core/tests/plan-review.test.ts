@@ -83,6 +83,7 @@ describe('planning review and continuation', () => {
       options: ['approve', 'reject'],
       planReview: { revision: 0, maxRevisions: 1 },
     });
+    expect(waiting.reply).toContain('请在执行前确认以下计划');
     expect(waiting.reply).toContain('1. Echo hello [echo]');
     expect(fixture.execute).not.toHaveBeenCalled();
 
@@ -111,7 +112,7 @@ describe('planning review and continuation', () => {
 
     expect(completed).toMatchObject({
       status: 'completed',
-      reply: 'Plan rejected; no steps were executed.',
+      reply: '计划已拒绝，未执行任何步骤。',
     });
     expect(fixture.execute).not.toHaveBeenCalled();
     expect(fixture.traces.getByThread(fixture.thread.id).some((event) =>
@@ -146,7 +147,7 @@ describe('planning review and continuation', () => {
     expect(fixture.execute).not.toHaveBeenCalled();
 
     await expect(fixture.agent([]).continueRun(secondReview.runId!, 'Change it again'))
-      .rejects.toThrow('already been revised once');
+      .rejects.toThrow('计划已经修改过一次');
     expect(fixture.runs.getById(secondReview.runId!)?.status).toBe('waiting_for_input');
 
     const completed = await fixture.agent([

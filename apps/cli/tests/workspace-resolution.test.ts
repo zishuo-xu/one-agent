@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { resolveWorkspaceRoot, parseWorkspaceArg } from '../src/workspace.js';
+import {
+  getGlobalConfigPath,
+  isWebCommand,
+  parseWorkspaceArg,
+  resolveConfigPath,
+  resolveInitConfigPath,
+  resolveStartupConfigPath,
+  resolveWorkspaceRoot,
+} from '../src/workspace.js';
 
 describe('workspace resolution', () => {
   it('uses --workspace argument', () => {
@@ -54,5 +62,55 @@ describe('workspace resolution', () => {
     expect(parseWorkspaceArg(['--workspace', '/a/b'])).toBe('/a/b');
     expect(parseWorkspaceArg([])).toBeUndefined();
     expect(parseWorkspaceArg(['--workspace'])).toBeUndefined();
+  });
+
+  it('recognizes web only as the actual positional command', () => {
+    expect(isWebCommand(['web'])).toBe(true);
+    expect(isWebCommand(['web', '--workspace', '/tmp/project'])).toBe(true);
+    expect(isWebCommand(['--workspace', '/tmp/project', 'web'])).toBe(true);
+    expect(isWebCommand(['--thread', 'web'])).toBe(false);
+    expect(isWebCommand(['doctor'])).toBe(false);
+  });
+
+  it('uses the shared global configuration when the workspace has no local override', () => {
+    const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'one-agent-workspace-'));
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'one-agent-home-'));
+
+    expect(resolveConfigPath({ workspaceRoot, homeDir }))
+      .toBe(path.join(homeDir, '.one-agent', 'one-agent.config.json'));
+    expect(getGlobalConfigPath(homeDir))
+      .toBe(path.join(homeDir, '.one-agent', 'one-agent.config.json'));
+  });
+
+  it('prefers a workspace-local configuration over the shared global configuration', () => {
+    const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'one-agent-workspace-'));
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'one-agent-home-'));
+    const localConfigPath = path.join(workspaceRoot, 'one-agent.config.json');
+    writeFileSync(localConfigPath, '{}');
+
+    expect(resolveConfigPath({ workspaceRoot, homeDir })).toBe(localConfigPath);
+    expect(resolveStartupConfigPath({
+      argv: ['web'],
+      workspaceRoot,
+      homeDir,
+    })).toBe(path.join(homeDir, '.one-agent', 'one-agent.config.json'));
+    expect(resolveStartupConfigPath({
+      argv: [],
+      workspaceRoot,
+      homeDir,
+    })).toBe(localConfigPath);
+  });
+
+  it('initializes the global configuration unless --workspace is explicit', () => {
+    const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'one-agent-workspace-'));
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'one-agent-home-'));
+
+    expect(resolveInitConfigPath({ argv: ['--init'], workspaceRoot, homeDir }))
+      .toBe(path.join(homeDir, '.one-agent', 'one-agent.config.json'));
+    expect(resolveInitConfigPath({
+      argv: ['--init', '--workspace', workspaceRoot],
+      workspaceRoot,
+      homeDir,
+    })).toBe(path.join(workspaceRoot, 'one-agent.config.json'));
   });
 });

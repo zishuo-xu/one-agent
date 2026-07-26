@@ -1,7 +1,7 @@
 # One Agent：目标、愿景与设计现状
 
 > 文档状态：维护中的当前事实源
-> 最后更新：2026-07-21
+> 最后更新：2026-07-26
 > 本文档是项目定位与架构现状的唯一长期总览。每次影响产品边界、运行时行为、数据结构或核心能力的修改，都应在同一个 Git commit 中同步更新本文档。
 
 本文使用三种状态：**已实现**表示代码与验证均已存在，**部分实现**表示已有基础但边界有限，**候选方向**表示仅完成设计讨论、尚未进入 Runtime。
@@ -15,7 +15,7 @@ One Agent 是一个**模型无关、可靠性优先的轻量 Agent Runtime**，�
 - 长任务规划、失败处理与断点恢复；
 - 任务中途澄清、关闭后恢复与继续；
 - 跨会话记忆；
-- 完整可信的 Trace；
+- 带完整性状态、丢失计数和错误信息的 Trace；
 - 基于 Trace、工具证据和 workspace 终态的离线 Eval。
 
 One Agent 的目标不是复制 Claude Code 的全部产品体验，也不是依靠某个特定模型获得能力。项目重点研究的是：
@@ -46,7 +46,9 @@ Completion Contract 只属于离线 Eval。Eval 失败不能反向把真实执�
 
 ### 2.3 Trace 是事实记录，不是自动优化器
 
-Runtime 完整记录模型调用、计划变化、工具执行和最终回复。开发人员使用 Trace Viewer 或其他工具分析问题，并自行决定如何改进 Agent。
+Runtime 尽力记录模型调用、计划变化、工具执行和最终回复，并通过 `traceStatus`、
+`droppedTraceEvents` 和 `traceError` 明确暴露记录是否完整。开发人员使用 Trace Viewer
+或其他工具分析问题，并自行决定如何改进 Agent。
 
 ### 2.4 可靠恢复优先于盲目重试
 
@@ -67,7 +69,7 @@ Runtime 完整记录模型调用、计划变化、工具执行和最终回复。
 ## 4. 当前运行时结构
 
 ```text
-CLI / REST API
+CLI / Local Web / REST API
       │
       ▼
 AgentRuntime（workspace 级装配：模型、工具、数据库、Store、记忆生命周期）
@@ -92,7 +94,7 @@ RunContext（一次请求的 runId、signal、memory、reasoning、recovery）
 会话边界：MemoryConsolidator ── 整理完整用户可见 Thread 到两份 Markdown 文档
 
 离线包 agent-eval：EvalRunner ── Completion Contract ── Trace / workspace 终态
-观察：Trace Viewer ── 只读取运行记录
+观察：Trace Viewer ── Run/Trace 只读；Memory 面板可编辑记忆文档
 ```
 
 核心概念保持五个：`AgentRuntime` 负责装配，`AgentLoop` 负责运行生命周期，Loop 负责决策，
@@ -133,7 +135,12 @@ finalizeRun      → waiting/completed、Trace 收尾、Run 状态落库
   → 立即向用户返回答案或待回答问题
 ```
 
-隐含长期记忆的整理不在每轮回答链路中。它以完整 Thread 为单位，在切换会话或正常退出时处理刚离开的会话；Agent 启动时扫描尚未成功整理的会话并串行重试。Memory Agent 通过统一 `ModelProvider` 使用 `jsonMode`，一次读取完整用户可见对话和两份最新文档，只接受完整的 `globalMemory`、`workspaceMemory` 文档输出。Assistant 消息只用于解释“我同意”等指代，只有用户消息能够授权记忆变化。用户明确要求记住、修正、忘记或查询记忆时，当前主模型通过 `manage_memory` 工具直接修改同一份文档，不增加第二次模型调用。
+隐含长期记忆的整理不在每轮回答链路中。它以完整 Thread 为单位：CLI 在切换会话、正常退出和启动时
+处理刚离开或尚未成功整理的会话；API/Web 在工作区 Runtime 创建或聊天路由初始化时恢复未整理会话，
+当前不会在浏览器每次切换会话时立即整理。Memory Agent 通过统一 `ModelProvider` 使用 `jsonMode`，
+一次读取完整用户可见对话和两份最新文档，只接受完整的 `globalMemory`、`workspaceMemory` 文档输出。
+Assistant 消息只用于解释“我同意”等指代，只有用户消息能够授权记忆变化。用户明确要求记住、修正、
+忘记或查询记忆时，当前主模型通过 `manage_memory` 工具直接修改同一份文档，不增加第二次模型调用。
 
 读取后的文档由纯函数 `buildMemoryContext` 转换成唯一注入契约。优先级固定为当前用户输入、当前会话、工作空间记忆、全局记忆；Markdown 内容只作为背景数据，不能成为指令或工具授权。主 Agent、Planner 和 Sub-Agent 复用同一份父 Run 记忆快照，不分别定义注入语义。第一阶段直接注入两份精简文档；未来 RAG 只替换相关段落的读取方式，不改变文档事实源和 Agent 主流程。
 
@@ -170,8 +177,27 @@ CLI 默认只向用户流式展示 `message_delta`，并原样保留 Provider �
 CLI 已归一为一个默认启动路径：`one-agent` 恢复最近 Thread（不存在则新建）并使用 `auto` Loop；
 `--new` / `--thread` 只决定会话，`--loop auto|simple|planning` 只决定执行策略，`--verbose` 只决定展示。
 `--new` 与 `--thread` 互斥，指定 Thread 不存在时明确失败，不再隐式创建指定 ID 的会话。
-只读观察服务使用独立的 `one-agent trace` 命令，启动时不要求模型 API Key。旧 `--plan`、`--plan-auto`、
+运行记录观察服务使用独立的 `one-agent trace` 命令，启动时不要求模型 API Key。旧 `--plan`、`--plan-auto`、
 `--trace` 暂时保留兼容并给出废弃提示，不再作为主要使用方式。
+
+本地 Web 是与 CLI 并列的交互入口，通过 `one-agent web` 启动，并由同一个 Fastify 进程在
+`api.host/api.port` 提供静态页面和 `/api/*` 接口。Web 不创建第二套 Agent 规则、数据模型或执行协议：
+`WorkspaceRuntimeRegistry` 按规范化工作区路径创建/缓存各自的 `AgentRuntime` 实例，会话、消息、规划、
+审批、澄清、工具、子 Agent、记忆与 Trace 均由共享 `agent-core` 处理。`POST /api/web/chat` 在创建
+Run 后返回 `202`，Agent 在后台执行；页面轮询持久化会话状态、Run 和 Trace，不让 HTTP 请求同步等待完整执行。
+对话区将本轮 Trace 中可展示的 `reasoning_delta`、`thought`、计划依据与 reflection 合并去重后放入
+默认展开、可折叠的“思考过程”卡片；工具和子 Agent 细节继续保留在执行面板，避免重复信息。
+模型调用 Trace 同时保存 provider-neutral 的 Input / Output 快照，并在执行面板中按 `modelCallId`
+合并开始/结束事件后折叠展示。快照遵循 `trace.contentMode`：默认脱敏，metadata 模式省略正文，
+full 模式保留原文；升级前的历史 Run 不补造缺失快照。
+Web 服务本身固定使用全局配置，不再把启动命令所在目录隐式当成工作区。用户只在点击“新会话”时
+选择绝对路径，进入会话后工作区只读。Runtime 管理器按规范化工作区路径缓存 `AgentRuntime`，
+相对数据库路径继续落在各自工作区，因此会话隔离不需要修改 Thread 表。最近路径写入
+`~/.one-agent/web-state.json`；运行中禁止创建不同工作区的新会话。
+重复执行 `one-agent web` 时，CLI 会识别占用配置端口的旧 One Agent Web，先请求其优雅退出，超时后
+再强制停止并启动新进程；若端口属于其他应用则只报告冲突，不越权终止。
+Trace Viewer 保持独立，不因 Web 入口获得 Run 执行、恢复或修改权限；其 Memory 面板仍可通过专用
+`GET/PUT /api/memory/:scope` 编辑两份记忆文档。
 
 ### 5.2 Strategy Controller：决策层的安全动态升级
 
@@ -203,18 +229,22 @@ Plan Review 只归规划决策层所有。它复用 AgentLoop 已有的 `waiting
 
 One Agent 仍是单主 Agent Runtime。Sub-Agent 不是独立用户会话，也不是可递归扩张的多 Agent 网络，而是由主 Agent
 创建的一次性、隔离上下文的只读执行单元：它通过 `SubAgentTaskContract` 接收总体目标、明确子任务、约束、
-期望结果、期望证据和允许工具，通过 `SubAgentEvidencePacket` 返回中间结论、工具证据、不确定性与未解决问题；
+范围、非目标、内部检查清单、期望结果、期望证据和允许工具，通过 `SubAgentEvidencePacket` 返回中间结论、
+工具证据、不确定性与未解决问题；
 主 Agent 始终拥有计划、用户交互、副作用执行、结果采纳和最终交付权。
 
-所有委派统一经过 `SubAgentRunner`。工具必须在 `ToolDefinition.readOnly` 中显式声明只读才能进入子 Agent，未声明默认
+所有委派先统一经过 `DelegationPolicy`，再由 `SubAgentRunner` 执行。策略属于共享 `agent-core`，Web、CLI 和 API
+只消费同一套计划、生命周期与 Trace 事件，不分别实现委派规则。工具必须在 `ToolDefinition.readOnly` 中显式声明
+只读才能进入子 Agent，未声明默认
 不可委派；调用方提供的 `allowedTools` 只能进一步收窄权限，不能把写入或未知工具重新加入。子 Agent 不继承
 `manage_memory`、`request_user_input` 或 `spawn_agent`，因此不能修改长期记忆、暂停询问用户或继续递归委派。
 
 委派决策只有两种互斥入口：SimpleLoop 可由主模型临时调用 `spawn_agent`；PlanningLoop 不向执行模型暴露该工具，
-只执行 Planner 明确标记的 `delegate/parallel` 步骤。`parallel` 在解析后强制蕴含 `delegate`，串行与并行委派使用同一
-只读权限规则，避免入口不同导致副作用语义漂移。带 `children` 的步骤永远只是结构容器，不能自身委派；如果模型把
-并行标记放在容器上，Planner 会将该意图归一到独立叶子步骤，执行器只把连续的只读叶子组成并行波次。恢复旧计划时，
-执行器也会忽略容器上的遗留委派标记，避免子步骤完成后再次执行父步骤。
+只执行 Planner 生成的 `executor=main/subagent` 工作包。子 Agent 工作包是一个完整、可验证的成果边界，其中的
+`checklist` 由同一个子 Agent 内部完成，不进入父级调度队列，也不会被机械地展开成多个 Agent。读取单个文件、
+执行单次搜索、检查一个关键词、汇总兄弟结果和生成最终回答都不构成合格委派。`parallel` 只用于无依赖的只读工作包，
+`dependsOn` 由执行器稳定排序；串行与并行委派使用同一权限规则。版本 2 计划使用工作包语义，缺少版本号的旧计划和
+Checkpoint 继续按原有叶子委派规则恢复。
 
 Sub-Agent 结果将执行状态与任务结论分离：`executionStatus=completed` 只表示隔离循环正常结束，返回的
 `outcomeStatus=unverified` 明确表示结论仍是供父 Agent 使用的中间证据，不宣称父任务已经完成；异常结束则为
@@ -228,15 +258,14 @@ SimpleLoop 与 PlanningLoop 都把结构化 Packet 交给父 Agent；旧的 `sum
 证据观察值遵循 Trace content mode，metadata 模式不落原文。
 
 每个父 Run 在读取全局与工作空间记忆文档后，将同一份只读记忆快照交给 `SubAgentRunner`；Simple 临时委派与 Planning
-计划委派因此使用同一上下文边界。子 Agent 仍不能直接读取或修改 Memory Document，新的父 Run 会先清除旧快照，
-避免跨请求泄漏上一次召回结果。
+计划委派因此使用同一上下文边界。子 Agent 不继承 `manage_memory`，不能通过记忆接口修改文档；但当前
+workspace Sandbox 没有专门屏蔽 `.one-agent/MEMORY.md`，继承 `read_file` 时仍可直接读取该工作区文件。
+全局记忆位于 workspace 外，不能通过文件工具访问。新的父 Run 会先清除旧快照，避免跨请求泄漏上一次注入结果。
 
-父 Run 还拥有一份由 `SubAgentRunner` 管理的 `DelegationBudget`，默认限制为 8 个已接受子任务、4 个并发、
-单任务 60 秒、单任务 5 次工具迭代，以及 50,000 个已观测累计 tokens。超过并发的任务只排队，不额外启动模型请求；
-达到任务数或已观测 Token 上限后，新委派返回 `budget_exhausted`；单任务超时和父 Run 取消分别返回
-`timed_out`、`cancelled`。预算在每个新父 Run 开始时重置，所有非完成状态都随 `sub_agent` 事件进入父 Trace。
-Token 限制是基于模型已返回的 usage 阻止后续委派，不宣称能够中止或精确限制尚在运行的并发请求，因此并发中的
-在途请求可能使最终总量略高于阈值。
+资源保护仍由 `SubAgentRunner` 统一负责：默认最多 4 个并发、单任务 60 秒、单任务 5 次工具迭代；主 Agent 与
+每个子 Agent 的 Token 上限分别由两个可选预算配置控制，未配置表示不限制。当前不设置子 Agent 数量上限或子 Agent
+汇总预算，避免用硬截断代替委派质量控制。超过并发的工作只排队；单个子 Agent 达到其预算、超时或父 Run 取消时，
+分别返回 `budget_exhausted`、`timed_out`、`cancelled`，并随 `sub_agent` 事件进入父 Trace。
 
 ## 6. Trace 设计现状
 
@@ -262,7 +291,7 @@ Trace 使用 `run_id + sequence` 保持单次运行内的稳定顺序，当前�
 
 ### 6.1 Trace Viewer 人工分析入口
 
-Trace Viewer 保持只读，不触发验证、恢复或重新执行。当前可以：
+Trace Viewer 对 Run/Trace 保持只读，不触发验证、恢复或重新执行。当前可以：
 
 - 按 Thread、Run 查看完整有序时间线，并按事件类型筛选；
 - 展开事件原始 JSON，查看子 Agent 的压缩内部事件流；
@@ -270,6 +299,9 @@ Trace Viewer 保持只读，不触发验证、恢复或重新执行。当前可�
 - 将跨 Run 的工具审批事实关联为“请求 → 批准/拒绝 → 已执行/未执行/执行失败”时间线，并明确显示等待状态；
 - 标记模型或工具失败、Trace 丢失等异常指标；
 - 关联并跳转中断 Run、来源 Run 和后续恢复 Run。
+
+独立的 Memory 面板是例外：它可通过带 `expectedHash` 的专用接口编辑全局和工作区记忆文档，
+但不会写回 Run、Trace 或执行状态。
 
 总览指标和审批时间线都由 Trace 与 `agent_runs` 即时投影，不增加统计表，不写回运行状态，也不影响 Agent 返回时延。审批投影以 `input_required.request.id` 关联后续 Run 的 `input_received`、`tool_policy` 与 `tool_result`；事实不完整时保持 `waiting` 或 `resolving`，不猜测执行成功。
 
@@ -376,7 +408,8 @@ Eval 的 Completion Contract 根据工具证据、文件条件和最终回答离
 - 长期记忆只有两个用户可见的事实源：`~/.one-agent/GLOBAL_MEMORY.md` 保存跨文件夹用户偏好，`<workspace>/.one-agent/MEMORY.md` 保存当前文件夹及其子目录共享的事实、决策和约束；
 - 当前会话不创建第三份记忆文件，`messages` 与 Trace 保留原始上下文；
 - 以完整用户可见 Thread 为整理单位；Assistant 消息提供指代上下文，只有用户消息能授权写入；
-- 切换或退出时整理当前离开的 Thread，启动时串行恢复所有未成功整理的 Thread；
+- CLI 切换或退出时整理当前离开的 Thread，并在启动时恢复未整理 Thread；API/Web 在工作区 Runtime
+  创建或路由初始化时恢复未整理 Thread，当前不在浏览器切换会话时立即整理；
 - `threads.memory_extracted` 使用单一布尔状态区分已提取/未提取，合法空结果也视为成功；
 - 主 Agent 的每轮回答不调用记忆模型；整理失败不提交文档、不标记完成，并在下次启动重试；
 - 用户可通过自然语言明确要求 `remember`、`correct`、`forget`、`inspect`，主模型只在显式意图下调用 `manage_memory`；
@@ -402,13 +435,13 @@ SQLite 不再保存长期记忆内容，也没有候选表、版本链、置信�
 | 执行策略 | 已实现 | Simple、Planning、Auto Planning；Auto 可在首批超过两个工具时于执行前安全升级一次 |
 | 规划与纠错 | 已实现 | 分层计划、步骤绑定、Judge、重试、重规划、并行波次、执行前计划确认与一次反馈修订 |
 | 工具执行 | 已实现 | workspace 沙箱、参数校验、超时、危险命令拦截、Tool Policy、冻结参数审批和显式只读批次安全并发 |
-| 子 Agent | 已实现 | 统一只读 Task/Evidence Contract 与每 Run 预算；工具证据带来源和已知缺口；Simple/Planning 共用父级筛选后的记忆快照，不允许递归扩张 |
+| 子 Agent | 已实现 | version 2 工作包、统一只读 Task/Evidence Contract、单子 Agent token 预算、并发/超时/工具迭代保护；没有父 Run 汇总预算或子 Agent 数量上限 |
 | 上下文管理 | 已实现 | token 预算、滑动窗口、摘要、内部消息隔离 |
 | 长期记忆 | 已实现 | 全局/工作空间 Markdown、会话级整理、显式即时管理、本地串行写入、Web 可见可编辑与统一上下文注入 |
 | 运行中工作状态 | 部分实现 | RunContext 统一一次请求的关联信息；Plan 是 Loop 内状态，恢复点只是关键 Trace，不再维护第二份存档 |
 | 中断恢复 | 部分实现 | PlanningLoop 和安全只读操作可恢复，副作用操作保守停止 |
 | 中途澄清 | 已实现 | Simple/Planning 统一等待结果，CLI/API 可回答或取消，关闭进程后仍可继续 |
-| 可观测性 | 已实现 | 完整 Trace、只读 Trace Viewer、Run 总览、跨 Run 工具审批时间线、记忆召回与整理事件 |
+| 可观测性 | 已实现 | Trace 完整性状态、丢失计数、Run 总览、跨 Run 工具审批时间线、记忆召回与整理事件；Viewer 对 Run/Trace 只读 |
 | 离线评价 | 已实现 | 独立 `agent-eval` 包承载 Completion Contract、能力评测与确定性回放；Runtime 无反向依赖 |
 | 多模态输入 | 未实现 | 当前只处理文本消息和工具观察结果 |
 | Skills / MCP | 未实现 | 当前工具在 Runtime 内静态注册，没有通用外部能力协议 |
@@ -430,7 +463,8 @@ SQLite 不再保存长期记忆内容，也没有候选表、版本链、置信�
 - Tool Policy 已支持通过统一 JSON 配置审批工具名单；尚未提供 CLI 规则编辑、多人审批、审批超时或按命令语义细分风险；
 - SQLite 迁移仍使用兼容式列检查，后续可增加版本化 `schema_migrations`；
 - `tasks.events`、`reasoning_chain` 与 Trace 仍存在部分信息重复；Run 恢复已经以 Trace 为唯一新事实来源；
-- 长期记忆仍是关键词检索模型，当前评测集尚未覆盖模型提取准确率和大规模记忆库性能。
+- 长期记忆当前把两份精简 Markdown 文档整体注入上下文，尚未实现分段检索/RAG；评测集也尚未覆盖
+  模型提取准确率和大规模记忆文档的上下文成本。
 - Memory Agent 已统一请求 JSON 模式并执行单一 envelope Schema 校验；Provider 只声明 `best_effort` 时仍可能返回畸形 JSON，此时整理失败并留待下次启动重试，不增加修复模型调用或第二种宽松解析协议。
 - Evidence Packet 当前只能确定性证明“某次工具返回了什么”，不能自动证明结论中的每个自然语言 claim 都由哪条观察支持；结论仍保持 `unverified` 并由主 Agent 负责采纳。
 
@@ -468,4 +502,4 @@ V1 不引入 WorkingState，因为“首批多工具”是切换前即可观察�
 4. 推送到 GitHub；
 5. 不提交密钥、用户数据、运行数据库、WAL、日志或评测任务生成的临时文件。
 
-配置采用“单一 JSON、分层使用”：开发人员只编辑 workspace 根目录的 `one-agent.config.json`，密钥也保存在其中；ConfigLoader 启动时统一读取、补全默认值并严格校验为只读 `SystemConfig`，AgentRuntime 再向各组件装配相应分组。真实配置被 Git 和 Agent 文件工具隔离，仓库仅提交 `one-agent.config.example.json`。系统不再读取 `.env` 或分散的业务环境变量。
+配置采用“单一 JSON、分层使用”：默认读取 `~/.one-agent/one-agent.config.json`，让不同工作目录共享模型与 API 配置；workspace 根目录可选放置 `one-agent.config.json` 作为项目级完整配置并优先使用。配置位置与工具执行、项目记忆、相对数据库路径所使用的 workspace 相互独立。`config.ts` 负责读取、补全默认值、严格校验和冻结当前 `SystemConfig`，AgentRuntime 再向各组件装配相应分组。配置不会被 Agent 自动优化或改写；只有 Web 设置保存和 CLI `/model` 等显式用户操作会写回 JSON，并重载后续任务使用的配置。真实配置被 Git 和 Agent 文件工具隔离，仓库仅提交 `one-agent.config.example.json`。系统不再读取 `.env` 或分散的业务环境变量。

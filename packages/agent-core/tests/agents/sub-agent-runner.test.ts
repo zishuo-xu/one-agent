@@ -261,44 +261,36 @@ describe('SubAgentRunner', () => {
     expect(result.toolCalls).toHaveLength(2);
   });
 
-  it('rejects further delegation after the per-Run task budget is exhausted', async () => {
-    mockCreate.mockResolvedValue(textResponse('done') as never);
+  it('applies the token budget independently to each sub-agent', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
+          },
+        }],
+        usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+      } as never)
+      .mockResolvedValueOnce(textResponse('second agent done', {
+        prompt_tokens: 6,
+        completion_tokens: 4,
+        total_tokens: 10,
+      }) as never);
     const runner = new SubAgentRunner({
       tools: makeRegistry(),
-      budget: { maxTasksPerRun: 1 },
+      budget: { maxTokensPerAgent: 10 },
     });
 
-    const first = await runner.run({ task: 'first' });
-    const second = await runner.run({ task: 'second' });
-
-    expect(first.executionStatus).toBe('completed');
-    expect(second.executionStatus).toBe('budget_exhausted');
-    expect(second.error).toContain('maximum 1 tasks per Run');
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-
-    runner.resetBudget();
-    const nextRun = await runner.run({ task: 'new parent run' });
-    expect(nextRun.executionStatus).toBe('completed');
-  });
-
-  it('stops accepting new work after observed token usage reaches the Run budget', async () => {
-    mockCreate.mockResolvedValue(textResponse('done', {
-      prompt_tokens: 6,
-      completion_tokens: 4,
-      total_tokens: 10,
-    }) as never);
-    const runner = new SubAgentRunner({
-      tools: makeRegistry(),
-      budget: { maxTotalTokens: 10 },
-    });
-
-    const first = await runner.run({ task: 'consume budget' });
-    const second = await runner.run({ task: 'over budget' });
+    const first = await runner.run({ task: 'consume budget before another model turn' });
+    const second = await runner.run({ task: 'fresh independent budget' });
 
     expect(first.tokenUsage?.totalTokens).toBe(10);
-    expect(second.executionStatus).toBe('budget_exhausted');
-    expect(second.error).toContain('observed 10 tokens');
-    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(first.executionStatus).toBe('budget_exhausted');
+    expect(first.error).toContain('Sub-agent token budget exhausted');
+    expect(second.executionStatus).toBe('completed');
+    expect(second.summary).toBe('second agent done');
+    expect(mockCreate).toHaveBeenCalledTimes(2);
   });
 
   it('queues excess work at the configured concurrency limit', async () => {

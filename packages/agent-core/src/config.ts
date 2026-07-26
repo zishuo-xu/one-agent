@@ -11,7 +11,18 @@ const providerSchema = z.enum(['openai-compatible', 'openai', 'anthropic']);
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 
+const modelConnectionSchema = z.object({
+  id: z.string().min(1).regex(/^[a-z0-9][a-z0-9_-]*$/),
+  name: z.string().min(1),
+  provider: providerSchema.default('openai-compatible'),
+  baseUrl: z.string().url().optional(),
+  apiKey: z.string().default(''),
+  models: z.array(z.string().min(1)).min(1),
+  maxTokens: positiveInteger.default(4096),
+}).strict();
+
 const fallbackSchema = z.object({
+  connectionId: z.string().min(1).optional(),
   provider: providerSchema.default('openai-compatible'),
   baseUrl: z.string().url().optional(),
   apiKey: z.string().default(''),
@@ -19,9 +30,24 @@ const fallbackSchema = z.object({
   maxTokens: positiveInteger.default(4096),
 }).strict();
 
-export const systemConfigSchema = z.object({
+function migrateLegacyConfig(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const source = input as Record<string, unknown>;
+  if (!source.subAgent || typeof source.subAgent !== 'object' || Array.isArray(source.subAgent)) {
+    return input;
+  }
+  const {
+    maxTasksPerRun: _legacyMaxTasksPerRun,
+    maxTotalTokens: _legacyMaxTotalTokens,
+    ...subAgent
+  } = source.subAgent as Record<string, unknown>;
+  return { ...source, subAgent };
+}
+
+const systemConfigObjectSchema = z.object({
   version: z.literal(1).default(1),
   model: z.object({
+    connectionId: z.string().min(1).optional(),
     provider: providerSchema.default('openai-compatible'),
     baseUrl: z.string().url().optional(),
     apiKey: z.string().default(''),
@@ -32,12 +58,15 @@ export const systemConfigSchema = z.object({
     utilityModel: z.string().min(1).optional(),
     fallback: fallbackSchema.optional(),
   }).strict().default({}),
+  modelConnections: z.array(modelConnectionSchema).default([]),
   runtime: z.object({
     systemPrompt: z.string().min(1).default(
       'You are a helpful assistant. Answer concisely and in Chinese by default. ' +
       'When you use the web_search tool, base your answer strictly on the search results returned. ' +
       'If the search returns no useful results, tell the user clearly instead of making up information.',
     ),
+    locale: z.enum(['auto', 'zh-CN', 'en-US']).default('zh-CN'),
+    customInstructions: z.string().max(12000).default(''),
     loop: z.enum(['auto', 'simple', 'planning']).default('auto'),
     maxRetries: nonNegativeInteger.default(2),
     maxToolIterations: positiveInteger.default(5),
@@ -53,12 +82,14 @@ export const systemConfigSchema = z.object({
     maxInitialToolBatch: positiveInteger.default(2),
     maxSwitches: nonNegativeInteger.default(1),
   }).strict().default({}),
+  budget: z.object({
+    mainAgentTokens: positiveInteger.nullable().default(null),
+    subAgentTokens: positiveInteger.nullable().default(null),
+  }).strict().default({}),
   subAgent: z.object({
     enabled: z.boolean().default(true),
     maxDepth: nonNegativeInteger.default(1),
-    maxTasksPerRun: positiveInteger.default(8),
     maxConcurrency: positiveInteger.default(4),
-    maxTotalTokens: positiveInteger.default(50000),
     taskTimeoutMs: positiveInteger.default(60000),
     maxToolIterations: positiveInteger.default(5),
   }).strict().default({}),
@@ -95,7 +126,13 @@ export const systemConfigSchema = z.object({
   }).strict().default({}),
 }).strict();
 
+export const systemConfigSchema = z.preprocess(
+  migrateLegacyConfig,
+  systemConfigObjectSchema,
+);
+
 export type SystemConfig = z.infer<typeof systemConfigSchema>;
+export type ModelConnection = z.infer<typeof modelConnectionSchema>;
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -161,6 +198,128 @@ export function createDefaultSystemConfig(): SystemConfig {
   return systemConfigSchema.parse({});
 }
 
+export function toSystemConfig(value: SystemConfig | ResolvedConfig = config): SystemConfig {
+  return systemConfigSchema.parse({
+    version: value.version,
+    model: value.model,
+    modelConnections: value.modelConnections,
+    runtime: value.runtime,
+    context: value.context,
+    strategy: value.strategy,
+    budget: value.budget,
+    subAgent: value.subAgent,
+    tools: value.tools,
+    trace: value.trace,
+    storage: value.storage,
+    api: value.api,
+    taskQueue: value.taskQueue,
+    cli: value.cli,
+  });
+}
+
+function connectionName(provider: ModelConnection['provider'], role: 'primary' | 'fallback'): string {
+  if (provider === 'anthropic') return role === 'primary' ? 'Anthropic' : 'Anthropic 备用';
+  if (provider === 'openai') return role === 'primary' ? 'OpenAI' : 'OpenAI 备用';
+  return role === 'primary' ? 'OpenAI Compatible' : 'OpenAI Compatible 备用';
+}
+
+/** Return configured connections, synthesizing legacy primary/fallback entries when needed. */
+export function resolveModelConnections(value: SystemConfig | ResolvedConfig = config): ModelConnection[] {
+  if (value.modelConnections.length > 0) {
+    return value.modelConnections.map((connection) => ({
+      ...connection,
+      models: [...connection.models],
+    }));
+  }
+  const primary: ModelConnection = {
+    id: value.model.connectionId ?? 'primary',
+    name: connectionName(value.model.provider, 'primary'),
+    provider: value.model.provider,
+    baseUrl: value.model.baseUrl,
+    apiKey: value.model.apiKey,
+    models: [value.model.model],
+    maxTokens: value.model.maxTokens,
+  };
+  if (!value.model.fallback) return [primary];
+  return [
+    primary,
+    {
+      id: value.model.fallback.connectionId ?? 'fallback',
+      name: connectionName(value.model.fallback.provider, 'fallback'),
+      provider: value.model.fallback.provider,
+      baseUrl: value.model.fallback.baseUrl,
+      apiKey: value.model.fallback.apiKey,
+      models: [value.model.fallback.model],
+      maxTokens: value.model.fallback.maxTokens,
+    },
+  ];
+}
+
+export function selectPrimaryModel(
+  value: SystemConfig | ResolvedConfig,
+  connectionId: string,
+  modelName?: string,
+): SystemConfig {
+  const next = toSystemConfig(value);
+  const connections = resolveModelConnections(next);
+  const connection = connections.find((item) => item.id === connectionId);
+  if (!connection) throw new Error(`Model connection not found: ${connectionId}`);
+  const model = modelName ?? connection.models[0];
+  if (!connection.models.includes(model)) {
+    throw new Error(`Model ${model} is not configured for connection ${connection.name}`);
+  }
+  const previousPrimary = {
+    connectionId: next.model.connectionId ?? connections[0]?.id,
+    provider: next.model.provider,
+    baseUrl: next.model.baseUrl,
+    apiKey: next.model.apiKey,
+    model: next.model.model,
+    maxTokens: next.model.maxTokens,
+  };
+  const selectedWasFallback = Boolean(
+    next.model.fallback
+    && (
+      next.model.fallback.connectionId === connection.id
+      || (
+        !next.model.fallback.connectionId
+        && connection.provider === next.model.fallback.provider
+        && connection.baseUrl === next.model.fallback.baseUrl
+        && connection.apiKey === next.model.fallback.apiKey
+        && connection.models.includes(next.model.fallback.model)
+      )
+    ),
+  );
+  next.modelConnections = connections;
+  next.model = {
+    ...next.model,
+    connectionId: connection.id,
+    provider: connection.provider,
+    baseUrl: connection.baseUrl,
+    apiKey: connection.apiKey,
+    model,
+    maxTokens: connection.maxTokens,
+    fallback: selectedWasFallback ? previousPrimary : next.model.fallback,
+  };
+  return systemConfigSchema.parse(next);
+}
+
+export function saveSystemConfig(
+  input: unknown,
+  options: { workspaceRoot: string; configPath: string },
+): ResolvedConfig {
+  const parsed = systemConfigSchema.parse(input);
+  const configPath = path.resolve(options.configPath);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const temporaryPath = `${configPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporaryPath, configPath);
+  fs.chmodSync(configPath, 0o600);
+  return configureSystem(parsed, {
+    workspaceRoot: options.workspaceRoot,
+    configPath,
+  });
+}
+
 /** Configure the process once at startup from the single JSON configuration table. */
 export function configureSystem(input: unknown, options?: { workspaceRoot?: string; configPath?: string }): ResolvedConfig {
   const workspaceRoot = path.resolve(options?.workspaceRoot ?? process.cwd());
@@ -195,20 +354,25 @@ export function loadSystemConfig(options: { workspaceRoot: string; configPath?: 
 }
 
 export function redactSystemConfig(value: SystemConfig = config): SystemConfig {
+  const settings = toSystemConfig(value);
   return {
-    ...value,
+    ...settings,
     model: {
-      ...value.model,
-      apiKey: value.model.apiKey ? '[REDACTED]' : '',
-      fallback: value.model.fallback
-        ? { ...value.model.fallback, apiKey: value.model.fallback.apiKey ? '[REDACTED]' : '' }
+      ...settings.model,
+      apiKey: settings.model.apiKey ? '[REDACTED]' : '',
+      fallback: settings.model.fallback
+        ? { ...settings.model.fallback, apiKey: settings.model.fallback.apiKey ? '[REDACTED]' : '' }
         : undefined,
     },
+    modelConnections: settings.modelConnections.map((connection) => ({
+      ...connection,
+      apiKey: connection.apiKey ? '[REDACTED]' : '',
+    })),
     tools: {
-      ...value.tools,
+      ...settings.tools,
       search: {
-        ...value.tools.search,
-        apiKey: value.tools.search.apiKey ? '[REDACTED]' : undefined,
+        ...settings.tools.search,
+        apiKey: settings.tools.search.apiKey ? '[REDACTED]' : undefined,
       },
     },
   };

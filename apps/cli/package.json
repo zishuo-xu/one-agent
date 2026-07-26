@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@one-agent/agent-core": "workspace:*",
-    "@one-agent/agent-eval": "workspace:*"
+    "@one-agent/agent-eval": "workspace:*",
+    "@one-agent/api": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

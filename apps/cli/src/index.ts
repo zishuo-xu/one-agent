@@ -28,6 +28,17 @@ async function dispatch(): Promise<void> {
     return;
   }
 
+  if (args.command === 'web' && !args.help && !args.version && !args.init) {
+    try {
+      const { runWebCommand } = await import('./commands/web.js');
+      await runWebCommand();
+    } catch (error) {
+      console.error(`Web server failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   await import('./chat.js');
 }
 

@@ -1,4 +1,5 @@
 import type { ModelProvider, TokenUsage } from '../model/types.js';
+import { AgentTokenBudgetExceededError } from '../model/TokenBudget.js';
 import type { ToolCall } from '../tools/types.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { MANAGE_MEMORY_TOOL_NAME } from '../memory/manageMemoryTool.js';
@@ -40,12 +41,10 @@ export interface SubAgentResult {
 }
 
 export interface DelegationBudget {
-  /** Maximum accepted sub-tasks in one parent Run. */
-  maxTasksPerRun: number;
   /** Maximum sub-agents executing at the same time. */
   maxConcurrency: number;
-  /** Stop accepting new sub-tasks after observed usage reaches this total. */
-  maxTotalTokens: number;
+  /** Maximum cumulative model usage for each individual sub-agent. */
+  maxTokensPerAgent?: number;
   /** Wall-clock execution timeout after a sub-agent acquires a slot. */
   taskTimeoutMs: number;
   /** Tool-loop limit for each sub-agent. */
@@ -53,9 +52,7 @@ export interface DelegationBudget {
 }
 
 export const DEFAULT_DELEGATION_BUDGET: Readonly<DelegationBudget> = Object.freeze({
-  maxTasksPerRun: 8,
   maxConcurrency: 4,
-  maxTotalTokens: 50_000,
   taskTimeoutMs: 60_000,
   maxToolIterations: 5,
 });
@@ -92,8 +89,6 @@ export class SubAgentRunner {
   private runMemoryText?: string;
   private readonly signal?: () => AbortSignal | undefined;
   private readonly budget: Readonly<DelegationBudget>;
-  private acceptedTasks = 0;
-  private observedTokens = 0;
   private activeTasks = 0;
   private readonly slotWaiters: Array<() => void> = [];
 
@@ -117,8 +112,6 @@ export class SubAgentRunner {
     if (this.activeTasks > 0 || this.slotWaiters.length > 0) {
       throw new Error('Cannot reset delegation budget while sub-agents are active');
     }
-    this.acceptedTasks = 0;
-    this.observedTokens = 0;
     this.runMemoryText = undefined;
   }
 
@@ -129,9 +122,6 @@ export class SubAgentRunner {
 
   async run(task: SubAgentTask): Promise<SubAgentResult> {
     const startedAt = Date.now();
-    const budgetFailure = this.reserveTask(startedAt);
-    if (budgetFailure) return budgetFailure;
-
     await this.acquireSlot();
     const parentSignal = this.signal?.();
     if (parentSignal?.aborted) {
@@ -168,6 +158,7 @@ export class SubAgentRunner {
       enablePlanning: false,
       // depth=1 with the default max of 1: this loop cannot spawn further agents.
       subAgentDepth: 1,
+      tokenBudget: this.budget.maxTokensPerAgent ?? null,
       systemPrompt:
         'You are a read-only sub-task execution agent. Investigate the given sub-task with the ' +
         'available tools, then report a concise conclusion. Distinguish tool-supported facts from ' +
@@ -181,10 +172,18 @@ export class SubAgentRunner {
     const prompt = [
       task.context ? `Overall goal: ${task.context}` : '',
       `Your sub-task: ${task.task}`,
+      task.delegationReason ? `Why this was delegated: ${task.delegationReason}` : '',
+      task.scope?.length ? `In scope:\n- ${task.scope.join('\n- ')}` : '',
+      task.nonGoals?.length ? `Out of scope:\n- ${task.nonGoals.join('\n- ')}` : '',
       task.constraints?.length ? `Constraints:\n- ${task.constraints.join('\n- ')}` : '',
       task.expectedOutcome ? `Expected outcome: ${task.expectedOutcome}` : '',
       task.expectedEvidence?.length
         ? `Requested evidence:\n- ${task.expectedEvidence.join('\n- ')}`
+        : '',
+      task.checklist?.length
+        ? `Internal checklist (complete these within this one sub-agent; do not delegate them):\n${
+            task.checklist.map((item) => `- ${item.id}. ${item.description}`).join('\n')
+          }`
         : '',
       memoryText ?? '',
     ]
@@ -211,13 +210,17 @@ export class SubAgentRunner {
         durationMs: Date.now() - startedAt,
         events: condenseEvents(collected),
       };
-      this.observedTokens += output.tokenUsage?.totalTokens ?? 0;
       return output;
     } catch (error) {
       const tokenUsage = usageFromEvents(collected);
-      this.observedTokens += tokenUsage?.totalTokens ?? 0;
       return this.unavailableResult(
-        timedOut ? 'timed_out' : taskSignal.signal.aborted ? 'cancelled' : 'failed',
+        timedOut
+          ? 'timed_out'
+          : error instanceof AgentTokenBudgetExceededError
+            ? 'budget_exhausted'
+            : taskSignal.signal.aborted
+              ? 'cancelled'
+              : 'failed',
         timedOut
           ? `Sub-agent exceeded ${this.budget.taskTimeoutMs}ms execution timeout`
           : error instanceof Error ? error.message : String(error),
@@ -230,26 +233,6 @@ export class SubAgentRunner {
       parentSignal?.removeEventListener('abort', cancelFromParent);
       this.releaseSlot();
     }
-  }
-
-  private reserveTask(startedAt: number): SubAgentResult | undefined {
-    if (this.acceptedTasks >= this.budget.maxTasksPerRun) {
-      return this.unavailableResult(
-        'budget_exhausted',
-        `Sub-agent delegation budget exhausted: maximum ${this.budget.maxTasksPerRun} tasks per Run`,
-        startedAt,
-      );
-    }
-    if (this.observedTokens >= this.budget.maxTotalTokens) {
-      return this.unavailableResult(
-        'budget_exhausted',
-        `Sub-agent delegation budget exhausted: observed ${this.observedTokens} tokens ` +
-          `reached the ${this.budget.maxTotalTokens} token limit`,
-        startedAt,
-      );
-    }
-    this.acceptedTasks++;
-    return undefined;
   }
 
   private async acquireSlot(): Promise<void> {
@@ -296,6 +279,7 @@ export class SubAgentRunner {
 
   private validateBudget(): void {
     for (const [name, value] of Object.entries(this.budget)) {
+      if (value === undefined) continue;
       if (!Number.isInteger(value) || value <= 0) {
         throw new Error(`Delegation budget ${name} must be a positive integer; received ${value}`);
       }

@@ -68,6 +68,42 @@ describe('AgentLoop', () => {
     });
   });
 
+  it('stops later model work after the main Agent token budget is reached', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{
+        message: {
+          content: '',
+          tool_calls: [{
+            id: 'budget-call',
+            type: 'function',
+            function: {
+              name: 'echo',
+              arguments: '{"message":"inspect"}',
+            },
+          }],
+        },
+      }],
+      usage: {
+        prompt_tokens: 6,
+        completion_tokens: 4,
+        total_tokens: 10,
+      },
+    } as never);
+
+    const tools = new ToolRegistry();
+    tools.register(echoTool);
+    const agent = new AgentLoop({
+      tools,
+      enablePlanning: false,
+      tokenBudget: 10,
+    });
+
+    await expect(agent.chat('use the tool')).rejects.toThrow(
+      'Main agent token budget exhausted',
+    );
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps internal and tool-call messages out of user-facing history', () => {
     const contextManager = new ContextManager({ systemPrompt: 'test system prompt' });
     contextManager.addMessage({ role: 'user', content: 'Visible question' });
@@ -180,7 +216,9 @@ describe('AgentLoop', () => {
     await agent.chat('test');
 
     const history = agent.getHistory();
-    expect(history[0]).toEqual({ role: 'system', content: 'You are a coder.' });
+    expect(history[0]).toMatchObject({ role: 'system' });
+    expect(history[0].content).toContain('You are a coder.');
+    expect(history[0].content).toContain('Use Simplified Chinese');
   });
 
   it('retries on failure and eventually throws', async () => {

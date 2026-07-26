@@ -56,4 +56,25 @@ describe('plan execution helpers', () => {
     expect(units.map((unit) => unit.type)).toEqual(['wave', 'single']);
     expect(units[1]).toMatchObject({ type: 'single', step: { id: 'container' } });
   });
+
+  it('orders a work package after its declared prerequisite', () => {
+    const dependent = {
+      id: '2',
+      description: 'dependent',
+      status: 'pending' as const,
+      executor: 'main' as const,
+      dependsOn: ['1'],
+    };
+    const prerequisite = {
+      id: '1',
+      description: 'prerequisite',
+      status: 'pending' as const,
+      executor: 'main' as const,
+    };
+
+    expect(buildExecutionUnits([dependent, prerequisite])).toEqual([
+      { type: 'single', step: prerequisite },
+      { type: 'single', step: dependent },
+    ]);
+  });
 });

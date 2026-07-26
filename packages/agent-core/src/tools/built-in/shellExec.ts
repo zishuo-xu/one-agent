@@ -42,7 +42,7 @@ function buildChildEnv(): NodeJS.ProcessEnv {
  * can smuggle paths past static inspection — but simple path references
  * must stay inside the workspace, closing the demonstrated bypass vectors
  * (cat ../x, cat /etc/passwd, cat ~/x). The real trust model is "the agent
- * acts with the user's own permissions" — see docs/phase13-tool-ecosystem.md.
+ * acts with the user's own permissions" — see docs/project-vision-and-status.md.
  */
 const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /(?:^|[\s/'"])(?:one-agent\.config\.json|\.env(?:\.[^\s/'"]+)?)(?:[\s/'"]|$)/i, reason: 'access to protected configuration' },

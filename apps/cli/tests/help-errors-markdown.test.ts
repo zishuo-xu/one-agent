@@ -45,6 +45,7 @@ describe('help text', () => {
   });
 
   it('presents one default command and one unified loop option', () => {
+    expect(HELP_TEXT).toContain('one-agent web');
     expect(HELP_TEXT).toContain('one-agent trace');
     expect(HELP_TEXT).toContain('one-agent doctor');
     expect(HELP_TEXT).toContain('--loop <mode>');

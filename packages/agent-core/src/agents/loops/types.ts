@@ -1,6 +1,7 @@
 import type { ContextManager } from '../../context/ContextManager.js';
 import type { ToolRegistry } from '../../tools/registry.js';
 import type { Planner } from '../../planning/Planner.js';
+import type { DelegationPolicy } from '../../planning/DelegationPolicy.js';
 import type { TaskJudge } from '../../planning/TaskJudge.js';
 import type { ModelCaller } from '../ModelCaller.js';
 import type { RunRecorder } from '../RunRecorder.js';
@@ -17,6 +18,7 @@ export interface LoopInfrastructure {
   toolRegistry?: ToolRegistry;
   toolRunner: ToolRunner;
   planner: Planner;
+  delegationPolicy: DelegationPolicy;
   taskJudge: TaskJudge;
   subAgentRunner?: SubAgentRunner;
   maxToolIterations: number;
